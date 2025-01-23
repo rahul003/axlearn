@@ -121,6 +121,22 @@ TOTAL_TOKENS = {
     },
 }
 
+
+def offload_dots_saveable_policy(*_, **__):
+    return extended_checkpoint_policies.offload_dots_saveable(
+        offload_src="device", offload_dst="pinned_host"
+    )
+
+
+def offload_attention_proj_policy(*_, **__):
+    return extended_checkpoint_policies.save_and_offload_only_these_names_regex(
+        names_which_can_be_saved=None,
+        names_which_can_be_offloaded=RematRegexSavePatterns.NATIVE_ATTENTION.value,
+        offload_src="device",
+        offload_dst="pinned_host",
+    )
+
+
 # Llama3 uses 16m tokens after 2.87T tokens.
 # https://arxiv.org/pdf/2407.21783
 TOKENS_PER_BATCH = {
@@ -151,18 +167,6 @@ def get_trainer_kwargs(
 
     rope_theta = ROPE_THETA[version]
 
-    offload_dots_saveable_policy = config_for_function(
-        extended_checkpoint_policies.offload_dots_saveable
-    ).set(offload_src="device", offload_dst="pinned_host")
-    # To make it work better with v3 8k sequence length.
-    offload_attention_proj_policy = config_for_function(
-        extended_checkpoint_policies.save_and_offload_only_these_names_regex
-    ).set(
-        names_which_can_be_saved=None,
-        names_which_can_be_offloaded=RematRegexSavePatterns.NATIVE_ATTENTION.value,
-        offload_src="device",
-        offload_dst="pinned_host",
-    )
     # dict() is more readable here.
     # pylint: disable=use-dict-literal
     if model_size == "test":
@@ -707,15 +711,11 @@ def trainer_configs(
                 cfg: SpmdTrainer.Config = config_map[base_config_name]().clone()
                 # pytype: enable=annotation-type-mismatch
 
-                # The original config was supposed to run on >= 32 machines.
+                # We scale down to small bs to make it run on a single host.
                 # pylint: disable=cell-var-from-loop
-                cfg.input.batcher.global_batch_size //= (
-                    128 if version in (Version.V3, Version.V3_TIKTOKEN) else 32
-                )
+                cfg.input.batcher.feed_batch_size = 8 if version == Version.V3 else 16
                 for evaler in cfg.evalers.values():
-                    evaler.input.batcher.global_batch_size //= (
-                        128 if version in (Version.V3, Version.V3_TIKTOKEN) else 32
-                    )
+                    evaler.input.batcher.feed_batch_size = 8 if version == Version.V3 else 16
                 # pylint: enable=cell-var-from-loop
                 return cfg
 

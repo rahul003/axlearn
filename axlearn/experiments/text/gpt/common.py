@@ -12,7 +12,7 @@ See c4_trainer.py for how they are used.
 
 import math
 from collections.abc import Sequence
-from typing import Optional, Protocol, Union
+from typing import Literal, Optional, Protocol, Union
 
 import jax.numpy as jnp
 import tensorflow as tf
@@ -54,7 +54,9 @@ from axlearn.common.embedding import TransformerTextEmbeddings
 from axlearn.common.evaler import BaseMetricCalculator, ModelSummaryAccumulator, SpmdEvaler
 from axlearn.common.evaler import every_n_steps_policy as eval_every_n_steps_policy
 from axlearn.common.flash_attention.layer import FlashAttention
+from axlearn.common.input_dispatch import InputDispatcher
 from axlearn.common.layers import BaseNormalizationLayer, set_bias_recursively, set_norm_recursively
+from axlearn.common.mixture_of_experts import TransformerFeedForwardMoE
 from axlearn.common.optimizer_base import PartitionedGradientTransformation
 from axlearn.common.param_init import PARAM_REGEXP_WEIGHT, DefaultInitializer, WeightInitializer
 from axlearn.common.summary_writer import BaseWriter
@@ -226,6 +228,8 @@ def model_config(
     atten_logit_cap: Optional[float] = None,
     pad_token_id: Optional[int] = None,
     eos_token_id: Optional[int] = None,
+    ffn_layer_types: Optional[Sequence[Literal["dense", "sparse"]]] = None,
+    expert_cfg: TransformerFeedForwardMoE = TransformerFeedForwardMoE.default_config(),
 ) -> causal_lm.Model.Config:
     """Returns an LM model config based on the given hyperparams.
 
@@ -255,17 +259,15 @@ def model_config(
             Options: [prenorm, postnorm, hybridnorm].
         atten_logit_cap: Cap the absolute values of logits by tanh.
             Enabled by setting a positive value.
-        remat_offload_dst: Destination of remat checkptoing offloading.
         pad_token_id: Int ID of the inputs to be masked for self-attention.
         eos_token_id: Int ID of the end of sequence token id.
+        ffn_layer_types: The types of layers in the FFN. Options: [dense, sparse].
+        expert_cfg: The expert config for the MoE FFN.
 
     Returns:
         A causal LM config.
     """
-    # Feed-forward.
-    layer_cfg.feed_forward.activation = activation_fn
-    layer_cfg.feed_forward.hidden_dim = ffn_dim
-    layer_cfg.feed_forward.structure = ffn_structure
+    # First configure the base layer_cfg.
     # Attention.
     if attention_cfg is not None:
         layer_cfg.self_attention.attention = attention_cfg
@@ -277,8 +279,56 @@ def model_config(
     layer_cfg.self_attention.attention.atten_logit_cap = atten_logit_cap
     if issubclass(stack_cfg.klass, (RepeatedTransformerLayer, StackedTransformerLayer)):
         update_model_remat_config(stack_cfg=stack_cfg, layer_cfg=layer_cfg)
-    # Stack.
-    transformer_cfg = stack_cfg.set(num_layers=num_layers, layer=layer_cfg)
+
+    # Shard some FFN and attention weights over multiple axes.
+    batch_axis_names = ("data", "expert", "fsdp")
+    set_double_shard_weights_config(
+        layer_cfg,
+        batch_axis_names=batch_axis_names,
+        fsdp_axis_names=("expert", "fsdp", "seq"),
+        tp_axis_names="model",
+        seq_axis_names="seq",
+    )
+
+    def config_dense(cfg: TransformerLayer.Config) -> TransformerLayer.Config:
+        cfg = layer_cfg.clone()
+        cfg.feed_forward.activation = activation_fn
+        cfg.feed_forward.hidden_dim = ffn_dim
+        cfg.feed_forward.structure = ffn_structure
+        return cfg
+
+    def config_sparse(cfg: TransformerLayer.Config) -> TransformerLayer.Config:
+        cfg = layer_cfg.clone()
+        cfg.feed_forward = expert_cfg
+        cfg.feed_forward.activation = activation_fn
+        cfg.feed_forward.hidden_dim = ffn_dim
+        cfg.feed_forward.structure = ffn_structure
+        return cfg
+
+    fn = {
+        "dense": config_dense,
+        "sparse": config_sparse,
+    }
+    if ffn_layer_types is None:
+        lm_layer_cfg = config_dense(layer_cfg)
+    else:
+        lm_layer_cfg = [fn[layer_type](layer_cfg) for layer_type in ffn_layer_types]
+
+    # Single layer repeated num_layers times.
+    if not isinstance(lm_layer_cfg, Sequence):
+        transformer_cfg = stack_cfg.set(num_layers=num_layers, layer=lm_layer_cfg)
+    elif len(lm_layer_cfg) == 1:
+        # No need to stack together a single layer.
+        transformer_cfg = stack_cfg.set(num_layers=num_layers, layer=lm_layer_cfg[0])
+    else:
+        num_layers_cfgs = len(lm_layer_cfg)
+        # Stack together the layers.
+        transformer_cfg = stack_cfg.set(
+            num_layers=num_layers // num_layers_cfgs,
+            layer=StackedTransformerLayer.default_config().set(
+                num_layers=num_layers_cfgs, layer=list(lm_layer_cfg)
+            ),
+        )
     decoder_cfg = Decoder.default_config().set(
         transformer=transformer_cfg,
         attention_mask=attention_mask,
@@ -300,7 +350,7 @@ def model_config(
             )
         }
     )
-    batch_axis_names = ("data", "expert", "fsdp")
+    # A few more model-level settings.
     cfg: causal_lm.Model.Config = causal_lm.Model.default_config().set(
         decoder=decoder_cfg,
         param_init=model_param_init,
@@ -309,14 +359,6 @@ def model_config(
     if z_loss_scale:
         cfg.metrics = causal_lm.metrics_config(z_loss_scale=z_loss_scale)
     cfg.dtype = jnp.float32
-    # Shard some FFN and attention weights over multiple axes.
-    set_double_shard_weights_config(
-        cfg.decoder.transformer.layer,
-        batch_axis_names=batch_axis_names,
-        fsdp_axis_names=("expert", "fsdp", "seq"),
-        tp_axis_names="model",
-        seq_axis_names="seq",
-    )
     cfg.decoder.logits_partition_spec = (batch_axis_names, "seq", "model")
     set_bias_recursively(cfg, False)
     set_norm_recursively(cfg, normalization)
@@ -671,6 +713,9 @@ def get_trainer_config_fn(
         cfg.max_step = max_step
         cfg.train_dtype = STEP_DTYPE
         cfg.input = input_tf_data.Input.default_config().set(
+            input_dispatcher=InputDispatcher.default_config().set(
+                global_logical_batch_size=train_batch_size,
+            ),
             is_training=True,
             source=train_input_source,
             processor=config_for_function(input_tf_data.identity),
@@ -688,9 +733,34 @@ def get_trainer_config_fn(
                 }
             ),
         )
+        batcher = config_for_function(input_tf_data.per_feed_batch)
+        batcher.set(
+            # Copy values from cfg.input.batcher.
+            **{
+                k: getattr(cfg.input.batcher, k)
+                for k in batcher.keys()
+                if k not in ("fn", "feed_batch_size")
+            }
+        )
+        cfg.input.batcher = batcher
+
         cfg.evalers = {}
         for name, evaler_cfg in evalers.items():
-            evaler_cfg.input.batcher.set(global_batch_size=eval_batch_size or train_batch_size)
+            evaler_cfg.input.input_dispatcher = InputDispatcher.default_config().set(
+                global_logical_batch_size=train_batch_size
+                if eval_batch_size is None
+                else eval_batch_size
+            )
+            eval_batcher = batcher.clone()
+            eval_batcher.set(
+                # Copy values from cfg.input.batcher.
+                **{
+                    k: getattr(evaler_cfg.input.batcher, k)
+                    for k in eval_batcher.keys()
+                    if k not in ("fn", "feed_batch_size")
+                }
+            )
+            evaler_cfg.input.batcher = eval_batcher
             evaler_cfg.set(
                 eval_policy=config_for_function(eval_every_n_steps_policy).set(
                     n=eval_every_n_steps,

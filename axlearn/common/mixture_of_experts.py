@@ -14,7 +14,8 @@
 Reference: https://arxiv.org/abs/2405.15052.
 """
 import re
-from typing import NamedTuple, Optional, Union
+from functools import reduce
+from typing import NamedTuple, Optional, Sequence, Union
 
 import jax
 import jax.numpy as jnp
@@ -42,6 +43,8 @@ from axlearn.common.metrics import WeightedScalar
 from axlearn.common.module import Module
 from axlearn.common.param_init import FanAxes, constant_initializer
 from axlearn.common.utils import (
+    HybridMeshShape,
+    MeshShape,
     Nested,
     NestedTensor,
     PartitionSpec,
@@ -49,6 +52,7 @@ from axlearn.common.utils import (
     VDict,
     flatten_items,
     get_recursively,
+    infer_mesh_shape,
     set_recursively,
     tree_paths,
     with_sharding_constraint,
@@ -162,6 +166,41 @@ def _cap_logits(logits: Tensor, gating_logit_cap: float) -> Tensor:
         cap = jnp.array(gating_logit_cap, dtype=logits.dtype)
         logits = cap * jnp.tanh(logits / cap)
     return logits
+
+
+def get_outer_batch_from_mesh(
+    mesh_axis_names: Sequence[str],
+    outer_batch_axis_names: Sequence[str],
+    mesh_shape: Optional[Union[MeshShape, HybridMeshShape]],
+) -> Optional[int]:
+    """Infer MoE outer batch size from mesh shape."""
+    if mesh_shape is None:
+        return None
+
+    ici_mesh_shape = (
+        mesh_shape.ici_mesh_shape if isinstance(mesh_shape, HybridMeshShape) else mesh_shape
+    )
+    try:
+        ici_mesh_shape = infer_mesh_shape(ici_mesh_shape)
+    except ValueError as e:
+        # It could happen when running in local, the number of devices can be smaller than the
+        # required number of devices from the mesh shape.
+        logging.info(e)
+
+    if isinstance(mesh_shape, HybridMeshShape):
+        if -1 in mesh_shape.dcn_mesh_shape:
+            # TODO(markblee): Improve support for this. At the moment it is not a use-case.
+            raise NotImplementedError(
+                "Unable to infer number of granules. Please specify dcn_mesh_shape without -1."
+            )
+        mesh_shape = tuple(x * y for x, y in zip(ici_mesh_shape, mesh_shape.dcn_mesh_shape))
+    else:
+        mesh_shape = ici_mesh_shape
+
+    return reduce(
+        lambda x, y: x * y,
+        [mesh_shape[mesh_axis_names.index(el)] for el in outer_batch_axis_names],
+    )
 
 
 class AdaptiveLoadBalanceLoss(BaseLayer):
