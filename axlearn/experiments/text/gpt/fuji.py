@@ -124,6 +124,20 @@ TOKENS_PER_BATCH = {
     Version.V3: 16 * (1024**2),
 }
 
+def offload_dots_saveable_policy(*_, **__):
+    return extended_checkpoint_policies.offload_dots_saveable(
+        offload_src="device", offload_dst="pinned_host"
+    )
+
+
+def offload_attention_proj_policy(*_, **__):
+    return extended_checkpoint_policies.save_and_offload_only_these_names_regex(
+        names_which_can_be_saved=None,
+        names_which_can_be_offloaded=RematRegexSavePatterns.NATIVE_ATTENTION.value,
+        offload_src="device",
+        offload_dst="pinned_host",
+    )
+
 
 def get_trainer_kwargs(
     model_size: str,
@@ -211,18 +225,6 @@ def get_trainer_kwargs(
         ),
     ]
 
-    offload_dots_saveable_policy = config_for_function(
-        extended_checkpoint_policies.offload_dots_saveable
-    ).set(offload_src="device", offload_dst="pinned_host")
-    # To make it work better with v3 8k sequence length.
-    offload_attention_proj_policy = config_for_function(
-        extended_checkpoint_policies.save_and_offload_only_these_names_regex
-    ).set(
-        names_which_can_be_saved=None,
-        names_which_can_be_offloaded=RematRegexSavePatterns.NATIVE_ATTENTION.value,
-        offload_src="device",
-        offload_dst="pinned_host",
-    )
     # dict() is more readable here.
     # pylint: disable=use-dict-literal
     if model_size == "test":
