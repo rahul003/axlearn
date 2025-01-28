@@ -28,6 +28,7 @@ Architecture names follow apple varieties: Fuji, Gala, etc.
 import functools
 from typing import Any, Literal, Sequence, Union
 
+import jax
 from jax.ad_checkpoint import checkpoint_policies as jax_remat_policies
 
 from axlearn.common import causal_lm, config
@@ -49,8 +50,10 @@ from axlearn.common.trainer_config_modifier import (
     GradientAccumulationModifier,
     MeshShapeModifier,
     RematSpecModifier,
+    ModelConfigModifier,
+    PartitionSpecModifier
 )
-from axlearn.common.utils import HybridMeshShape, MeshShape, PartitionSpec
+from axlearn.common.utils import HybridMeshShape, MeshShape, PartitionSpec, DataPartitionType
 from axlearn.experiments.text.gpt.common import (
     MESH_AXIS_NAMES,
     STEP_DTYPE,
@@ -137,13 +140,68 @@ def get_trainer_kwargs(
     """Construct default trainer kwargs given a model size."""
     tokens_per_batch = 8 * (1024**2)  # 8M tokens.
 
+    from axlearn.common.attention import StackedTransformerLayer, GroupedQKVLinear
+    # TRN1 specific model config modifications
+    trn2_model_modifications = [
+        # Neuron compiler has a module to detect repeating blocks and reuse them during compilation.
+        # So compile time does not grow with the number of layers.
+        ModelConfigModifier.default_config().set(
+            target_config="model.decoder.transformer",
+            modification=StackedTransformerLayer.default_config(),
+        )
+    ]
+    trn2_model_modifications.append(
+        ModelConfigModifier.default_config().set(
+            target_config="model.decoder.transformer.layer.self_attention.attention."
+            "input_linear.input_linear",
+            modification=GroupedQKVLinear.default_config(),
+        )
+    )
+
+    trn2_partition_spec_modifications = [
+        PartitionSpecModifier.default_config().set(
+            partition_specs={
+                # Vocab parallel embeddings sharding from Megatron LM.
+                "model.decoder.emb.token_emb": {
+                    "param_partition_spec": (
+                        "model",
+                        ("expert", "fsdp", "seq"),
+                    ),
+                    "input_partition_spec": ("fsdp", None),
+                    "output_partition_spec": ("fsdp", None, None),
+                    "embedding_partition_spec": ("model", None),
+                },
+                # Sequence parallel shardings for norms.
+                "model.decoder.transformer.layer.self_attention.norm": {
+                    "input_partition_spec": ("fsdp", "model", None),
+                    "output_partition_spec": ("fsdp", None, None),
+                },
+                "model.decoder.transformer.layer.feed_forward.norm": {
+                    "input_partition_spec": ("fsdp", "model", None),
+                    "output_partition_spec": ("fsdp", None, None),
+                },
+                "model.decoder.output_norm": {
+                    "input_partition_spec": ("fsdp", "model", None),
+                    "output_partition_spec": ("fsdp", None, None),
+                },
+                # no lm head module in model
+                # "model.decoder.lm_head": {
+                #     "param_partition_spec": ("model", ("expert", "fsdp", "seq"),),
+                # },
+                "model.decoder.transformer.layer.feed_forward.linear2": {
+                    "output_partition_spec": ("fsdp", None, None),
+                },
+            },
+        ),
+    ]
+
     # pylint: disable=use-dict-literal
     if model_size == "test":
         trainer_kwargs = dict(
             model_kwargs=dict(
                 num_layers=4,
                 hidden_dim=8,
-                ffn_dim=scaled_hidden_dim(scale=8 / 3, round_up_to_multiples_of=16),
+                ffn_dim=scaled_hidden_dim(scale=8/3, round_up_to_multiples_of=16),
                 num_heads=4,
                 num_kv_heads=2,
                 vocab_size=32,
@@ -341,11 +399,13 @@ def get_trainer_kwargs(
                 ffn_dim=scaled_hidden_dim(scale=3.5, round_up_to_multiples_of=128),
                 num_heads=32,
                 num_kv_heads=8,
-                num_experts=NUM_EXPERTS[model_size],
-                train_capacity_factor=2.0,
-                num_groups=2,
+                flash_attention=flash_attention,
+                # num_experts=NUM_EXPERTS[model_size],
+                # train_capacity_factor=2.0,
+                # num_groups=2,
                 ffn_layer_types=[
-                    "sparse",
+                    # "sparse",
+                    "dense",
                 ],
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
@@ -372,6 +432,20 @@ def get_trainer_kwargs(
                         ],
                     ),
                 ),
+                (
+                    "neuron-(trn2|trn2n).48xlarge-64",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                # TP within the chip, FSDP across chips.
+                                # Each TRN2 chip has 4 XLA cores.
+                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                            ),
+                            *trn2_model_modifications,
+                            *trn2_partition_spec_modifications,
+                        ],
+                    ),
+                ),
             ),
         )
     # pylint: enable=use-dict-literal
@@ -392,6 +466,8 @@ def get_trainer_kwargs(
     learner_kwargs.update(trainer_kwargs.get("learner_kwargs", {}))
 
     mesh_shape = merged_trainer_kwargs.get("mesh_shape", mesh_shape_from_axes(data=-1))
+    backend = jax.default_backend()
+    trainer_kwargs["input_partition_type"] = None if backend != "neuron" else DataPartitionType.BATCH
     merged_trainer_kwargs["model_cfg"] = model_config(
         flash_attention=flash_attention, mesh_shape=mesh_shape, **model_kwargs
     )
@@ -477,6 +553,7 @@ def model_config(
     outer_batch_size = get_outer_batch_from_mesh(
         MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, mesh_shape
     )
+    print('Outer batch size ', outer_batch_size)
     expert_config = TransformerFeedForwardMoE.default_config().set(
         outer_batch=outer_batch_size,
         num_experts=num_experts,
@@ -489,7 +566,7 @@ def model_config(
     emb_cfg: TransformerTextEmbeddings.Config = TransformerTextEmbeddings.default_config().set(
         pos_emb=None
     )
-    emb_cfg.token_emb.param_partition_spec = (("expert", "fsdp", "seq"), "model")
+    # emb_cfg.token_emb.param_partition_spec = (("expert", "fsdp", "seq"), "model")
     cfg = common_model_config(
         num_layers=num_layers,
         hidden_dim=hidden_dim,
@@ -537,7 +614,7 @@ def trainer_configs(
             model_size,
             vocab_size=vocab_size,
             # Use default flash attention.
-            flash_attention=(model_size != "test"),
+            flash_attention=True,
             max_sequence_length=seq_len,
         )
 
