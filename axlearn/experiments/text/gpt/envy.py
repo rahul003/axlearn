@@ -91,7 +91,7 @@ MAX_SEQUENCE_LENGTH = {
     "Switch-Base": 8192,
     "Switch-Large": 8192,
     "Switch-XXL": 8192,
-    "Mistral-8x7B": 8192 * 4,
+    "Mistral-8x7B": 512 * 4,
 }
 
 
@@ -394,15 +394,14 @@ def get_trainer_kwargs(
         # Num of parameters: 47B.
         trainer_kwargs = dict(
             model_kwargs=dict(
-                num_layers=32,
+                num_layers=8,
                 hidden_dim=32 * 128,
                 ffn_dim=scaled_hidden_dim(scale=3.5, round_up_to_multiples_of=128),
                 num_heads=32,
                 num_kv_heads=8,
-                flash_attention=flash_attention,
-                # num_experts=NUM_EXPERTS[model_size],
-                # train_capacity_factor=2.0,
-                # num_groups=2,
+                num_experts=NUM_EXPERTS[model_size],
+                train_capacity_factor=2.0,
+                num_groups=2,
                 ffn_layer_types=[
                     # "sparse",
                     "dense",
@@ -410,7 +409,7 @@ def get_trainer_kwargs(
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
             max_sequence_length=max_sequence_length,
-            train_batch_size=tokens_per_batch // max_sequence_length,  # 8M tokens.
+            train_batch_size=int(len(jax.devices())), #tokens_per_batch // max_sequence_length,  # 8M tokens.
             max_step=250_000,
             mesh_shape=mesh_shape_from_axes(fsdp=-1, model=8),
             mesh_rules=(
