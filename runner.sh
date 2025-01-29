@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -ex
+
+set -e
 # Neuron env vars for distributed training based on SLURM
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
 if [ -z "$SLURM_JOB_NODELIST" ]; then
@@ -15,9 +16,7 @@ JAX_COORDINATOR_PORT=41001
 export NEURON_RT_ROOT_COMM_ID="${MASTER_ADDR}:${MASTER_PORT}"
 export NEURON_PJRT_PROCESSES_NUM_DEVICES=$(printf '%s,' $(seq 1 $num_nodes | xargs -I {} echo $devices_per_node) | sed 's/,$//')
 export NEURON_PJRT_PROCESS_INDEX=$SLURM_NODEID
-# Needed for TC_MALLOC fix
-sudo apt-get -f install -y
-sudo apt-get install -y google-perftools
+
 
 # Install Runtime dependencies
 #sudo dpkg -i /fsx/apoorvgu/aws-neuronx-runtime-lib-2.x.19993.0-1bf746e12.deb
@@ -44,7 +43,7 @@ export XLA_FLAGS="--xla_dump_hlo_as_text --xla_disable_hlo_passes=aws_neuron_fli
 export NEURON_FSDP_NUM_LAYER_EARLY_AG_SHIFT=1
 export NEURON_FSDP_NUM_LAYER_LATE_RS_SHIFT=2
 export NEURON_ENABLE_INT_MATMUL_DOWNCAST=1
-export NEURON_FSDP=1
+export NEURON_FSDP=0
 export NEURON_FSDP_NUM_LAYER_COALESCE=-1
 export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1
 
