@@ -22,7 +22,7 @@ import jax.numpy as jnp
 import numpy as np
 from absl import logging
 from jax.experimental.pjit import pjit
-
+import jax.lax as lax
 from axlearn.common.base_layer import BaseLayer, ParameterSpec
 from axlearn.common.config import (
     REQUIRED,
@@ -78,6 +78,88 @@ def _router_z_loss(logits: Tensor) -> Tensor:
     z_loss = jax.lax.square(log_z).mean()
     return z_loss
 
+def make_tril(size: int, dtype=jnp.float32) -> jnp.ndarray:
+    """Creates a lower triangular matrix of ones."""
+    return jnp.tril(jnp.ones((size, size), dtype=dtype))
+
+def cumsum_4d_matmul(x: jnp.ndarray, axis: int = -1, tril_size: int = 2048):
+    """Efficient cumsum implementation using triangular matrix multiplication.
+
+    Args:
+        x: Input array of shape (d0, d1, d2, d3)
+        axis: Axis along which to compute cumsum (0-3)
+        tril_size: Size of triangular matrix for tiling
+    Returns:
+        Array of same shape with cumulative sum along specified axis
+    """
+    if axis < 0:
+        axis = x.ndim + axis
+
+    # Create triangular matrix once
+    tril = jnp.tril(jnp.ones((tril_size, tril_size), dtype=jnp.float64))
+
+    # Move the target axis to first position
+    if axis != 0:
+        perm = list(range(4))
+        perm[0], perm[axis] = perm[axis], perm[0]
+        x = jnp.transpose(x, perm)
+    # Get shapes
+    axis_size = x.shape[0]
+    batch_size = np.prod(x.shape[1:])
+
+    # Reshape to 2D for efficient matmul
+    x_2d = x.reshape(axis_size, batch_size)
+
+    # Process data based on size
+    if axis_size <= tril_size:
+        # Single matmul for small sizes
+        tril_slice = lax.dynamic_slice(
+            tril,
+            (0, 0),
+            (axis_size, axis_size)
+        )
+        result = jnp.matmul(tril_slice, x_2d, precision=lax.Precision.HIGHEST)
+
+    else:
+        # Process in tiles
+        num_tiles = (axis_size + tril_size - 1) // tril_size
+
+        def process_tile(i):
+            start_idx = i * tril_size
+            size = jnp.minimum(tril_size, axis_size - start_idx)
+
+            # Get input slice
+            x_slice = lax.dynamic_slice(
+                x_2d,
+                (start_idx, 0),
+                (size, batch_size)
+            )
+
+            # Get tril slice
+            tril_slice = lax.dynamic_slice(
+                tril,
+                (0, 0),
+                (size, size)
+            )
+
+            return jnp.matmul(tril_slice, x_slice)
+
+        # Process all tiles in parallel using vmap
+        tiles = jax.vmap(process_tile)(jnp.arange(num_tiles))
+        result = jnp.concatenate(tiles, axis=0)
+
+    # Reshape back to 4D
+    result = result.reshape(x.shape)
+
+    # Transpose back if necessary
+    if axis != 0:
+        inv_perm = [0] * 4
+        for i, p in enumerate(perm):
+            inv_perm[p] = i
+        result = jnp.transpose(result, inv_perm)
+
+    return result
+
 
 def _cum_sum(
     elements: Tensor, *, axis: int = 0, exclusive: bool = False, reverse: bool = False
@@ -98,7 +180,7 @@ def _cum_sum(
     if reverse:
         elements = jnp.flip(elements, axis=axis)
 
-    result = jnp.cumsum(elements, axis=axis)
+    result = cumsum_4d_matmul(elements, axis=axis)
     if exclusive:
         result = result - elements
     if reverse:

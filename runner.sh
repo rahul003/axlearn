@@ -88,7 +88,7 @@ deactivate || true
 # eval "$(/fsx/apoorvgu/conda/bin/conda shell.bash hook)"
 # conda activate py310
 
-source ../jax_fs/bin/activate
+source /fsx/huilgolr/jax_fs/bin/activate
 
 echo "Listing apt dependencies"
 apt list --installed | grep neuron

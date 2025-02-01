@@ -1,6 +1,7 @@
 #!/bin/bash
-#SBATCH --output=logs/%x/%j/out
+#SBATCH --nodes 1
 #SBATCH --cpus-per-task 127
+#SBATCH --output logs/%x_%j.out
 
-srun -l setup_node.sh
+srun -l setup_node.sh /fsx/huilgolr/jan-artifacts/
 srun -l runner.sh
