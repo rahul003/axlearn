@@ -987,7 +987,6 @@ class TopKGatingGather(TopKGating):
         # top_k happens on last axis of operand, so the expert axis
         # expert_index: [O, G, S, top_k]
         k = min(cfg.top_k, cfg.num_experts)
-        print(k, cfg.top_k, cfg.num_experts, raw_gates.shape, logits.shape)
         _, expert_index = jax.lax.top_k(raw_gates, k)
         expert_index = expert_index.astype(jnp.int64)
         
