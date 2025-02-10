@@ -9,12 +9,6 @@ if [ -z "$SLURM_JOB_NODELIST" ]; then
 	SLURM_JOB_ID=$EPOCHSECONDS
 fi
 
-num_nodes=$(echo "$nodes" | wc -l)
-devices_per_node=64
-MASTER_ADDR=$(echo "$nodes" | head -n 1)
-MASTER_PORT=41000
-JAX_COORDINATOR_PORT=41001
-
 # Print nodenames for debug
 hostname
 
@@ -58,9 +52,5 @@ else
 	exit 1
 fi
 
-OUTPUT_DIR="${TEST_ARTIFACTS_PATH}/axlearn_out"
-mkdir -p ${OUTPUT_DIR}
-
-#fuji-7B-v2-flash
 # python -m axlearn.common.mixture_of_experts_test TransformerFeedForwardMoETest.test_topk_gating_gather
 python -m axlearn.common.mixture_of_experts_test TransformerFeedForwardMoETest
