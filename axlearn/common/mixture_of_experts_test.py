@@ -29,6 +29,7 @@ from axlearn.common.layers import set_bias_recursively
 from axlearn.common.mixture_of_experts import (
     AdaptiveLoadBalanceLoss,
     Top2Gating,
+    TopKGatingGather,
     TopKGating,
     TransformerFeedForwardMoE,
     _convert_feedforward_to_moe_parameters,
@@ -41,8 +42,8 @@ from axlearn.common.utils import get_recursively, set_recursively, shapes
 
 # pylint: disable=no-self-use,protected-access
 class TransformerFeedForwardMoETest(parameterized.TestCase):
-    @parameterized.product(is_training=(True, False), outer_batch=(1, 2))
-    def test_moe_layer_forward(self, is_training, outer_batch):
+    @parameterized.product(is_training=(True, False), outer_batch=(1, 2), gating_config=('einsum', 'gather'))
+    def test_moe_layer_forward(self, is_training, outer_batch, gating_config):
         batch_size = 4
         seq_len = 128
         input_dim = 8
@@ -53,6 +54,8 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
         cfg.num_experts = 8
         cfg.num_groups = 4
         cfg.outer_batch = outer_batch
+        if gating_config == 'gather':
+            cfg.gating = TopKGatingGather.default_config()
         layer: TransformerFeedForwardMoE = cfg.instantiate(parent=None)
 
         state = layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
@@ -67,7 +70,8 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
         )
         self.assertEqual((batch_size, seq_len, input_dim), outputs.shape)
 
-    def test_moe_layer_aux_loss(self):
+    @parameterized.product(gating_config=('einsum', 'gather'))
+    def test_moe_layer_aux_loss(self, gating_config):
         batch_size = 4
         seq_len = 128
         input_dim = 8
@@ -77,7 +81,8 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
         cfg.hidden_dim = 32
         cfg.num_experts = 8
         cfg.num_groups = 4
-
+        if gating_config == 'gather':
+            cfg.gating = TopKGatingGather.default_config()
         cfg0 = cfg.clone(load_balance_loss_weight=0.01, router_z_loss_weight=0.001)
         layer0: TransformerFeedForwardMoE = cfg0.instantiate(parent=None)
         state = layer0.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
@@ -112,8 +117,9 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
         copy_weights=(True, False),
         num_experts=(1, 8),
         activation=("nn.relu", ("nn.silu", "linear")),
+        gating_config=('einsum', 'gather')
     )
-    def test_moe_and_dense_layer_parity(self, copy_weights, num_experts, activation):
+    def test_moe_and_dense_layer_parity(self, copy_weights, num_experts, activation, gating_config):
         batch_size = 2
         seq_len = 128
         input_dim = 16
@@ -125,6 +131,8 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
         cfg.num_experts = num_experts
         cfg.activation = activation
         cfg.num_groups = 4
+        if gating_config == 'gather':
+            cfg.gating = TopKGatingGather.default_config()
         # A large capacity factor to prevent dropping tokens.
         cfg.gating.train_capacity_factor = 100.0
         cfg.gating.eval_capacity_factor = 100.0
@@ -176,24 +184,30 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
         expert_capacity=(0, 200),
         num_experts=(1, 8),
         outer_batch=(1, 2),
+        gating_config=('einsum', 'gather'),
     )
     def test_top2_gating(
         self,
         expert_capacity,
         num_experts,
         outer_batch,
+        gating_config
     ):
         batch_size = 2
         seq_len = 12
 
-        cfg = Top2Gating.default_config().set(name="test")
+        if gating_config == "gather":
+            cfg = TopKGatingGather.default_config().set(name="test")
+            cfg.top_k = 2
+        else:
+            cfg = Top2Gating.default_config().set(name="test")
         cfg.num_experts = num_experts
         cfg.expert_capacity = expert_capacity
         cfg.eval_capacity_factor = (
             100.0  # set to a larger number to prevent token dropping for test.
         )
 
-        layer: Top2Gating = cfg.instantiate(parent=None)
+        layer = cfg.instantiate(parent=None)
         state = layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
 
         shape = (outer_batch, batch_size, seq_len, num_experts)
@@ -220,17 +234,22 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
 
     @parameterized.product(
         is_training=(True, False),
+        gating_config=("einsum", "gather"),
     )
-    def test_top2_gating_capacity_factor(self, is_training):
+    def test_top2_gating_capacity_factor(self, is_training, gating_config):
         num_experts = 4
         group_size = 16
 
-        cfg = Top2Gating.default_config().set(name="test")
+        if gating_config == "gather":
+            cfg = TopKGatingGather.default_config().set(name="test")
+            cfg.top_k = 2
+        else:
+            cfg = Top2Gating.default_config().set(name="test")
         cfg.num_experts = num_experts
         cfg.train_capacity_factor = 1.0
         cfg.eval_capacity_factor = 2.0
 
-        layer: Top2Gating = cfg.instantiate(parent=None)
+        layer = cfg.instantiate(parent=None)
         state = layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
         logits = jax.random.uniform(jax.random.PRNGKey(1), shape=(2, 4, group_size, num_experts))
         gating, _ = F(
@@ -250,18 +269,23 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
         expert_capacity=(0, 200),
         outer_batch=(1, 2),
         top_k=(1, 2, 8),
+        gating_config=("einsum", "gather"),
     )
     def test_topk_gating(
         self,
         expert_capacity,
         outer_batch,
         top_k,
+        gating_config,
     ):
         batch_size = 2
         seq_len = 12
         num_experts = 8
 
-        cfg = TopKGating.default_config().set(name="test")
+        if gating_config == "gather":
+            cfg = TopKGatingGather.default_config().set(name="test")
+        else:
+            cfg = TopKGating.default_config().set(name="test")
         cfg.num_experts = num_experts
         cfg.expert_capacity = expert_capacity
         cfg.eval_capacity_factor = (
@@ -269,7 +293,7 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
         )
         cfg.top_k = top_k
 
-        layer: TopKGating = cfg.instantiate(parent=None)
+        layer = cfg.instantiate(parent=None)
         state = layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
 
         shape = (outer_batch, batch_size, seq_len, num_experts)
@@ -351,6 +375,7 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
         assert_allclose(gating.load_balance_loss, gating1.load_balance_loss)
         assert_allclose(gating.router_z_loss, gating1.router_z_loss)
 
+    # BELOW TESTS NOT TESTED WITH GATHER ROUTING
     def test_adaptive_load_balance_loss(self):
         cfg = AdaptiveLoadBalanceLoss.default_config().set(
             name="test", min_value=0.4, max_value=0.6
