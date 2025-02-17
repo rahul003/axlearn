@@ -36,8 +36,132 @@ from axlearn.common.mixture_of_experts import (
 )
 from axlearn.common.module import functional as F
 from axlearn.common.test_utils import assert_allclose
+from axlearn.common.test_utils import TestCase
 from axlearn.common.utils import get_recursively, set_recursively, shapes
 
+MODULE_UNIT_TEST_ATOL=1e-6
+MODULE_UNIT_TEST_RTOL=1e-3
+
+class ModuleConfig():
+    def __init__(self, module = None, device = "cpu", mesh = (1,)):
+        assert module is not None
+        self.module = module.default_config().set(name="test")
+        self.device = device
+        self.mesh = mesh
+
+class TestConfig():
+    def __init__(self, setup, test: ModuleConfig, golden: ModuleConfig = None, inputs: dict = None, loss_fn = None):
+        self.test = test
+        self.golden = golden if golden is not None else test
+        self.inputs = inputs
+        self.loss_fn = loss_fn
+
+        for spec, val in setup.items():
+            setattr(self.test.module, spec, val)
+            setattr(self.golden.module, spec, val)
+        
+        self.test_layer = test.module.instantiate(parent=None)
+
+        self.golden_layer = golden.module.instantiate(parent=None)
+
+        self.test_state = self.test_layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
+        self.golden_state = self.test_state
+
+
+def _get_training_configs():
+
+    batch_size = 4
+    seq_len = 128
+    input_dim = 8
+
+    test_cfgs = [
+        ### Basic Module Tests
+        TestConfig(
+            setup = {"input_dim": 8, "hidden_dim": 32, "num_experts": 8, "num_groups": 4, "outer_batch": 1},
+            test = ModuleConfig(TransformerFeedForwardMoE, "neuron"),
+            golden = ModuleConfig(TransformerFeedForwardMoE, "cpu"),
+            inputs = dict(inputs=jax.random.uniform(jax.random.PRNGKey(1), shape=(batch_size, seq_len, input_dim))),
+            loss_fn = lambda x: x.mean()
+        ),
+        TestConfig(
+            setup = {"expert_capacity": 200, "num_experts": 8, "train_capacity_factor": 1.0},
+            test = ModuleConfig(Top2Gating, "neuron"),
+            golden = ModuleConfig(Top2Gating, "cpu"),
+            inputs = dict(logits=jax.random.uniform(jax.random.PRNGKey(1), shape=(1, 1, 1, 1))),
+            loss_fn = lambda x: x.combine_tensor.mean()
+        ),
+        TestConfig(
+            setup = {"expert_capacity": 200, "num_experts": 8, "train_capacity_factor": 1.0},
+            test = ModuleConfig(TopKGating, "neuron"),
+            golden = ModuleConfig(TopKGating, "cpu"),
+            inputs = dict(logits=jax.random.uniform(jax.random.PRNGKey(1), shape=(1, 1, 1, 1))),
+            loss_fn = lambda x: x.combine_tensor.mean()
+        ),
+    ]
+
+    return test_cfgs
+
+# pylint: disable=no-self-use,protected-access
+class TestImplCorrectness(TestCase):
+
+    def _fwd_call(self, layer, state, inputs):
+        return F(
+                layer,
+                is_training=True,
+                prng_key=jax.random.PRNGKey(123),
+                state=state,
+                inputs=inputs,
+        )
+
+    @parameterized.parameters(_get_training_configs())
+    def test_fwd_correctness(self, cfg: TestConfig):
+
+        @partial(jax.jit, backend=cfg.test.device)
+        def test_fwd_call():
+            test_output, _ = self._fwd_call(cfg.test_layer, cfg.test_state, cfg.inputs)
+            return test_output
+
+        @partial(jax.jit, backend=cfg.golden.device)
+        def golden_fwd_call():
+            golden_output, _ =  self._fwd_call(cfg.golden_layer, cfg.golden_state, cfg.inputs)
+            return golden_output
+        
+        test_output = test_fwd_call()
+        golden_output = golden_fwd_call()
+        
+        # Transfer results to CPU before comparison
+        self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output))
+
+    @parameterized.parameters(_get_training_configs())
+    def test_bwd_correctness(self, cfg: TestConfig):
+
+        @partial(jax.jit, backend=cfg.test.device)
+        def test_bwd_call(state):
+            test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
+            loss = cfg.loss_fn(test_output)
+            return loss
+
+        @partial(jax.jit, backend=cfg.golden.device)
+        def golden_bwd_call(state):
+            golden_output, _ =  self._fwd_call(cfg.golden_layer, state, cfg.inputs)
+            loss = cfg.loss_fn(golden_output)
+            return loss
+        
+        test_loss, test_grads = jax.value_and_grad(test_bwd_call, has_aux=False)(
+            cfg.test_state
+        )
+        golden_loss, golden_grads = jax.value_and_grad(golden_bwd_call, has_aux=False)(
+            cfg.golden_state
+        )
+
+        # Transfer results to CPU before comparison
+        test_loss = jax.tree_map(jax.device_get, test_loss)
+        golden_loss = jax.tree_map(jax.device_get, golden_loss)
+        test_grads = jax.tree_map(jax.device_get, test_grads)
+        golden_grads = jax.tree_map(jax.device_get, golden_grads)
+        
+        self.assertNestedAllClose(test_loss, golden_loss)
+        self.assertNestedAllClose(test_grads, golden_grads)
 
 # pylint: disable=no-self-use,protected-access
 class TransformerFeedForwardMoETest(parameterized.TestCase):
