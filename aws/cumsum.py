@@ -45,31 +45,34 @@ def cumsum_4d_matmul(x: jnp.ndarray, axis: int = -1, tril_size: int = 2048):
         
     else:
         # Process in tiles
-        num_tiles = (axis_size + tril_size - 1) // tril_size
+        num_full_tiles = axis_size // tril_size
+        remainder_size = axis_size % tril_size
 
-        def process_tile(i):
-            start_idx = i * tril_size
-            size = jnp.minimum(tril_size, axis_size - start_idx)
-            
-            # Get input slice
-            x_slice = lax.dynamic_slice(
-                x_2d,
-                (start_idx, 0),
-                (size, batch_size)
-            )
-            
-            # Get tril slice
-            tril_slice = lax.dynamic_slice(
-                tril,
-                (0, 0),
-                (size, size)
-            )
-            
-            return jnp.matmul(tril_slice, x_slice)
+        # Process full tiles with rolling sum
+        full_tiles = x_2d[:num_full_tiles * tril_size].reshape(
+            num_full_tiles, tril_size, batch_size
+        )
 
-        # Process all tiles in parallel using vmap
-        tiles = jax.vmap(process_tile)(jnp.arange(num_tiles))
-        result = jnp.concatenate(tiles, axis=0)
+        def process_tile(rolling_sum, x_tile):
+            output = rolling_sum + jnp.matmul(tril, x_tile, precision=lax.Precision.HIGHEST)
+            # Last row becomes new rolling sum
+            new_rolling_sum = output[-1:, :]
+            return new_rolling_sum, output
+
+        rolling_sum = jnp.zeros((1, batch_size), dtype=full_tiles.dtype)
+        last_rolling_sum, results = jax.lax.scan(process_tile, rolling_sum, full_tiles)
+        result = results.reshape(-1, batch_size)
+
+        # Process remainder if any
+        if remainder_size > 0:
+            x_remainder = x_2d[num_full_tiles * tril_size :]
+            tril_remainder = tril[:remainder_size, :remainder_size]
+            remainder_result = last_rolling_sum + jnp.matmul(
+                tril_remainder, x_remainder, precision=lax.Precision.HIGHEST
+            )
+
+            # Concatenate remainder
+            result = jnp.concatenate([result, remainder_result], axis=0)
 
     # Reshape back to 4D
     result = result.reshape(x.shape)
@@ -181,7 +184,8 @@ def test_cumsum_4d():
     shapes = [
         (2, 3, 4, 5),      # Small
         (16, 32, 6, 8),  # Medium
-        (128, 256, 32, 64)  # Large
+        (128, 256, 32, 64),  # Large
+        (16, 2, 4096, 8),  # Tiled
     ]
     
     for shape in shapes:
@@ -251,7 +255,8 @@ if __name__ == "__main__":
     shapes = [
         (16, 32, 64, 128),
         (128, 256, 32, 64),
-        (512, 512, 16, 16)
+        (512, 512, 16, 16),
+        (16, 2, 4096, 8),
     ]
     
     for shape in shapes:
