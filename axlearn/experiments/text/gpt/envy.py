@@ -27,7 +27,7 @@ Architecture names follow apple varieties: Fuji, Gala, etc.
 
 import functools
 from typing import Any, Literal, Sequence, Union
-
+import os
 import jax
 from jax.ad_checkpoint import checkpoint_policies as jax_remat_policies
 
@@ -43,7 +43,7 @@ from axlearn.common.attention import (
 from axlearn.common.base_layer import RematSpec
 from axlearn.common.embedding import TransformerTextEmbeddings
 from axlearn.common.layers import RMSNorm
-from axlearn.common.mixture_of_experts import TransformerFeedForwardMoE, get_outer_batch_from_mesh
+from axlearn.common.mixture_of_experts import TransformerFeedForwardMoE, get_outer_batch_from_mesh, TopKGatingGather
 from axlearn.common.trainer import SpmdTrainer
 from axlearn.common.trainer_config_modifier import (
     ChainConfigModifier,
@@ -91,7 +91,7 @@ MAX_SEQUENCE_LENGTH = {
     "Switch-Base": 8192,
     "Switch-Large": 8192,
     "Switch-XXL": 8192,
-    "Mistral-8x7B": 512 * 4,
+    "Mistral-8x7B": 256,
 }
 
 
@@ -104,6 +104,8 @@ MOE_DIM_TO_MESH_AXIS_MAP = {
     "emh": PartitionSpec("expert", "fsdp", "model"),
     "ehm": PartitionSpec("expert", "model", "fsdp"),
     "ogsm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, "model"),
+    "ogse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
+    "ogec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
     # Dispatch and combine tensors.
     "ogsec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, "expert", None),
     "oegcm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
@@ -187,14 +189,15 @@ def get_trainer_kwargs(
                 # no lm head module in model
                 # "model.decoder.lm_head": {
                 #     "param_partition_spec": ("model", ("expert", "fsdp", "seq"),),
-                # },
-                "model.decoder.transformer.layer.feed_forward.linear2": {
-                    "output_partition_spec": ("fsdp", None, None),
-                },
+                # },      
             },
         ),
     ]
 
+    if os.getenv('MIXTRAL_MOE', '1') == '0':
+        trn2_partition_spec_modifications[0].partition_specs["model.decoder.transformer.layer.feed_forward.linear2"] = {
+                "output_partition_spec": ("fsdp", None, None),
+            }
     # pylint: disable=use-dict-literal
     if model_size == "test":
         trainer_kwargs = dict(
@@ -392,24 +395,24 @@ def get_trainer_kwargs(
         )
     elif model_size == "Mistral-8x7B":
         # Num of parameters: 47B.
+        ffn_layer_types=["dense"] if os.getenv("MIXTRAL_MOE", "1") == "0" else ["sparse"]
+        neuron_mesh = mesh_shape_from_axes(fsdp=-1, model=4)
         trainer_kwargs = dict(
             model_kwargs=dict(
-                num_layers=8,
-                hidden_dim=32 * 128,
+                num_layers=4,
+                hidden_dim=32 * 32,
                 ffn_dim=scaled_hidden_dim(scale=3.5, round_up_to_multiples_of=128),
                 num_heads=32,
                 num_kv_heads=8,
                 num_experts=NUM_EXPERTS[model_size],
                 train_capacity_factor=2.0,
-                num_groups=2,
-                ffn_layer_types=[
-                    # "sparse",
-                    "dense",
-                ],
+                num_groups=1,
+                ffn_layer_types=ffn_layer_types,
+                outer_batch_size=get_outer_batch_from_mesh(MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, neuron_mesh),
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
             max_sequence_length=max_sequence_length,
-            train_batch_size=int(len(jax.devices())), #tokens_per_batch // max_sequence_length,  # 8M tokens.
+            train_batch_size=128,  # 8M tokens.
             max_step=250_000,
             mesh_shape=mesh_shape_from_axes(fsdp=-1, model=8),
             mesh_rules=(
@@ -438,10 +441,18 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=neuron_mesh
                             ),
                             *trn2_model_modifications,
                             *trn2_partition_spec_modifications,
+                            RematSpecModifier.default_config().set(
+                                remat_policies={
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=True,
+                                        policy=jax_remat_policies.nothing_saveable,
+                                    ),
+                                }
+                            ),
                         ],
                     ),
                 ),
@@ -498,6 +509,7 @@ def model_config(
     ffn_dim: Union[int, config.FunctionConfigBase],
     dropout_rate: float = 0.0,
     flash_attention: bool = False,
+    outer_batch_size: int = None,
     mesh_shape: Union[MeshShape, HybridMeshShape],
     **kwargs,
 ) -> causal_lm.Model.Config:
@@ -549,9 +561,10 @@ def model_config(
         query_scale=ScaleQuery.default_config().set(norm=norm_cfg.clone()),
         key_scale=ScaleKey.default_config().set(norm=norm_cfg.clone()),
     )
-    outer_batch_size = get_outer_batch_from_mesh(
-        MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, mesh_shape
-    )
+    if outer_batch_size is None:
+        outer_batch_size = get_outer_batch_from_mesh(
+            MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, mesh_shape
+        )
     print('Outer batch size ', outer_batch_size)
     expert_config = TransformerFeedForwardMoE.default_config().set(
         outer_batch=outer_batch_size,
@@ -559,7 +572,9 @@ def model_config(
         input_dim=hidden_dim,
         num_groups=num_groups,
         dim_to_mesh_axis_map=MOE_DIM_TO_MESH_AXIS_MAP,
+        gating=TopKGatingGather.default_config(),
     )
+    expert_config.gating.top_k = 2
     expert_config.gating.train_capacity_factor = train_capacity_factor
 
     emb_cfg: TransformerTextEmbeddings.Config = TransformerTextEmbeddings.default_config().set(
