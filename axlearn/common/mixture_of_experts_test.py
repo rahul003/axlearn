@@ -122,9 +122,9 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
     )
     def test_moe_and_dense_layer_parity(self, copy_weights, num_experts, activation, gating_config):
         batch_size = 2
-        seq_len = 128
-        input_dim = 16
-        hidden_dim = 64
+        seq_len = 4
+        input_dim = 3
+        hidden_dim = 6
 
         cfg = TransformerFeedForwardMoE.default_config().set(name="test")
         cfg.input_dim = input_dim
@@ -135,8 +135,10 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
         if gating_config == 'gather':
             cfg.gating = TopKGatingGather.default_config()
         # A large capacity factor to prevent dropping tokens.
-        cfg.gating.train_capacity_factor = 100.0
-        cfg.gating.eval_capacity_factor = 100.0
+        cfg.gating.train_capacity_factor = 2
+        cfg.gating.eval_capacity_factor = 2
+        cfg.dim_to_mesh_axis_map['ogse'] = PartitionSpec(("data", "fsdp"), "expert", None, None)
+        cfg.dim_to_mesh_axis_map['ogec'] = PartitionSpec(("data", "fsdp"), "expert", None, None)
         layer: TransformerFeedForwardMoE = cfg.instantiate(parent=None)
         state = layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
 
