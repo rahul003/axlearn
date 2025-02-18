@@ -709,8 +709,9 @@ class TopKGatingGather(TopKGating):
         super().__init__(cfg, parent=parent)
     
     @staticmethod
-    def cumsum_4d_matmul(x: jnp.ndarray, axis: int = -1, tril_size: int = 18000):
+    def cumsum_4d_matmul(x: jnp.ndarray, axis: int = -1, tril_size: int = 2048):
         """Efficient cumsum implementation using triangular matrix multiplication.
+        This only works for inputs of dtype int32.
 
         Args:
             x: Input array of shape (d0, d1, d2, d3)
@@ -719,11 +720,13 @@ class TopKGatingGather(TopKGating):
         Returns:
             Array of same shape with cumulative sum along specified axis
         """
+        assert x.dtype == jnp.int32, f"cumsum_4d_matmul expected int32, got {x.dtype}"
+
         if axis < 0:
             axis = x.ndim + axis
 
         # Create triangular matrix once
-        tril = jnp.tril(jnp.ones((tril_size, tril_size), dtype=jnp.float64))
+        tril = jnp.tril(jnp.ones((tril_size, tril_size), dtype=jnp.int32))
 
         # Move the target axis to first position
         if axis != 0:
@@ -748,31 +751,34 @@ class TopKGatingGather(TopKGating):
             result = jnp.matmul(tril_slice, x_2d, precision=lax.Precision.HIGHEST)
         else:
             # Process in tiles
-            num_tiles = (axis_size + tril_size - 1) // tril_size
+            num_full_tiles = axis_size // tril_size
+            remainder_size = axis_size % tril_size
 
-            def process_tile(i):
-                start_idx = i * tril_size
-                size = jnp.minimum(tril_size, axis_size - start_idx)
+            # Process full tiles with rolling sum
+            full_tiles = x_2d[:num_full_tiles * tril_size].reshape(
+                num_full_tiles, tril_size, batch_size
+            )
 
-                # Get input slice
-                x_slice = lax.dynamic_slice(
-                    x_2d,
-                    (start_idx, 0),
-                    (size, batch_size)
+            def process_tile(rolling_sum, x_tile):
+                output = rolling_sum + jnp.matmul(tril, x_tile, precision=lax.Precision.HIGHEST)
+                # Last row becomes new rolling sum
+                new_rolling_sum = output[-1:, :]
+                return new_rolling_sum, output
+
+            rolling_sum = jnp.zeros((1, batch_size), dtype=full_tiles.dtype)
+            last_rolling_sum, results = jax.lax.scan(process_tile, rolling_sum, full_tiles)
+            result = results.reshape(-1, batch_size)
+
+            # Process remainder if any
+            if remainder_size > 0:
+                x_remainder = x_2d[num_full_tiles * tril_size :]
+                tril_remainder = tril[:remainder_size, :remainder_size]
+                remainder_result = last_rolling_sum + jnp.matmul(
+                    tril_remainder, x_remainder, precision=lax.Precision.HIGHEST
                 )
 
-                # Get tril slice
-                tril_slice = lax.dynamic_slice(
-                    tril,
-                    (0, 0),
-                    (size, size)
-                )
-
-                return jnp.matmul(tril_slice, x_slice)
-
-            # Process all tiles in parallel using vmap
-            tiles = jax.vmap(process_tile)(jnp.arange(num_tiles))
-            result = jnp.concatenate(tiles, axis=0)
+                # Concatenate remainder
+                result = jnp.concatenate([result, remainder_result], axis=0)
 
         # Reshape back to 4D
         result = result.reshape(x.shape)
@@ -1003,7 +1009,8 @@ class TopKGatingGather(TopKGating):
             # indicators for each expert, i.e. index e \in 0..E-1 independently.
             # cumsum over S dim
             # position_in_expert: [O, G, S, E]
-            position_in_expert = self.cumsum_4d_matmul(expert_mask, axis=-2)
+            expert_mask = expert_mask.astype(jnp.int32)
+            position_in_expert = self.cumsum_4d_matmul(expert_mask, axis=-2).astype(jnp.float64)
             
             expert_mask_pre_capacity_drop = expert_mask
             # Update expert_mask by accounting for capacity factor (i.e. tokens exceeding capacity are dropped)

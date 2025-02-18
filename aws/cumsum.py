@@ -15,11 +15,13 @@ def cumsum_4d_matmul(x: jnp.ndarray, axis: int = -1, tril_size: int = 2048):
     Returns:
         Array of same shape with cumulative sum along specified axis
     """
+    assert x.dtype == jnp.int32, f"cumsum_4d_matmul expected int32, got {x.dtype}"
+
     if axis < 0:
         axis = x.ndim + axis
 
     # Create triangular matrix once
-    tril = jnp.tril(jnp.ones((tril_size, tril_size), dtype=jnp.float64))
+    tril = jnp.tril(jnp.ones((tril_size, tril_size), dtype=jnp.int32))
 
     # Move the target axis to first position
     if axis != 0:
@@ -143,10 +145,10 @@ def detailed_array_comparison(a: jnp.ndarray,
     
     # Basic statistics
     print("\nBasic statistics:")
-    print(f"{name_a} - min: {np.min(a_np):.8f}, max: {np.max(a_np):.8f}, "
-          f"mean: {np.mean(a_np):.8f}, std: {np.std(a_np):.8f}")
-    print(f"{name_b} - min: {np.min(b_np):.8f}, max: {np.max(b_np):.8f}, "
-          f"mean: {np.mean(b_np):.8f}, std: {np.std(b_np):.8f}")
+    print(f"{name_a} - min: {np.min(a_np)}, max: {np.max(a_np)}, "
+          f"mean: {np.mean(a_np)}, std: {np.std(a_np)}")
+    print(f"{name_b} - min: {np.min(b_np)}, max: {np.max(b_np)}, "
+          f"mean: {np.mean(b_np)}, std: {np.std(b_np)}")
     
     # Differences
     abs_diff = np.abs(a_np - b_np)
@@ -154,10 +156,10 @@ def detailed_array_comparison(a: jnp.ndarray,
     diff_mask = (abs_diff > atol) & (rel_diff > rtol)
     
     print("\nDifference statistics:")
-    print(f"Max absolute difference: {np.max(abs_diff):.8f}")
-    print(f"Mean absolute difference: {np.mean(abs_diff):.8f}")
-    print(f"Max relative difference: {np.max(rel_diff):.8f}")
-    print(f"Mean relative difference: {np.mean(rel_diff):.8f}")
+    print(f"Max absolute difference: {np.max(abs_diff)}")
+    print(f"Mean absolute difference: {np.mean(abs_diff)}")
+    print(f"Max relative difference: {np.max(rel_diff)}")
+    print(f"Mean relative difference: {np.mean(rel_diff)}")
     
     # Histogram of differences
     if np.any(diff_mask):
@@ -190,14 +192,14 @@ def test_cumsum_4d():
     
     for shape in shapes:
         print(f"\nTesting shape: {shape}")
-        x = jax.random.normal(jax.random.PRNGKey(0), shape)
+        x = jax.random.randint(jax.random.PRNGKey(0), shape=shape, minval=0, maxval=1000, dtype=jnp.int32)
         
         for axis in range(4):
             print(f"\nAxis {axis}:")
             result = cumsum_4d_matmul(x, axis)
             expected = jnp.cumsum(x, axis)
-            detailed_array_comparison(result, expected, atol=1e-3, max_print=100)
-            assert jnp.allclose(result, expected, atol=1e-3)
+            detailed_array_comparison(result, expected, atol=1e-7, max_print=100)
+            assert jnp.allclose(result, expected, atol=1e-7)
 
             print("Test passed!")
 
@@ -206,7 +208,7 @@ def benchmark_cumsum_4d(shape=(128, 256, 32, 64), num_runs=100):
     """Benchmark against native cumsum."""
     import time
     
-    x = jax.random.normal(jax.random.PRNGKey(0), shape)
+    x = jax.random.randint(jax.random.PRNGKey(0), shape=shape, minval=0, maxval=1000, dtype=jnp.int32)
     
     # Compile both implementations
     matmul_fn = cumsum_4d_matmul.lower(x, 0).compile()
