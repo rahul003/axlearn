@@ -40,7 +40,7 @@ sudo dpkg -i $RUNTIME $COLLECTIVES $TOOLS #$DKMS
 sudo apt-get install -y linux-headers-$(uname -r) || true
 sudo apt-get remove -y aws-neuronx-devtools || true
 
-sudo apt-get remove -y --allow-change-held-packages aws-neuronx-tools aws-neuronx-collectives aws-neuronx-dkms aws-neuronx-runtime-lib
+sudo apt-get remove -y --allow-change-held-packages aws-neuronx-tools aws-neuronx-collectives aws-neuronx-runtime-lib
 # Install Neuron OS packages and dependencies
 sudo dpkg -i $RUNTIME $COLLECTIVES $TOOLS #$DKMS
 # sudo apt-get -o Dpkg::Options::="--force-overwrite" install --reinstall --allow-downgrades -y aws-neuronx-dkms
