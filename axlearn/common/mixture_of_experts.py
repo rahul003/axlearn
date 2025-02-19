@@ -1036,15 +1036,12 @@ class TopKGatingGather(TopKGating):
         with jax.named_scope("token_permutation_idx"):
             # token_permutation_idx: (O, G, S, top_k)
             # for each token we get the position in assigned experts from this tensor
-            # position_in_expert_with_offset = with_sharding_constraint(position_in_expert_with_offset, ogxy)
-            # expert_index = with_sharding_constraint(expert_index, ogxy)
             token_permutation_idx = jnp.take_along_axis(
                 position_in_expert_with_offset, # O_G_S_E
                 expert_index, # O_G_S_topK
                 axis=-1
             ).astype(jnp.int64)
-            # token_permutation_idx = with_sharding_constraint(token_permutation_idx, ogxy)
-        
+
         with jax.named_scope("token_assignments"):
             token_assignments = self.compute_token_assignments(token_permutation_idx, cfg.num_experts, expert_capacity)
             # Indexing using these will result in the first token (index 0) being loaded in place of dropped tokens
@@ -1205,12 +1202,9 @@ class TransformerFeedForwardMoE(BaseLayer):
         cfg = self.config
         with jax.named_scope("feed_forward_layer"):
             if cfg.structure == "prenorm":
-                # inputs: (batch, seq_len/tp, input_dim)
-                # x: (batch, seq_len, input_dim)
                 x = self.norm(inputs)
                 with jax.named_scope("dispatch_and_combine"):
                     x = self._dispatch_and_combine(x)
-                    # x: b, s, input_dim
                 x = self.dropout2(x)
                 x = self.stochastic_depth(x)
                 if cfg.residual_weight != 1:
@@ -1274,17 +1268,13 @@ class TransformerFeedForwardMoE(BaseLayer):
         # TODO(huilgolr): what to do here
 
         with jax.named_scope("router"):
-            # x = with_sharding_constraint(x, ogxy)
             logits = jnp.einsum("ogsm,me->ogse", x, self.parameters["gate_weight"])
-            
-            # TODO: investigate why still causing a slice after this AG
-            # x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["ogse"])
-        
+
         # Perform gating based on logits. Casting to float32 precision is usually needed for
         # stable performance.
         with jax.named_scope("gating"):
             gating = self.gating(logits=logits)
-        
+
         # Collect aux_loss.
         aux_loss = (
             gating.load_balance_loss * cfg.load_balance_loss_weight
