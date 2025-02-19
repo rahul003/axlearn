@@ -79,14 +79,14 @@ deactivate || true
 
 source ../jax_fs/bin/activate
 
-echo "Listing apt dependencies"
-apt list --installed | grep neuron
-echo "Listing pip dependencies"
-pip list | grep neuron
-echo "Done listing dependencies"
-printenv | grep NEURON
-printenv | grep XLA
-which python
+# echo "Listing apt dependencies"
+# apt list --installed | grep neuron
+# echo "Listing pip dependencies"
+# pip list | grep neuron
+# echo "Done listing dependencies"
+# printenv | grep NEURON
+# printenv | grep XLA
+# which python
 
 # TC MALLOC HACK
 LIBTCMALLOC=$(find /usr/lib/x86_64-linux-gnu -name "libtcmalloc.so.*" | sort -V | tail -n 1)
@@ -108,4 +108,4 @@ OUTPUT_DIR="${TEST_ARTIFACTS_PATH}/axlearn_out"
 mkdir -p ${OUTPUT_DIR}
 DATA_DIR="gs://axlearn-public/tensorflow_datasets"
 #fuji-7B-v2-flash
-python -m axlearn.common.mixture_of_experts_test TransformerFeedForwardMoETest.test_top2_gating
+python -m axlearn.common.mixture_of_experts_test TransformerFeedForwardMoETest

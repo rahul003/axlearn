@@ -15,11 +15,13 @@ def cumsum_4d_matmul(x: jnp.ndarray, axis: int = -1, tril_size: int = 2048):
     Returns:
         Array of same shape with cumulative sum along specified axis
     """
+    assert x.dtype == jnp.int32, f"cumsum_4d_matmul expected int32, got {x.dtype}"
+
     if axis < 0:
         axis = x.ndim + axis
 
     # Create triangular matrix once
-    tril = jnp.tril(jnp.ones((tril_size, tril_size), dtype=jnp.float64))
+    tril = jnp.tril(jnp.ones((tril_size, tril_size), dtype=jnp.int32))
 
     # Move the target axis to first position
     if axis != 0:
@@ -45,31 +47,34 @@ def cumsum_4d_matmul(x: jnp.ndarray, axis: int = -1, tril_size: int = 2048):
         
     else:
         # Process in tiles
-        num_tiles = (axis_size + tril_size - 1) // tril_size
+        num_full_tiles = axis_size // tril_size
+        remainder_size = axis_size % tril_size
 
-        def process_tile(i):
-            start_idx = i * tril_size
-            size = jnp.minimum(tril_size, axis_size - start_idx)
-            
-            # Get input slice
-            x_slice = lax.dynamic_slice(
-                x_2d,
-                (start_idx, 0),
-                (size, batch_size)
-            )
-            
-            # Get tril slice
-            tril_slice = lax.dynamic_slice(
-                tril,
-                (0, 0),
-                (size, size)
-            )
-            
-            return jnp.matmul(tril_slice, x_slice)
+        # Process full tiles with rolling sum
+        full_tiles = x_2d[:num_full_tiles * tril_size].reshape(
+            num_full_tiles, tril_size, batch_size
+        )
 
-        # Process all tiles in parallel using vmap
-        tiles = jax.vmap(process_tile)(jnp.arange(num_tiles))
-        result = jnp.concatenate(tiles, axis=0)
+        def process_tile(rolling_sum, x_tile):
+            output = rolling_sum + jnp.matmul(tril, x_tile, precision=lax.Precision.HIGHEST)
+            # Last row becomes new rolling sum
+            new_rolling_sum = output[-1:, :]
+            return new_rolling_sum, output
+
+        rolling_sum = jnp.zeros((1, batch_size), dtype=full_tiles.dtype)
+        last_rolling_sum, results = jax.lax.scan(process_tile, rolling_sum, full_tiles)
+        result = results.reshape(-1, batch_size)
+
+        # Process remainder if any
+        if remainder_size > 0:
+            x_remainder = x_2d[num_full_tiles * tril_size :]
+            tril_remainder = tril[:remainder_size, :remainder_size]
+            remainder_result = last_rolling_sum + jnp.matmul(
+                tril_remainder, x_remainder, precision=lax.Precision.HIGHEST
+            )
+
+            # Concatenate remainder
+            result = jnp.concatenate([result, remainder_result], axis=0)
 
     # Reshape back to 4D
     result = result.reshape(x.shape)
@@ -140,10 +145,10 @@ def detailed_array_comparison(a: jnp.ndarray,
     
     # Basic statistics
     print("\nBasic statistics:")
-    print(f"{name_a} - min: {np.min(a_np):.8f}, max: {np.max(a_np):.8f}, "
-          f"mean: {np.mean(a_np):.8f}, std: {np.std(a_np):.8f}")
-    print(f"{name_b} - min: {np.min(b_np):.8f}, max: {np.max(b_np):.8f}, "
-          f"mean: {np.mean(b_np):.8f}, std: {np.std(b_np):.8f}")
+    print(f"{name_a} - min: {np.min(a_np)}, max: {np.max(a_np)}, "
+          f"mean: {np.mean(a_np)}, std: {np.std(a_np)}")
+    print(f"{name_b} - min: {np.min(b_np)}, max: {np.max(b_np)}, "
+          f"mean: {np.mean(b_np)}, std: {np.std(b_np)}")
     
     # Differences
     abs_diff = np.abs(a_np - b_np)
@@ -151,10 +156,10 @@ def detailed_array_comparison(a: jnp.ndarray,
     diff_mask = (abs_diff > atol) & (rel_diff > rtol)
     
     print("\nDifference statistics:")
-    print(f"Max absolute difference: {np.max(abs_diff):.8f}")
-    print(f"Mean absolute difference: {np.mean(abs_diff):.8f}")
-    print(f"Max relative difference: {np.max(rel_diff):.8f}")
-    print(f"Mean relative difference: {np.mean(rel_diff):.8f}")
+    print(f"Max absolute difference: {np.max(abs_diff)}")
+    print(f"Mean absolute difference: {np.mean(abs_diff)}")
+    print(f"Max relative difference: {np.max(rel_diff)}")
+    print(f"Mean relative difference: {np.mean(rel_diff)}")
     
     # Histogram of differences
     if np.any(diff_mask):
@@ -181,19 +186,20 @@ def test_cumsum_4d():
     shapes = [
         (2, 3, 4, 5),      # Small
         (16, 32, 6, 8),  # Medium
-        (128, 256, 32, 64)  # Large
+        (128, 256, 32, 64),  # Large
+        (16, 2, 4096, 8),  # Tiled
     ]
     
     for shape in shapes:
         print(f"\nTesting shape: {shape}")
-        x = jax.random.normal(jax.random.PRNGKey(0), shape)
+        x = jax.random.randint(jax.random.PRNGKey(0), shape=shape, minval=0, maxval=1000, dtype=jnp.int32)
         
         for axis in range(4):
             print(f"\nAxis {axis}:")
             result = cumsum_4d_matmul(x, axis)
             expected = jnp.cumsum(x, axis)
-            detailed_array_comparison(result, expected, atol=1e-3, max_print=100)
-            assert jnp.allclose(result, expected, atol=1e-3)
+            detailed_array_comparison(result, expected, atol=1e-7, max_print=100)
+            assert jnp.allclose(result, expected, atol=1e-7)
 
             print("Test passed!")
 
@@ -202,7 +208,7 @@ def benchmark_cumsum_4d(shape=(128, 256, 32, 64), num_runs=100):
     """Benchmark against native cumsum."""
     import time
     
-    x = jax.random.normal(jax.random.PRNGKey(0), shape)
+    x = jax.random.randint(jax.random.PRNGKey(0), shape=shape, minval=0, maxval=1000, dtype=jnp.int32)
     
     # Compile both implementations
     matmul_fn = cumsum_4d_matmul.lower(x, 0).compile()
@@ -251,7 +257,8 @@ if __name__ == "__main__":
     shapes = [
         (16, 32, 64, 128),
         (128, 256, 32, 64),
-        (512, 512, 16, 16)
+        (512, 512, 16, 16),
+        (16, 2, 4096, 8),
     ]
     
     for shape in shapes:
