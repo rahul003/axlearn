@@ -74,17 +74,10 @@ class TestConfig():
 def _topkgather_to_topk(output, expert_cap):
     tok_perm_idx, expert_index, exp_aff_mask = output.combine_tensor
 
-    print(tok_perm_idx)
-    print(expert_index)
-    print(exp_aff_mask)
-    print(output.dispatch_tensor)
-
     O, G, S, K = tok_perm_idx.shape
     E = exp_aff_mask.shape[-1]
 
     exp_aff = jnp.take_along_axis(exp_aff_mask, expert_index, axis=-1)
-    # exp_aff = exp_aff.reshape(O,G,S,-1)
-    # tok_perm_idx = tok_perm_idx.reshape(-1)
 
     base = jnp.zeros((O, G, S, E * expert_cap), dtype=exp_aff_mask.dtype)
 
@@ -95,18 +88,11 @@ def _topkgather_to_topk(output, expert_cap):
         indexing='ij'
     )
 
-    print(tok_perm_idx)
-    print(exp_aff)
-
     output_tensor = base.at[idx_O[..., None], idx_G[..., None], 
                            idx_S[..., None], tok_perm_idx].set(exp_aff)
     output_tensor = output_tensor.reshape(O, G, S, E, expert_cap)
-    # print(output_tensor)
 
     dispatch_tensor = output_tensor.astype(bool)
-    print(dispatch_tensor)
-    # print(output.load_balance_loss)
-    # print(output.router_z_loss)
 
     return TopKGatingGather.Output(
         combine_tensor=output_tensor,
@@ -115,86 +101,269 @@ def _topkgather_to_topk(output, expert_cap):
         router_z_loss=output.router_z_loss
     )
 
+# def _get_training_configs():
+
+#     test_cfgs = []
+
+#     batch_size = 1
+#     seq_len = 32
+#     input_dim = 4
+
+#     setup_moe_topkgather = {"input_dim": input_dim, 
+#                             "hidden_dim": 4, 
+#                             "num_experts": 4, 
+#                             "num_groups": 1, 
+#                             "outer_batch": 1, 
+#                             "gating": TopKGatingGather.default_config().set(name="gating", 
+#                                                                             expert_capacity=1000)}
+    
+#     setup_moe_top2 = {"input_dim": input_dim, "hidden_dim": 4, "num_experts": 4, "num_groups": 1, "outer_batch": 1, "gating": Top2Gating.default_config().set(name="gating", expert_capacity=1000)}
+
+#     setup_moe_topkgather_drop = {"input_dim": input_dim, "hidden_dim": 4, "num_experts": 4, "num_groups": 1, "outer_batch": 1, "gating": TopKGatingGather.default_config().set(name="gating", expert_capacity=2, train_capacity_factor= None)}
+#     setup_moe_top2_drop = {"input_dim": input_dim, "hidden_dim": 4, "num_experts": 4, "num_groups": 1, "outer_batch": 1, "gating": Top2Gating.default_config().set(name="gating", expert_capacity=2, train_capacity_factor= None)}
+
+#     setup_gating = {"expert_capacity": 100, "num_experts": 4, "train_capacity_factor": None}
+#     # setup_gating_drop = {"expert_capacity": 2, "num_experts": 4, "train_capacity_factor": None}
+
+#     setup_gating_drop = {"num_experts": 4}
+
+
+#     test_cfgs = [
+#         ### Basic Module Tests
+#         # TestConfig(
+#         #     setup = [
+#         #         setup_moe_top2,
+#         #         setup_moe_top2
+#         #     ],
+#         #     test = ModuleConfig(TransformerFeedForwardMoE, "neuron"),
+#         #     golden = ModuleConfig(TransformerFeedForwardMoE, "cpu"),
+#         #     inputs = dict(inputs=jax.random.uniform(jax.random.PRNGKey(1), shape=(batch_size, seq_len, input_dim))),
+#         #     loss_fn = lambda x: x.mean()
+#         # ),
+#         # TestConfig(
+#         #     setup = [
+#         #         setup_gating,
+#         #         setup_gating
+#         #     ],
+#         #     test = ModuleConfig(Top2Gating, "neuron"),
+#         #     golden = ModuleConfig(Top2Gating, "cpu"),
+#         #     inputs = dict(logits=jax.random.uniform(jax.random.PRNGKey(1), shape=(1, 1, 1, 1))),
+#         #     loss_fn = lambda x: x.combine_tensor.mean()
+#         # ),
+#         # TestConfig(
+#         #     setup = [
+#         #         setup_gating,
+#         #         setup_gating
+#         #     ],
+#         #     test = ModuleConfig(TopKGating, "neuron"),
+#         #     golden = ModuleConfig(TopKGating, "cpu"),
+#         #     inputs = dict(logits=jax.random.uniform(jax.random.PRNGKey(1), shape=(1, 1, 1, 1))),
+#         #     loss_fn = lambda x: x.combine_tensor.mean()
+#         # ),
+#         ### TopKGatingGather vs Top2Gating
+#         TestConfig(
+#             setup = [
+#                 setup_moe_topkgather,
+#                 setup_moe_topkgather
+#             ],
+#             test = ModuleConfig(TransformerFeedForwardMoE, "neuron"),
+#             golden = ModuleConfig(TransformerFeedForwardMoE, "cpu"),
+#             inputs = dict(inputs=jax.random.uniform(jax.random.PRNGKey(1), shape=(batch_size, seq_len, input_dim))),
+#             loss_fn = lambda x: x.mean()
+#         ),
+#         TestConfig(
+#             setup = [
+#                 setup_moe_topkgather,
+#                 setup_moe_top2
+#             ],
+#             test = ModuleConfig(TransformerFeedForwardMoE, "cpu"),
+#             golden = ModuleConfig(TransformerFeedForwardMoE, "cpu"),
+#             inputs = dict(inputs=jax.random.uniform(jax.random.PRNGKey(1), shape=(batch_size, seq_len, input_dim))),
+#             loss_fn = lambda x: x.mean()
+#         ),
+#         TestConfig(
+#             setup = [
+#                 setup_moe_topkgather_drop,
+#                 setup_moe_top2_drop
+#             ],
+#             test = ModuleConfig(TransformerFeedForwardMoE, "cpu"),
+#             golden = ModuleConfig(TransformerFeedForwardMoE, "cpu"),
+#             inputs = dict(inputs=jax.random.uniform(jax.random.PRNGKey(1), shape=(batch_size, seq_len, input_dim))),
+#             loss_fn = lambda x: x.mean()
+#         ),
+#         TestConfig(
+#             setup = [
+#                 setup_gating,
+#                 setup_gating
+#             ],
+#             test = ModuleConfig(TopKGatingGather, "cpu"),
+#             golden = ModuleConfig(TopKGating, "cpu"),
+#             inputs = dict(logits=jax.random.uniform(jax.random.PRNGKey(1), shape=(1, 1, seq_len, 4))),
+#             loss_fn = lambda x: x.combine_tensor.mean(),
+#             conv_output = partial(_topkgather_to_topk, expert_cap=100),
+#         ),
+#         TestConfig(
+#             setup = [
+#                 setup_gating_drop,
+#                 setup_gating_drop
+#             ],
+#             test = ModuleConfig(TopKGatingGather, "cpu"),
+#             golden = ModuleConfig(TopKGating, "cpu"),
+#             inputs = dict(logits=jax.random.uniform(jax.random.PRNGKey(1), shape=(1, 1, seq_len, 4))),
+#             loss_fn = lambda x: x.combine_tensor.mean(),
+#             conv_output = partial(_topkgather_to_topk, expert_cap=16),
+#         ),
+#     ]
+
+#     return test_cfgs
+
+class TestConfigBuilder:
+    def __init__(self):
+        self.reset()
+    
+    def reset(self):
+        self.params = {
+            "batch_size": 1,
+            "seq_len": 32,
+            "input_dim": 4,
+            "hidden_dim": 4,
+            "num_experts": 4,
+            "num_groups": 1,
+            "outer_batch": 1,
+            "expert_capacity": 1000,
+            "train_capacity_factor": None
+        }
+        return self
+    
+    def with_dimensions(self, batch_size, seq_len, input_dim):
+        self.params.update({
+            "batch_size": batch_size,
+            "seq_len": seq_len,
+            "input_dim": input_dim
+        })
+        return self
+    
+    def with_expert_settings(self, hidden_dim, num_groups, num_experts, expert_capacity, train_capacity_factor=None):
+        self.params.update({
+            "hidden_dim": hidden_dim,
+            "num_groups": num_groups,
+            "num_experts": num_experts,
+            "expert_capacity": expert_capacity,
+            "train_capacity_factor": train_capacity_factor
+        })
+        return self
+    
+    def build_moe_topkgather_setup(self):
+        return {
+            "input_dim": self.params["input_dim"],
+            "hidden_dim": self.params["hidden_dim"],
+            "num_experts": self.params["num_experts"],
+            "num_groups": self.params["num_groups"],
+            "outer_batch": self.params["outer_batch"],
+            "gating": TopKGatingGather.default_config().set(
+                name="gating",
+                expert_capacity=self.params["expert_capacity"],
+                train_capacity_factor=self.params["train_capacity_factor"]
+            )
+        }
+    
+    def build_moe_top2_setup(self):
+        return {
+            "input_dim": self.params["input_dim"],
+            "hidden_dim": self.params["hidden_dim"],
+            "num_experts": self.params["num_experts"],
+            "num_groups": self.params["num_groups"],
+            "outer_batch": self.params["outer_batch"],
+            "gating": Top2Gating.default_config().set(
+                name="gating",
+                expert_capacity=self.params["expert_capacity"],
+                train_capacity_factor=self.params["train_capacity_factor"]
+            )
+        }
+    
+    def build_gating_setup(self):
+        return {
+            "expert_capacity": self.params["expert_capacity"],
+            "num_experts": self.params["num_experts"],
+            "train_capacity_factor": self.params["train_capacity_factor"]
+        }
+    
+    def build_test_configs(self):
+        return [
+            TestConfig(
+                setup=[
+                    self.build_moe_topkgather_setup(),
+                    self.build_moe_top2_setup()
+                ],
+                test=ModuleConfig(TransformerFeedForwardMoE, "cpu"),
+                golden=ModuleConfig(TransformerFeedForwardMoE, "cpu"),
+                inputs=dict(inputs=jax.random.uniform(
+                    jax.random.PRNGKey(1),
+                    shape=(self.params["batch_size"], self.params["seq_len"], self.params["input_dim"])
+                )),
+                loss_fn=lambda x: x.mean()
+            ),
+            TestConfig(
+                setup=[
+                    self.build_moe_topkgather_setup(),
+                    self.build_moe_topkgather_setup()
+                ],
+                test=ModuleConfig(TransformerFeedForwardMoE, "neuron"),
+                golden=ModuleConfig(TransformerFeedForwardMoE, "cpu"),
+                inputs=dict(inputs=jax.random.uniform(
+                    jax.random.PRNGKey(1),
+                    shape=(self.params["batch_size"], self.params["seq_len"], self.params["input_dim"])
+                )),
+                loss_fn=lambda x: x.mean()
+            ),
+            TestConfig(
+                setup=[
+                    self.build_gating_setup(),
+                    self.build_gating_setup()
+                ],
+                test=ModuleConfig(TopKGatingGather, "cpu"),
+                golden=ModuleConfig(TopKGating, "cpu"),
+                inputs=dict(logits=jax.random.uniform(
+                    jax.random.PRNGKey(1),
+                    shape=(1, 1, self.params["seq_len"], self.params["num_experts"])
+                )),
+                loss_fn=lambda x: x.combine_tensor.mean(),
+                conv_output=partial(_topkgather_to_topk, expert_cap=self.params["expert_capacity"]),
+            ),
+            TestConfig(
+                setup=[
+                    self.build_gating_setup(),
+                    self.build_gating_setup()
+                ],
+                test=ModuleConfig(TopKGatingGather, "neuron"),
+                golden=ModuleConfig(TopKGatingGather, "cpu"),
+                inputs=dict(logits=jax.random.uniform(
+                    jax.random.PRNGKey(1),
+                    shape=(1, 1, self.params["seq_len"], self.params["num_experts"])
+                )),
+                loss_fn=lambda x: x.combine_tensor.mean(),
+            ),
+        ]
+    
 def _get_training_configs():
-
-    batch_size = 1
-    seq_len = 128
-    input_dim = 8
-
-    setup_moe_topkgather = {"input_dim": 8, "hidden_dim": 32, "num_experts": 8, "num_groups": 4, "outer_batch": 1, "gating": TopKGatingGather.default_config().set(name="gating")}
-    setup_moe_top2 = {"input_dim": 8, "hidden_dim": 32, "num_experts": 8, "num_groups": 4, "outer_batch": 1}
-
-    setup_top2 = {"expert_capacity": 200, "num_experts": 8, "train_capacity_factor": 1.0}
-    setup_topk = {"expert_capacity": 200, "num_experts": 8, "train_capacity_factor": 1.0}
-    setup_topkg = {"expert_capacity": 10, "num_experts": 4, "train_capacity_factor": None}
-
-    test_cfgs = [
-        ### Basic Module Tests
-        # TestConfig(
-        #     setup = [
-        #         setup_moe_top2,
-        #         setup_moe_top2
-        #     ],
-        #     test = ModuleConfig(TransformerFeedForwardMoE, "neuron"),
-        #     golden = ModuleConfig(TransformerFeedForwardMoE, "cpu"),
-        #     inputs = dict(inputs=jax.random.uniform(jax.random.PRNGKey(1), shape=(batch_size, seq_len, input_dim))),
-        #     loss_fn = lambda x: x.mean()
-        # ),
-        # TestConfig(
-        #     setup = [
-        #         setup_top2,
-        #         setup_top2
-        #     ],
-        #     test = ModuleConfig(Top2Gating, "neuron"),
-        #     golden = ModuleConfig(Top2Gating, "cpu"),
-        #     inputs = dict(logits=jax.random.uniform(jax.random.PRNGKey(1), shape=(1, 1, 1, 1))),
-        #     loss_fn = lambda x: x.combine_tensor.mean()
-        # ),
-        # TestConfig(
-        #     setup = [
-        #         setup_topk,
-        #         setup_topk
-        #     ],
-        #     test = ModuleConfig(TopKGating, "neuron"),
-        #     golden = ModuleConfig(TopKGating, "cpu"),
-        #     inputs = dict(logits=jax.random.uniform(jax.random.PRNGKey(1), shape=(1, 1, 1, 1))),
-        #     loss_fn = lambda x: x.combine_tensor.mean()
-        # ),
-        ### TopKGatingGather vs Top2Gating
-        # TestConfig(
-        #     setup = [
-        #         setup_moe_topkgather,
-        #         setup_moe_topkgather
-        #     ],
-        #     test = ModuleConfig(TransformerFeedForwardMoE, "neuron"),
-        #     golden = ModuleConfig(TransformerFeedForwardMoE, "cpu"),
-        #     inputs = dict(inputs=jax.random.uniform(jax.random.PRNGKey(1), shape=(batch_size, seq_len, input_dim))),
-        #     loss_fn = lambda x: x.mean()
-        # ),
-        TestConfig(
-            setup = [
-                setup_moe_topkgather,
-                setup_moe_top2
-            ],
-            test = ModuleConfig(TransformerFeedForwardMoE, "cpu"),
-            golden = ModuleConfig(TransformerFeedForwardMoE, "cpu"),
-            inputs = dict(inputs=jax.random.uniform(jax.random.PRNGKey(1), shape=(batch_size, seq_len, input_dim))),
-            loss_fn = lambda x: x.mean()
-        ),
-        TestConfig(
-            setup = [
-                setup_topkg,
-                setup_topkg
-            ],
-            test = ModuleConfig(TopKGatingGather, "cpu"),
-            golden = ModuleConfig(TopKGating, "cpu"),
-            inputs = dict(logits=jax.random.uniform(jax.random.PRNGKey(1), shape=(1, 1, 10, 4))),
-            loss_fn = lambda x: x.combine_tensor.mean(),
-            conv_output = partial(_topkgather_to_topk, expert_cap=setup_topkg["expert_capacity"]),
-        ),
-    ]
-
-    return test_cfgs
+    builder = TestConfigBuilder()
+    
+    # Default configuration
+    test_configs = builder.reset().build_test_configs()
+    
+    test_configs.extend(
+        builder.reset()
+            .with_dimensions(batch_size=2, seq_len=64, input_dim=8)
+            .build_test_configs()
+    )
+    
+    test_configs.extend(
+        builder.reset()
+            .with_expert_settings(hidden_dim=8, num_experts=8, num_groups=4, expert_capacity=2, train_capacity_factor=None)
+            .build_test_configs()
+    )
+    
+    return test_configs
 
 # pylint: disable=no-self-use,protected-access
 class TestImplCorrectness(TestCase):
@@ -226,7 +395,6 @@ class TestImplCorrectness(TestCase):
 
         if cfg.conv_output != None:
             test_output = cfg.conv_output(test_output)
-            print(golden_output)
         
         # Transfer results to CPU before comparison
         self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output))
