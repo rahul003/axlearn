@@ -1332,7 +1332,7 @@ class TransformerFeedForwardMoE(BaseLayer):
                 x = self._wi_activation(expert_aligned_hidden_states)
                 if cfg.structure in ["prenorm", "hybridnorm", "nonorm"]:
                     x = self.dropout1(x)
-                if _USING_SHARDMAP_FFN:
+                if not _USING_SHARDMAP_FFN:
                     x = jnp.einsum("oegch,ehm->oegcm", x, self.parameters["wo_weight"])
                 else:
                     down_proj_sm = shard_map(
