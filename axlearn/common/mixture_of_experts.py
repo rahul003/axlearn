@@ -860,7 +860,6 @@ class TopKGatingGather(TopKGating):
     @staticmethod
     def compute_token_assignments(token_permutation_idx, num_experts, expert_capacity):
         O, G, S, top_k = token_permutation_idx.shape
-        token_permutation_idx = token_permutation_idx - 1
         E = num_experts
         token_indices = jnp.arange(S)[None, None, :, None]
         token_indices = jnp.broadcast_to(token_indices, (O, G, S, top_k))
@@ -1009,7 +1008,7 @@ class TopKGatingGather(TopKGating):
             # cumsum over S dim
             # position_in_expert: [O, G, S, E]
             expert_mask = expert_mask.astype(jnp.int32)
-            position_in_expert = self.cumsum_4d_matmul(expert_mask, axis=-2).astype(jnp.float64)
+            position_in_expert = self.cumsum_4d_matmul(expert_mask, axis=-2).astype(jnp.float64) - 1
             
             expert_mask_pre_capacity_drop = expert_mask
             # Update expert_mask by accounting for capacity factor (i.e. tokens exceeding capacity are dropped)
@@ -1296,7 +1295,7 @@ class TransformerFeedForwardMoE(BaseLayer):
                 expert_aligned_hidden_states = jnp.take_along_axis(x, token_assignments, axis=2)
                 O, G, _, E, C, M = expert_aligned_hidden_states.shape
                 # expert_aligned_hidden_states: (O, E, G, C, M)
-                expert_aligned_hidden_states = jnp.reshape(expert_aligned_hidden_states, shape=(O, E, G, C, M))
+                expert_aligned_hidden_states = jnp.einsum("oegcm->ogecm", expert_aligned_hidden_states.squeeze(2))
                 expert_aligned_hidden_states = with_sharding_constraint(expert_aligned_hidden_states, cfg.dim_to_mesh_axis_map["oegcM"])
             
             # Perform MLP operations
