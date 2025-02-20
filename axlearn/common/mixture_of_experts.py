@@ -20,6 +20,8 @@ from typing import NamedTuple, Optional, Sequence, Union
 
 import jax
 import jax.numpy as jnp
+from jax.experimental.shard_map import shard_map
+from jax._src.mesh import thread_resources
 import numpy as np
 from absl import logging
 from jax.experimental.pjit import pjit
@@ -60,7 +62,12 @@ from axlearn.common.utils import (
     with_sharding_constraint,
 )
 
-ogxy = PartitionSpec(("data", "fsdp"), "expert", None, None)
+@jax.jit
+def down_proj(x, wo_weight,):
+    print(x.shape, wo_weight.shape)
+    x = jnp.einsum("oegch,ehm->oegcm", x, wo_weight)
+    print(x.shape)
+    return x
 
 def _router_z_loss(logits: Tensor) -> Tensor:
     """Loss that encourages router logits to remain small and improves stability.
@@ -1304,8 +1311,20 @@ class TransformerFeedForwardMoE(BaseLayer):
                 x = self._wi_activation(expert_aligned_hidden_states)
                 if cfg.structure in ["prenorm", "hybridnorm", "nonorm"]:
                     x = self.dropout1(x)
-                x = jnp.einsum("oegch,ehm->oegcm", x, self.parameters["wo_weight"])
-                # TODO: how to delay the allreduce here
+                if False:
+                    x = jnp.einsum("oegch,ehm->oegcm", x, self.parameters["wo_weight"])
+                else:
+                    down_proj_sm = shard_map(
+                        down_proj, 
+                        mesh=thread_resources.env.physical_mesh, 
+                        in_specs=(
+                            PartitionSpec(("data", "fsdp"), "expert", None, None, "model"),
+                            PartitionSpec("expert", "model", None),
+                        ),
+                        out_specs=PartitionSpec(("data", "fsdp"), "expert", None, None, None),
+                        check_rep=False
+                    )
+                    x = down_proj_sm(x, self.parameters["wo_weight"])
                 x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["oegcM"])
                 x = jnp.einsum("oegcm->ogecm", x)
                 x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["ogecM"])
