@@ -12,6 +12,7 @@
 """Test for mixture_of_experts.py"""
 import copy
 from functools import partial
+from itertools import product
 
 import jax
 import jax.numpy as jnp
@@ -52,6 +53,7 @@ class ModuleConfig():
 
 class TestConfig():
     def __init__(self, setup, test: ModuleConfig, golden: ModuleConfig = None, inputs: dict = None, loss_fn = None, conv_output = None):
+        self.setup = setup
         self.test = test
         self.golden = golden if golden is not None else test
         self.inputs = inputs
@@ -70,6 +72,33 @@ class TestConfig():
 
         self.test_state = self.test_layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
         self.golden_state = self.test_state
+    
+    def __str__(self):
+        output = "TestConfig Object:\n"
+        output += "-----------------\n"
+        
+        # Setup Info
+        output += "Setup Configuration:\n"
+        output += "  Test Setup:\n"
+        for spec, val in self.setup[0].items():
+            output += f"    {spec}: {val}\n"
+        output += "\n  Golden Setup:\n"
+        for spec, val in self.setup[1].items():
+            output += f"    {spec}: {val}\n"
+        output += "\n"
+        
+        # Test Module Info
+        output += "Test Module Configuration:\n"
+        for attr_name, attr_value in vars(self.test.module).items():
+            output += f"  {attr_name}: {attr_value}\n"
+        output += "\n"
+        
+        # Golden Module Info
+        output += "Golden Module Configuration:\n"
+        for attr_name, attr_value in vars(self.golden.module).items():
+            output += f"  {attr_name}: {attr_value}\n"
+        
+        return output
 
 def _topkgather_to_topk(output, expert_cap):
     tok_perm_idx, expert_index, exp_aff_mask = output.combine_tensor
@@ -79,7 +108,7 @@ def _topkgather_to_topk(output, expert_cap):
 
     exp_aff = jnp.take_along_axis(exp_aff_mask, expert_index, axis=-1)
 
-    base = jnp.zeros((O, G, S, E * expert_cap), dtype=exp_aff_mask.dtype)
+    base = jnp.zeros((O, G, S, E * expert_cap + 1), dtype=exp_aff_mask.dtype)
 
     idx_O, idx_G, idx_S = jnp.meshgrid(
         jnp.arange(O), 
@@ -90,7 +119,7 @@ def _topkgather_to_topk(output, expert_cap):
 
     output_tensor = base.at[idx_O[..., None], idx_G[..., None], 
                            idx_S[..., None], tok_perm_idx].set(exp_aff)
-    output_tensor = output_tensor.reshape(O, G, S, E, expert_cap)
+    output_tensor = output_tensor[:,:,:,:-1].reshape(O, G, S, E, expert_cap)
 
     dispatch_tensor = output_tensor.astype(bool)
 
@@ -288,7 +317,7 @@ class TestConfigBuilder:
             "train_capacity_factor": self.params["train_capacity_factor"]
         }
     
-    def build_test_configs(self):
+    def build_test_configs_moe(self):
         return [
             TestConfig(
                 setup=[
@@ -316,6 +345,12 @@ class TestConfigBuilder:
                 )),
                 loss_fn=lambda x: x.mean()
             ),
+        ]
+    def build_test_configs_topk(self):
+
+        seq_len = (self.params["batch_size"]*self.params["seq_len"])//(self.params["outer_batch"] * self.params["num_groups"])
+
+        return [
             TestConfig(
                 setup=[
                     self.build_gating_setup(),
@@ -325,9 +360,9 @@ class TestConfigBuilder:
                 golden=ModuleConfig(TopKGating, "cpu"),
                 inputs=dict(logits=jax.random.uniform(
                     jax.random.PRNGKey(1),
-                    shape=(1, 1, self.params["seq_len"], self.params["num_experts"])
+                    shape=(self.params["outer_batch"], self.params["num_groups"],
+                           seq_len, self.params["num_experts"])
                 )),
-                loss_fn=lambda x: x.combine_tensor.mean(),
                 conv_output=partial(_topkgather_to_topk, expert_cap=self.params["expert_capacity"]),
             ),
             TestConfig(
@@ -339,30 +374,65 @@ class TestConfigBuilder:
                 golden=ModuleConfig(TopKGatingGather, "cpu"),
                 inputs=dict(logits=jax.random.uniform(
                     jax.random.PRNGKey(1),
-                    shape=(1, 1, self.params["seq_len"], self.params["num_experts"])
+                    shape=(self.params["outer_batch"], self.params["num_groups"],
+                           seq_len, self.params["num_experts"])
                 )),
-                loss_fn=lambda x: x.combine_tensor.mean(),
             ),
         ]
     
 def _get_training_configs():
     builder = TestConfigBuilder()
+
+    batchs =            [1, 4]
+    seqs =              [16, 128]
+    input_dims =        [64]
+    hidden_dims =       [128]
+    num_experts =       [2, 8]
+    num_groups =        [1, 4]
+    outer_batches =     [1, 2]
+    expert_capacities = [2, 1000]
+
+    test_configs = []
+
+    for (batch, seq, input_dim,  hidden_dim, n_experts, n_groups, out_batch, capacity) in product(
+         batchs, seqs, input_dims, hidden_dims, num_experts, num_groups, outer_batches, expert_capacities):
+        
+        test_configs.extend(
+            builder.reset()
+                .with_dimensions(
+                    batch, seq, input_dim
+                )
+                .with_expert_settings(
+                    hidden_dim,
+                    n_groups,
+                    n_experts,
+                    capacity,
+                    train_capacity_factor=None
+                )
+                .build_test_configs_moe()
+            )
+        test_configs.extend(
+            builder.build_test_configs_topk()
+            )
+
+    return test_configs
+
+def _get_training_configs_bwd():
+    builder = TestConfigBuilder()
     
-    # Default configuration
-    test_configs = builder.reset().build_test_configs()
+    test_configs = builder.reset().build_test_configs_moe()
     
     test_configs.extend(
         builder.reset()
             .with_dimensions(batch_size=2, seq_len=64, input_dim=8)
-            .build_test_configs()
+            .build_test_configs_moe()
     )
     
     test_configs.extend(
         builder.reset()
             .with_expert_settings(hidden_dim=8, num_experts=8, num_groups=4, expert_capacity=2, train_capacity_factor=None)
-            .build_test_configs()
+            .build_test_configs_moe()
     )
-    
     return test_configs
 
 # pylint: disable=no-self-use,protected-access
@@ -380,12 +450,12 @@ class TestImplCorrectness(TestCase):
     @parameterized.parameters(_get_training_configs())
     def test_fwd_correctness(self, cfg: TestConfig):
 
-        # @partial(jax.jit, backend=cfg.test.device)
+        @partial(jax.jit, backend=cfg.test.device)
         def test_fwd_call():
             test_output, _ = self._fwd_call(cfg.test_layer, cfg.test_state, cfg.inputs)
             return test_output
 
-        # @partial(jax.jit, backend=cfg.golden.device)
+        @partial(jax.jit, backend=cfg.golden.device)
         def golden_fwd_call():
             golden_output, _ =  self._fwd_call(cfg.golden_layer, cfg.golden_state, cfg.inputs)
             return golden_output
@@ -399,36 +469,36 @@ class TestImplCorrectness(TestCase):
         # Transfer results to CPU before comparison
         self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output))
 
-    # @parameterized.parameters(_get_training_configs())
-    # def test_bwd_correctness(self, cfg: TestConfig):
+    @parameterized.parameters(_get_training_configs_bwd())
+    def test_bwd_correctness(self, cfg: TestConfig):
 
-    #     @partial(jax.jit, backend=cfg.test.device)
-    #     def test_bwd_call(state):
-    #         test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
-    #         loss = cfg.loss_fn(test_output)
-    #         return loss
+        @partial(jax.jit, backend=cfg.test.device)
+        def test_bwd_call(state):
+            test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
+            loss = cfg.loss_fn(test_output)
+            return loss
 
-    #     @partial(jax.jit, backend=cfg.golden.device)
-    #     def golden_bwd_call(state):
-    #         golden_output, _ =  self._fwd_call(cfg.golden_layer, state, cfg.inputs)
-    #         loss = cfg.loss_fn(golden_output)
-    #         return loss
+        @partial(jax.jit, backend=cfg.golden.device)
+        def golden_bwd_call(state):
+            golden_output, _ =  self._fwd_call(cfg.golden_layer, state, cfg.inputs)
+            loss = cfg.loss_fn(golden_output)
+            return loss
         
-    #     test_loss, test_grads = jax.value_and_grad(test_bwd_call, has_aux=False)(
-    #         cfg.test_state
-    #     )
-    #     golden_loss, golden_grads = jax.value_and_grad(golden_bwd_call, has_aux=False)(
-    #         cfg.golden_state
-    #     )
+        test_loss, test_grads = jax.value_and_grad(test_bwd_call, has_aux=False)(
+            cfg.test_state
+        )
+        golden_loss, golden_grads = jax.value_and_grad(golden_bwd_call, has_aux=False)(
+            cfg.golden_state
+        )
 
-    #     # Transfer results to CPU before comparison
-    #     test_loss = jax.tree_map(jax.device_get, test_loss)
-    #     golden_loss = jax.tree_map(jax.device_get, golden_loss)
-    #     test_grads = jax.tree_map(jax.device_get, test_grads)
-    #     golden_grads = jax.tree_map(jax.device_get, golden_grads)
+        # Transfer results to CPU before comparison
+        test_loss = jax.tree_map(jax.device_get, test_loss)
+        golden_loss = jax.tree_map(jax.device_get, golden_loss)
+        test_grads = jax.tree_map(jax.device_get, test_grads)
+        golden_grads = jax.tree_map(jax.device_get, golden_grads)
         
-    #     self.assertNestedAllClose(test_loss, golden_loss)
-    #     self.assertNestedAllClose(test_grads, golden_grads)
+        self.assertNestedAllClose(test_loss, golden_loss)
+        self.assertNestedAllClose(test_grads, golden_grads)
 
 # # pylint: disable=no-self-use,protected-access
 # class TransformerFeedForwardMoETest(parameterized.TestCase):

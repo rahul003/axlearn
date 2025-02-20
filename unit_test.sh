@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-export JAX_PLATFORMS=cpu
+# export JAX_PLATFORMS=cpu
 
 TEST_ARTIFACTS_PATH="/shared/aahila/test_artifacts"
 rm -rf "$TEST_ARTIFACTS_PATH"
