@@ -67,10 +67,7 @@ _USING_SHARDMAP_FFN=int(os.getenv('USE_SHARDMAP_FFN', 1))
 
 @jax.jit
 def down_proj(x, wo_weight):
-    print(x.shape, wo_weight.shape)
-    x = jnp.einsum("oegch,ehm->oegcm", x, wo_weight)
-    print(x.shape)
-    return x
+    return jnp.einsum("oegch,ehm->oegcm", x, wo_weight)
 
 @partial(jax.jit, static_argnums=(0,))
 def combine_outputs(adjusted_top_k, permuted_output, token_permutation_idx, expert_index, expert_affinities_masked, dest_output):
@@ -904,7 +901,6 @@ class TopKGatingGather(TopKGating):
         group_indices = group_indices.reshape(O, G, -1)
         
         token_permutation_idx = token_permutation_idx.reshape(O, G, -1)
-        print('expert_capacity', expert_capacity)
 
         # Create scatter indices
         scatter_indices = jnp.stack(

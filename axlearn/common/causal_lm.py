@@ -7,6 +7,7 @@ import re
 from typing import Callable, Optional, Union
 
 from absl import logging
+import jax
 from jax import numpy as jnp
 from jax._src.mesh import thread_resources
 from jax.sharding import PartitionSpec
@@ -126,11 +127,12 @@ class Model(BaseModel):
         target_num_bytes: Tensor = input_batch.get("target_num_bytes")
         if target_labels is not None:
             self.vlog(3, "targets=%s(%s)", target_labels.dtype, target_labels.shape)
-            metrics = self._metrics(
-                predictions["logits"],
-                target_labels=target_labels,
-                target_num_bytes=target_num_bytes,
-            )
+            with jax.named_scope("loss_metrics"):
+                metrics = self._metrics(
+                    predictions["logits"],
+                    target_labels=target_labels,
+                    target_num_bytes=target_num_bytes,
+                )
             loss = metrics["loss"]
             num_targets = metrics["num_targets"]
             aux_outputs["per_label_loss"] = metrics["per_token_loss"]
