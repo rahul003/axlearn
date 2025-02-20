@@ -4,4 +4,4 @@
 #SBATCH --output logs/%x_%j.out
 
 srun -l setup_node.sh /fsx/huilgolr/jan-artifacts/
-srun -l runner.sh ${1:-1}
+srun -l runner.sh ${1:-1} ${2:-4}

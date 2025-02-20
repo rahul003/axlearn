@@ -402,7 +402,7 @@ def get_trainer_kwargs(
         neuron_mesh = mesh_shape_from_axes(fsdp=-1, model=4)
         trainer_kwargs = dict(
             model_kwargs=dict(
-                num_layers=4,
+                num_layers=int(os.getenv("NUM_LAYERS", 4)),
                 hidden_dim=32 * 32,
                 ffn_dim=scaled_hidden_dim(scale=3.5, round_up_to_multiples_of=128),
                 num_heads=32,

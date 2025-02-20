@@ -14,8 +14,9 @@
 Reference: https://arxiv.org/abs/2405.15052.
 """
 import re
+import os
 from enum import Enum
-from functools import reduce
+from functools import reduce, partial
 from typing import NamedTuple, Optional, Sequence, Union
 
 import jax
@@ -62,12 +63,32 @@ from axlearn.common.utils import (
     with_sharding_constraint,
 )
 
+_USING_SHARDMAP_FFN=int(os.getenv('USE_SHARDMAP_FFN', 1))
+
 @jax.jit
-def down_proj(x, wo_weight,):
+def down_proj(x, wo_weight):
     print(x.shape, wo_weight.shape)
     x = jnp.einsum("oegch,ehm->oegcm", x, wo_weight)
     print(x.shape)
     return x
+
+@partial(jax.jit, static_argnums=(0,))
+def combine_outputs(adjusted_top_k, permuted_output, token_permutation_idx, expert_index, expert_affinities_masked, dest_output):
+    for k in range(adjusted_top_k):
+        # indices: (O, G, S)
+        indices = token_permutation_idx[..., k]
+        # indices: (O, G, S, 1)
+        indices = jnp.expand_dims(indices, axis=3)
+        # index into permuted_output
+        # output_k : (O, G, S, M)
+        output_k = jnp.take_along_axis(permuted_output, indices, axis=2)
+        # expert_affinities_masked: (O, G, S, 1) after indexing the expert
+        kth_expert_index = jnp.expand_dims(expert_index[..., k], axis=-1)
+
+        # Result shape: (O, G, S, 1)
+        expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1)
+        dest_output += output_k * expert_affinities_k
+    return dest_output
 
 def _router_z_loss(logits: Tensor) -> Tensor:
     """Loss that encourages router logits to remain small and improves stability.
@@ -1311,12 +1332,12 @@ class TransformerFeedForwardMoE(BaseLayer):
                 x = self._wi_activation(expert_aligned_hidden_states)
                 if cfg.structure in ["prenorm", "hybridnorm", "nonorm"]:
                     x = self.dropout1(x)
-                if False:
+                if _USING_SHARDMAP_FFN:
                     x = jnp.einsum("oegch,ehm->oegcm", x, self.parameters["wo_weight"])
                 else:
                     down_proj_sm = shard_map(
                         down_proj, 
-                        mesh=thread_resources.env.physical_mesh, 
+                        mesh=thread_resources.env.physical_mesh,
                         in_specs=(
                             PartitionSpec(("data", "fsdp"), "expert", None, None, "model"),
                             PartitionSpec("expert", "model", None),
@@ -1340,24 +1361,49 @@ class TransformerFeedForwardMoE(BaseLayer):
                 permuted_output = jnp.reshape(x, (O, G, E*C, M))
                 permuted_output = with_sharding_constraint(permuted_output, cfg.dim_to_mesh_axis_map["ogsM"])
 
-                output = jnp.zeros((O, G, group_len, cfg.input_dim), dtype=input_dtype)
-                output = with_sharding_constraint(output, cfg.dim_to_mesh_axis_map["ogsM"])
+                if _USING_SHARDMAP_FFN:
+                    mesh = thread_resources.env.physical_mesh
+                    T = mesh.shape["model"]
+                    output = jnp.zeros((T, O, G, group_len, cfg.input_dim), dtype=permuted_output.dtype)
+                    # output = with_sharding_constraint(output, PartitionSpec("model", ("data", "fsdp"), "expert", None, None))
+                    min_k = min(self.config.gating.top_k, self.config.num_experts)
+                    combine_outputs_sm = shard_map(
+                        combine_outputs, 
+                        mesh=thread_resources.env.physical_mesh,
+                        in_specs=(
+                            None,
+                            cfg.dim_to_mesh_axis_map["ogsM"],
+                            cfg.dim_to_mesh_axis_map["ogse"],
+                            cfg.dim_to_mesh_axis_map["ogse"],
+                            cfg.dim_to_mesh_axis_map["ogse"],
+                            PartitionSpec("model", ("data", "fsdp"), "expert", None, None),
+                        ),
+                        out_specs=PartitionSpec("model", ("data", "fsdp"), "expert", None, None),
+                        check_rep=False
+                    )
+                    output = combine_outputs_sm(
+                        min_k, permuted_output, token_permutation_idx, expert_index, expert_affinities_masked, output
+                    )
+                    output = jnp.sum(output, axis=0)
+                else:
+                    output = jnp.zeros((O, G, group_len, cfg.input_dim), dtype=input_dtype)
+                    output = with_sharding_constraint(output, PartitionSpec("model", ("data", "fsdp"), "expert", None, None))
+                    min_k = min(self.config.gating.top_k, self.config.num_experts)
+                    for k in range(min_k):
+                        # indices: (O, G, S)
+                        indices = token_permutation_idx[..., k]
+                        # indices: (O, G, S, 1)
+                        indices = jnp.expand_dims(indices, axis=3)
+                        # index into permuted_output
+                        # output_k : (O, G, S, M)
+                        output_k = jnp.take_along_axis(permuted_output, indices, axis=2)
+                        output_k = with_sharding_constraint(output_k, cfg.dim_to_mesh_axis_map["ogsM"])
 
-                min_k = min(self.config.gating.top_k, self.config.num_experts)
-                for k in range(min_k):
-                    # indices: (O, G, S)
-                    indices = token_permutation_idx[..., k]
-                    # indices: (O, G, S, 1)
-                    indices = jnp.expand_dims(indices, axis=3)
-                    # index into permuted_output
-                    # output_k : (O, G, S, M)
-                    output_k = jnp.take_along_axis(permuted_output, indices, axis=2)
-                    output_k = with_sharding_constraint(output_k, cfg.dim_to_mesh_axis_map["ogsM"])
-                    
-                    # expert_affinities_masked: (O, G, S, 1) after indexing the expert
-                    kth_expert_index = jnp.expand_dims(expert_index[..., k], axis=-1)
-                    expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1)  # Result shape: (O, G, S, 1)
-                    output += output_k * expert_affinities_k
+                        # expert_affinities_masked: (O, G, S, 1) after indexing the expert
+                        kth_expert_index = jnp.expand_dims(expert_index[..., k], axis=-1)
+                        expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1) # Result shape: (O, G, S, 1)
+
+                        output += output_k * expert_affinities_k
                 return output.reshape(token_shape + (cfg.input_dim,))
         else:
             combine_tensor = gating.combine_tensor.astype(input_dtype)
