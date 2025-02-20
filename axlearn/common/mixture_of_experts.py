@@ -1031,7 +1031,7 @@ class TopKGatingGather(TopKGating):
             # cumsum over S dim
             # position_in_expert: [O, G, S*topk, E]
             expert_mask = expert_mask.astype(jnp.int32)
-            position_in_expert = self.cumsum_4d_matmul(expert_mask, axis=-2).astype(jnp.float64) - 1
+            position_in_expert = self.cumsum_4d_matmul(expert_mask, axis=-2).astype(jnp.float64)
             
             expert_mask_pre_capacity_drop = expert_mask
             expert_mask_k_pre_capacity_drop = expert_mask_pre_capacity_drop.reshape(O, G, k, S, E)
