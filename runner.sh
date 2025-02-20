@@ -40,12 +40,13 @@ HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
 export XLA_FLAGS="--xla_dump_hlo_as_text --xla_dump_hlo_as_proto --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
 
 export MIXTRAL_MOE=$1
+export NUM_LAYERS=$2
 
 # PJRT Flags 
 export NEURON_FSDP_NUM_LAYER_EARLY_AG_SHIFT=1
 export NEURON_FSDP_NUM_LAYER_LATE_RS_SHIFT=2
 export NEURON_ENABLE_INT_MATMUL_DOWNCAST=1
-export NEURON_FSDP=0
+export NEURON_FSDP=1
 export NEURON_FSDP_NUM_LAYER_COALESCE=-1
 export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1
 export NEURON_HLO_ANALYZER=1
