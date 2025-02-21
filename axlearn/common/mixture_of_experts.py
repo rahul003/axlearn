@@ -78,12 +78,12 @@ def combine_outputs(adjusted_top_k, permuted_output, token_permutation_idx, expe
         indices = jnp.expand_dims(indices, axis=3)
         # index into permuted_output
         # output_k : (O, G, S, M)
-        output_k = jnp.take_along_axis(permuted_output, indices, axis=2)
+        output_k = jnp.take_along_axis(permuted_output, indices, axis=2, mode="clip")
         # expert_affinities_masked: (O, G, S, 1) after indexing the expert
         kth_expert_index = jnp.expand_dims(expert_index[..., k], axis=-1)
 
         # Result shape: (O, G, S, 1)
-        expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1)
+        expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1, mode="clip")
         dest_output += output_k * expert_affinities_k
     return dest_output
 
@@ -900,7 +900,7 @@ class TopKGatingGather(TopKGating):
         # token_assignments: (C*E,)
         # for each position in an expert's capacity we now need the token id
         # this is basically reverse of the token_permutation_idx
-        token_assignments = jnp.zeros((O, G, expert_capacity * num_experts), dtype=jnp.int64)
+        token_assignments = jnp.zeros((O, G, expert_capacity * num_experts), dtype=jnp.int32)
         
         # Perform scatter
         token_assignments = jax.lax.scatter(
@@ -1013,7 +1013,7 @@ class TopKGatingGather(TopKGating):
             k = min(cfg.top_k, cfg.num_experts)
             _, expert_index = jax.lax.top_k(raw_gates, k)
             # expert_index: (O, G, S, top_k)
-            expert_index = expert_index.astype(jnp.int64)
+            expert_index = expert_index.astype(jnp.int32)
 
             # expert_index: (O, G, top_k, S)
             expert_index = jnp.transpose(expert_index, (0, 1, 3, 2))
@@ -1074,8 +1074,9 @@ class TopKGatingGather(TopKGating):
             token_permutation_idx = jnp.take_along_axis(
                 position_in_expert_with_offset, # O_G_S_E
                 expert_index, # O_G_S_topK
-                axis=-1
-            ).astype(jnp.int64)
+                axis=-1,
+                mode="clip"
+            ).astype(jnp.int32)
 
             token_permutation_idx = token_permutation_idx - 1
 
@@ -1335,7 +1336,7 @@ class TransformerFeedForwardMoE(BaseLayer):
                 # Permute hidden_states using token_assignments to get expert_aligned_hidden_states
                 x = x[..., None, None, :]      # (O, G, S, 1, 1, M)
                 # expert_aligned_hidden_states: (O, G, 1, E, C, M)
-                expert_aligned_hidden_states = jnp.take_along_axis(x, token_assignments, axis=2)
+                expert_aligned_hidden_states = jnp.take_along_axis(x, token_assignments, axis=2, mode="clip")
                 O, G, _, E, C, M = expert_aligned_hidden_states.shape
                 # expert_aligned_hidden_states: (O, E, G, C, M)
                 expert_aligned_hidden_states = jnp.einsum("oegcm->ogecm", expert_aligned_hidden_states.squeeze(2))
@@ -1368,7 +1369,7 @@ class TransformerFeedForwardMoE(BaseLayer):
                 # flatten token outputs
                 # (O, G, S, top_k), (O, G, S, top_k), (O, G, S, E)
                 token_permutation_idx, expert_index, expert_affinities_masked = gating.combine_tensor
-                token_permutation_idx, expert_index, expert_affinities_masked = token_permutation_idx.astype(jnp.int64), expert_index.astype(jnp.int64), expert_affinities_masked.astype(input_dtype)
+                token_permutation_idx, expert_index, expert_affinities_masked = token_permutation_idx.astype(jnp.int32), expert_index.astype(jnp.int32), expert_affinities_masked.astype(input_dtype)
                 token_permutation_idx = with_sharding_constraint(token_permutation_idx, cfg.dim_to_mesh_axis_map["ogse"])
                 expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, cfg.dim_to_mesh_axis_map["ogse"])
 
@@ -1410,12 +1411,12 @@ class TransformerFeedForwardMoE(BaseLayer):
                         indices = jnp.expand_dims(indices, axis=3)
                         # index into permuted_output
                         # output_k : (O, G, S, M)
-                        output_k = jnp.take_along_axis(permuted_output, indices, axis=2)
+                        output_k = jnp.take_along_axis(permuted_output, indices, axis=2, mode="clip")
                         output_k = with_sharding_constraint(output_k, cfg.dim_to_mesh_axis_map["ogsM"])
 
                         # expert_affinities_masked: (O, G, S, 1) after indexing the expert
                         kth_expert_index = jnp.expand_dims(expert_index[..., k], axis=-1)
-                        expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1) # Result shape: (O, G, S, 1)
+                        expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1, mode="clip") # Result shape: (O, G, S, 1)
 
                         output += output_k * expert_affinities_k
                 return output.reshape(token_shape + (cfg.input_dim,))
