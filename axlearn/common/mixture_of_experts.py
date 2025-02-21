@@ -78,12 +78,12 @@ def combine_outputs(adjusted_top_k, permuted_output, token_permutation_idx, expe
         indices = jnp.expand_dims(indices, axis=3)
         # index into permuted_output
         # output_k : (O, G, S, M)
-        output_k = jnp.take_along_axis(permuted_output, indices, axis=2, mode="clip")
+        output_k = jnp.take_along_axis(permuted_output, indices, axis=2)
         # expert_affinities_masked: (O, G, S, 1) after indexing the expert
         kth_expert_index = jnp.expand_dims(expert_index[..., k], axis=-1)
 
         # Result shape: (O, G, S, 1)
-        expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1, mode="clip")
+        expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1)
         dest_output += output_k * expert_affinities_k
     return dest_output
 
@@ -1074,16 +1074,17 @@ class TopKGatingGather(TopKGating):
             token_permutation_idx = jnp.take_along_axis(
                 position_in_expert_with_offset, # O_G_S_E
                 expert_index, # O_G_S_topK
-                axis=-1,
-                mode="clip"
+                axis=-1
             ).astype(jnp.int32)
-
+            # Indexing using these will result in the first token (index 0) being loaded in place of dropped tokens
+            # However, the output from these will get masked out in the affinity scaling step
             token_permutation_idx = token_permutation_idx - 1
 
         with jax.named_scope("token_assignments"):
             token_assignments = self.compute_token_assignments(token_permutation_idx, cfg.num_experts, expert_capacity)
-            # Indexing using these will result in the first token (index 0) being loaded in place of dropped tokens
-            # However, the output from these will get masked out in the affinity scaling step
+            zero_tensor = jnp.zeros(1, dtype=token_permutation_idx.dtype)
+            token_permutation_idx = jnp.maximum(token_permutation_idx, zero_tensor)
+
         
         with jax.named_scope("aux_loss"):
             aux_loss = self.compute_aux_loss(self.config, expert_mask_pre_capacity_drop, raw_gates)
@@ -1166,8 +1167,8 @@ class TransformerFeedForwardMoE(BaseLayer):
         MOE_OUTER_BATCH_AXIS_NAMES = ("data", "fsdp")
         cfg.dim_to_mesh_axis_map = {
             "me": PartitionSpec(None, None),
-            "emh": PartitionSpec("expert", "fsdp", "model"),
-            "ehm": PartitionSpec("expert", "model", "fsdp"),
+            "emh": PartitionSpec("expert", None, "model"),
+            "ehm": PartitionSpec("expert", "model", None),
             "ogsm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, "model"),
             "ogsM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
             "ogse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
@@ -1336,7 +1337,7 @@ class TransformerFeedForwardMoE(BaseLayer):
                 # Permute hidden_states using token_assignments to get expert_aligned_hidden_states
                 x = x[..., None, None, :]      # (O, G, S, 1, 1, M)
                 # expert_aligned_hidden_states: (O, G, 1, E, C, M)
-                expert_aligned_hidden_states = jnp.take_along_axis(x, token_assignments, axis=2, mode="clip")
+                expert_aligned_hidden_states = jnp.take_along_axis(x, token_assignments, axis=2)
                 O, G, _, E, C, M = expert_aligned_hidden_states.shape
                 # expert_aligned_hidden_states: (O, E, G, C, M)
                 expert_aligned_hidden_states = jnp.einsum("oegcm->ogecm", expert_aligned_hidden_states.squeeze(2))
@@ -1411,12 +1412,12 @@ class TransformerFeedForwardMoE(BaseLayer):
                         indices = jnp.expand_dims(indices, axis=3)
                         # index into permuted_output
                         # output_k : (O, G, S, M)
-                        output_k = jnp.take_along_axis(permuted_output, indices, axis=2, mode="clip")
+                        output_k = jnp.take_along_axis(permuted_output, indices, axis=2)
                         output_k = with_sharding_constraint(output_k, cfg.dim_to_mesh_axis_map["ogsM"])
 
                         # expert_affinities_masked: (O, G, S, 1) after indexing the expert
                         kth_expert_index = jnp.expand_dims(expert_index[..., k], axis=-1)
-                        expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1, mode="clip") # Result shape: (O, G, S, 1)
+                        expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1) # Result shape: (O, G, S, 1)
 
                         output += output_k * expert_affinities_k
                 return output.reshape(token_shape + (cfg.input_dim,))
