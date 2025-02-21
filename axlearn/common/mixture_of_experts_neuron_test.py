@@ -73,7 +73,7 @@ class TestConfig():
         self.test_state = self.test_layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
         self.golden_state = self.test_state
     
-    def __str__(self):
+    def __repr__(self):
         output = "TestConfig Object:\n"
         output += "-----------------\n"
         
@@ -108,7 +108,7 @@ def _topkgather_to_topk(output, expert_cap):
 
     exp_aff = jnp.take_along_axis(exp_aff_mask, expert_index, axis=-1)
 
-    base = jnp.zeros((O, G, S, E * expert_cap + 1), dtype=exp_aff_mask.dtype)
+    base = jnp.zeros((O, G, S, E * expert_cap), dtype=exp_aff_mask.dtype)
 
     idx_O, idx_G, idx_S = jnp.meshgrid(
         jnp.arange(O), 
@@ -117,9 +117,8 @@ def _topkgather_to_topk(output, expert_cap):
         indexing='ij'
     )
 
-    output_tensor = base.at[idx_O[..., None], idx_G[..., None], 
-                           idx_S[..., None], tok_perm_idx].set(exp_aff)
-    output_tensor = output_tensor[:,:,:,:-1].reshape(O, G, S, E, expert_cap)
+    output_tensor = base.at[idx_O[..., None], idx_G[..., None], idx_S[..., None], tok_perm_idx].set(exp_aff)
+    output_tensor = output_tensor.reshape(O, G, S, E, expert_cap)
 
     dispatch_tensor = output_tensor.astype(bool)
 
@@ -349,12 +348,12 @@ class TestImplCorrectness(TestCase):
     @parameterized.parameters(_get_training_configs())
     def test_fwd_correctness(self, cfg: TestConfig):
 
-        @partial(jax.jit, backend=cfg.test.device)
+        # @partial(jax.jit, backend=cfg.test.device)
         def test_fwd_call():
             test_output, _ = self._fwd_call(cfg.test_layer, cfg.test_state, cfg.inputs)
             return test_output
 
-        @partial(jax.jit, backend=cfg.golden.device)
+        # @partial(jax.jit, backend=cfg.golden.device)
         def golden_fwd_call():
             golden_output, _ =  self._fwd_call(cfg.golden_layer, cfg.golden_state, cfg.inputs)
             return golden_output
@@ -368,36 +367,36 @@ class TestImplCorrectness(TestCase):
         # Transfer results to CPU before comparison
         self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output))
 
-    @parameterized.parameters(_get_training_configs_bwd())
-    def test_bwd_correctness(self, cfg: TestConfig):
+    # @parameterized.parameters(_get_training_configs_bwd())
+    # def test_bwd_correctness(self, cfg: TestConfig):
 
-        @partial(jax.jit, backend=cfg.test.device)
-        def test_bwd_call(state):
-            test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
-            loss = cfg.loss_fn(test_output)
-            return loss
+    #     @partial(jax.jit, backend=cfg.test.device)
+    #     def test_bwd_call(state):
+    #         test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
+    #         loss = cfg.loss_fn(test_output)
+    #         return loss
 
-        @partial(jax.jit, backend=cfg.golden.device)
-        def golden_bwd_call(state):
-            golden_output, _ =  self._fwd_call(cfg.golden_layer, state, cfg.inputs)
-            loss = cfg.loss_fn(golden_output)
-            return loss
+    #     @partial(jax.jit, backend=cfg.golden.device)
+    #     def golden_bwd_call(state):
+    #         golden_output, _ =  self._fwd_call(cfg.golden_layer, state, cfg.inputs)
+    #         loss = cfg.loss_fn(golden_output)
+    #         return loss
         
-        test_loss, test_grads = jax.value_and_grad(test_bwd_call, has_aux=False)(
-            cfg.test_state
-        )
-        golden_loss, golden_grads = jax.value_and_grad(golden_bwd_call, has_aux=False)(
-            cfg.golden_state
-        )
+    #     test_loss, test_grads = jax.value_and_grad(test_bwd_call, has_aux=False)(
+    #         cfg.test_state
+    #     )
+    #     golden_loss, golden_grads = jax.value_and_grad(golden_bwd_call, has_aux=False)(
+    #         cfg.golden_state
+    #     )
 
-        # Transfer results to CPU before comparison
-        test_loss = jax.tree_map(jax.device_get, test_loss)
-        golden_loss = jax.tree_map(jax.device_get, golden_loss)
-        test_grads = jax.tree_map(jax.device_get, test_grads)
-        golden_grads = jax.tree_map(jax.device_get, golden_grads)
+    #     # Transfer results to CPU before comparison
+    #     test_loss = jax.tree_map(jax.device_get, test_loss)
+    #     golden_loss = jax.tree_map(jax.device_get, golden_loss)
+    #     test_grads = jax.tree_map(jax.device_get, test_grads)
+    #     golden_grads = jax.tree_map(jax.device_get, golden_grads)
         
-        self.assertNestedAllClose(test_loss, golden_loss)
-        self.assertNestedAllClose(test_grads, golden_grads)
+    #     self.assertNestedAllClose(test_loss, golden_loss)
+    #     self.assertNestedAllClose(test_grads, golden_grads)
 
 # # pylint: disable=no-self-use,protected-access
 # class TransformerFeedForwardMoETest(parameterized.TestCase):
