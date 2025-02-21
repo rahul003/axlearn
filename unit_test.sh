@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 # export JAX_PLATFORMS=cpu
+export USE_SHARDMAP_FFN=0
 
 TEST_ARTIFACTS_PATH="/shared/aahila/test_artifacts"
 rm -rf "$TEST_ARTIFACTS_PATH"
