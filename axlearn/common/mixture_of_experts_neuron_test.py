@@ -144,7 +144,8 @@ class TestConfigBuilder:
             "num_groups": 1,
             "outer_batch": 1,
             "expert_capacity": 1000,
-            "train_capacity_factor": None
+            "train_capacity_factor": None,
+            "mesh": (1,)
         }
         return self
     
@@ -163,6 +164,12 @@ class TestConfigBuilder:
             "num_experts": num_experts,
             "expert_capacity": expert_capacity,
             "train_capacity_factor": train_capacity_factor
+        })
+        return self
+    
+    def with_mesh_settings(self, mesh):
+        self.params.update({
+            "mesh": mesh
         })
         return self
     
@@ -202,14 +209,17 @@ class TestConfigBuilder:
         }
     
     def build_test_configs_moe(self):
+
+        mesh = self.params["mesh"] 
+
         return [
             TestConfig(
                 setup=[
                     self.build_moe_topkgather_setup(),
                     self.build_moe_top2_setup()
                 ],
-                test=ModuleConfig(TransformerFeedForwardMoE, "cpu"),
-                golden=ModuleConfig(TransformerFeedForwardMoE, "cpu"),
+                test=ModuleConfig(TransformerFeedForwardMoE, "cpu", mesh),
+                golden=ModuleConfig(TransformerFeedForwardMoE, "cpu", mesh),
                 inputs=dict(inputs=jax.random.uniform(
                     jax.random.PRNGKey(1),
                     shape=(self.params["batch_size"], self.params["seq_len"], self.params["input_dim"])
@@ -221,8 +231,8 @@ class TestConfigBuilder:
                     self.build_moe_topkgather_setup(),
                     self.build_moe_topkgather_setup()
                 ],
-                test=ModuleConfig(TransformerFeedForwardMoE, "neuron"),
-                golden=ModuleConfig(TransformerFeedForwardMoE, "cpu"),
+                test=ModuleConfig(TransformerFeedForwardMoE, "neuron", mesh),
+                golden=ModuleConfig(TransformerFeedForwardMoE, "cpu", mesh),
                 inputs=dict(inputs=jax.random.uniform(
                     jax.random.PRNGKey(1),
                     shape=(self.params["batch_size"], self.params["seq_len"], self.params["input_dim"])
@@ -233,6 +243,7 @@ class TestConfigBuilder:
     def build_test_configs_topk(self):
 
         seq_len = (self.params["batch_size"]*self.params["seq_len"])//(self.params["outer_batch"] * self.params["num_groups"])
+        mesh = self.params["mesh"]
 
         return [
             TestConfig(
@@ -240,8 +251,8 @@ class TestConfigBuilder:
                     self.build_gating_setup(),
                     self.build_gating_setup()
                 ],
-                test=ModuleConfig(TopKGatingGather, "cpu"),
-                golden=ModuleConfig(TopKGating, "cpu"),
+                test=ModuleConfig(TopKGatingGather, "cpu", mesh),
+                golden=ModuleConfig(TopKGating, "cpu", mesh),
                 inputs=dict(logits=jax.random.uniform(
                     jax.random.PRNGKey(1),
                     shape=(self.params["outer_batch"], self.params["num_groups"],
@@ -254,8 +265,8 @@ class TestConfigBuilder:
                     self.build_gating_setup(),
                     self.build_gating_setup()
                 ],
-                test=ModuleConfig(TopKGatingGather, "neuron"),
-                golden=ModuleConfig(TopKGatingGather, "cpu"),
+                test=ModuleConfig(TopKGatingGather, "neuron", mesh),
+                golden=ModuleConfig(TopKGatingGather, "cpu", mesh),
                 inputs=dict(logits=jax.random.uniform(
                     jax.random.PRNGKey(1),
                     shape=(self.params["outer_batch"], self.params["num_groups"],
@@ -275,11 +286,12 @@ def _get_training_configs():
     num_groups =        [1, 4]
     outer_batches =     [1, 2]
     expert_capacities = [2, 1000]
+    meshes =            [(1,)]
 
     test_configs = []
 
-    for (batch, seq, input_dim,  hidden_dim, n_experts, n_groups, out_batch, capacity) in product(
-         batchs, seqs, input_dims, hidden_dims, num_experts, num_groups, outer_batches, expert_capacities):
+    for (batch, seq, input_dim,  hidden_dim, n_experts, n_groups, out_batch, capacity, mesh) in product(
+         batchs, seqs, input_dims, hidden_dims, num_experts, num_groups, outer_batches, expert_capacities, meshes):
         
         test_configs.extend(
             builder.reset()
@@ -292,6 +304,9 @@ def _get_training_configs():
                     n_experts,
                     capacity,
                     train_capacity_factor=None
+                )
+                .with_mesh_settings(
+                    mesh
                 )
                 .build_test_configs_moe()
             )
@@ -312,11 +327,12 @@ def _get_training_configs_bwd():
     num_groups =        [1, 4]
     outer_batches =     [1, 2]
     expert_capacities = [2, 1000]
+    meshes =            [(1,)]
 
     test_configs = []
 
-    for (batch, seq, input_dim,  hidden_dim, n_experts, n_groups, out_batch, capacity) in product(
-         batchs, seqs, input_dims, hidden_dims, num_experts, num_groups, outer_batches, expert_capacities):
+    for (batch, seq, input_dim,  hidden_dim, n_experts, n_groups, out_batch, capacity, mesh) in product(
+         batchs, seqs, input_dims, hidden_dims, num_experts, num_groups, outer_batches, expert_capacities, meshes):
         
         test_configs.extend(
             builder.reset()
@@ -330,6 +346,9 @@ def _get_training_configs_bwd():
                     capacity,
                     train_capacity_factor=None
                 )
+                .with_mesh_settings(
+                    mesh
+                )                
                 .build_test_configs_moe()
             )
     return test_configs
