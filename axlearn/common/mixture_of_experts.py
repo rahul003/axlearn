@@ -357,7 +357,7 @@ class Top2Gating(BaseGating):
         mask_dtype: jnp.dtype = jnp.int32
         # Set expert_capacity to at least (group_size * capacity_factor) / num_experts. Default
         # to 2.0 for top-2 gating.
-        train_capacity_factor: float = 100.0
+        train_capacity_factor: float = 2.0
         eval_capacity_factor: float = 2.0
         # Number of examples per minibatch/group per expert. Each example is typically a vector
         # of size input_dim, representing embedded token or an element of Transformer layer output.
@@ -1077,12 +1077,17 @@ class TopKGatingGather(TopKGating):
                 axis=-1
             ).astype(jnp.int64)
 
+            # Indexing using these will result in the first token (index 0) being loaded in place of dropped tokens
+            # However, the output from these will get masked out in the affinity scaling step
             token_permutation_idx = token_permutation_idx - 1
 
         with jax.named_scope("token_assignments"):
             token_assignments = self.compute_token_assignments(token_permutation_idx, cfg.num_experts, expert_capacity)
-            # Indexing using these will result in the first token (index 0) being loaded in place of dropped tokens
-            # However, the output from these will get masked out in the affinity scaling step
+
+            # token_assignments = token_assignments - 1
+            zero_tensor = jnp.zeros(1, dtype=token_permutation_idx.dtype)
+            token_permutation_idx = jnp.maximum(token_permutation_idx, zero_tensor)
+            # token_assignments = jnp.maximum(token_assignments, zero_tensor)
         
         with jax.named_scope("aux_loss"):
             aux_loss = self.compute_aux_loss(self.config, expert_mask_pre_capacity_drop, raw_gates)
@@ -1165,8 +1170,8 @@ class TransformerFeedForwardMoE(BaseLayer):
         MOE_OUTER_BATCH_AXIS_NAMES = ("data", "fsdp")
         cfg.dim_to_mesh_axis_map = {
             "me": PartitionSpec(None, None),
-            "emh": PartitionSpec("expert", "fsdp", "model"),
-            "ehm": PartitionSpec("expert", "model", "fsdp"),
+            "emh": PartitionSpec("expert", None, "model"),
+            "ehm": PartitionSpec("expert", "model", None),
             "ogsm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, "model"),
             "ogsM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
             "ogse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
