@@ -897,22 +897,23 @@ class TopKGatingGather(TopKGating):
         # Create scatter indices
         scatter_indices = jnp.stack(
             [batch_indices, group_indices, token_permutation_idx], axis=-1)
-        # token_assignments: (C*E,)
+        # token_assignments: (C*E+1,)
         # for each position in an expert's capacity we now need the token id
         # this is basically reverse of the token_permutation_idx
-        token_assignments = jnp.zeros((O, G, expert_capacity * num_experts), dtype=jnp.int64)
+        token_assignments = jnp.zeros((O, G, expert_capacity * num_experts + 1), dtype=jnp.int64)
         
         # Perform scatter
         token_assignments = jax.lax.scatter(
             token_assignments,
             scatter_indices,
-            token_indices,
+            token_indices+1,
             jax.lax.ScatterDimensionNumbers(
                 update_window_dims=(),
                 inserted_window_dims=(0, 1, 2),
                 scatter_dims_to_operand_dims=(0, 1, 2)
             )
         )
+        token_assignments = token_assignments[:,:,1:]
         token_assignments = jnp.reshape(token_assignments, shape=(O, G, num_experts, expert_capacity))
         return token_assignments
 
@@ -1077,17 +1078,17 @@ class TopKGatingGather(TopKGating):
                 axis=-1
             ).astype(jnp.int64)
 
-            # Indexing using these will result in the first token (index 0) being loaded in place of dropped tokens
-            # However, the output from these will get masked out in the affinity scaling step
-            token_permutation_idx = token_permutation_idx - 1
-
         with jax.named_scope("token_assignments"):
             token_assignments = self.compute_token_assignments(token_permutation_idx, cfg.num_experts, expert_capacity)
 
-            # token_assignments = token_assignments - 1
+        with jax.named_scope("zero indexing"):
+            # Indexing using these will result in the first token (index 0) being loaded in place of dropped tokens
+            # However, the output from these will get masked out in the affinity scaling step
+            token_permutation_idx = token_permutation_idx - 1
+            token_assignments = token_assignments - 1
             zero_tensor = jnp.zeros(1, dtype=token_permutation_idx.dtype)
             token_permutation_idx = jnp.maximum(token_permutation_idx, zero_tensor)
-            # token_assignments = jnp.maximum(token_assignments, zero_tensor)
+            token_assignments = jnp.maximum(token_assignments, zero_tensor)
         
         with jax.named_scope("aux_loss"):
             aux_loss = self.compute_aux_loss(self.config, expert_mask_pre_capacity_drop, raw_gates)
