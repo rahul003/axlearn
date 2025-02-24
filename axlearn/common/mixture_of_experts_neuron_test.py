@@ -52,13 +52,14 @@ class ModuleConfig():
         self.mesh = mesh
 
 class TestConfig():
-    def __init__(self, setup, test: ModuleConfig, golden: ModuleConfig = None, inputs: dict = None, loss_fn = None, conv_output = None):
+    def __init__(self, setup, test: ModuleConfig, golden: ModuleConfig = None, inputs: dict = None, loss_fn = None, conv_output = None, prefix = None):
         self.setup = setup
         self.test = test
         self.golden = golden if golden is not None else test
         self.inputs = inputs
         self.loss_fn = loss_fn
         self.conv_output = conv_output
+        self.prefix = prefix
 
         for spec, val in setup[0].items():
             setattr(self.test.module, spec, val)
@@ -73,33 +74,6 @@ class TestConfig():
         self.test_state = self.test_layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
         self.golden_state = self.test_state
     
-    def __repr__(self):
-        output = "TestConfig Object:\n"
-        output += "-----------------\n"
-        
-        # Setup Info
-        output += "Setup Configuration:\n"
-        output += "  Test Setup:\n"
-        for spec, val in self.setup[0].items():
-            output += f"    {spec}: {val}\n"
-        output += "\n  Golden Setup:\n"
-        for spec, val in self.setup[1].items():
-            output += f"    {spec}: {val}\n"
-        output += "\n"
-        
-        # Test Module Info
-        output += "Test Module Configuration:\n"
-        for attr_name, attr_value in vars(self.test.module).items():
-            output += f"  {attr_name}: {attr_value}\n"
-        output += "\n"
-        
-        # Golden Module Info
-        output += "Golden Module Configuration:\n"
-        for attr_name, attr_value in vars(self.golden.module).items():
-            output += f"  {attr_name}: {attr_value}\n"
-        
-        return output
-
 def _topkgather_to_topk(output, expert_cap):
     tok_perm_idx, expert_index, exp_aff_mask = output.combine_tensor
 
@@ -117,7 +91,7 @@ def _topkgather_to_topk(output, expert_cap):
         indexing='ij'
     )
 
-    output_tensor = base.at[idx_O[..., None], idx_G[..., None], idx_S[..., None], tok_perm_idx].set(exp_aff)
+    output_tensor = base.at[idx_O[..., None], idx_G[..., None], idx_S[..., None], tok_perm_idx].add(exp_aff)
     output_tensor = output_tensor.reshape(O, G, S, E, expert_cap)
 
     dispatch_tensor = output_tensor.astype(bool)
@@ -155,9 +129,10 @@ class TestConfigBuilder:
         })
         return self
     
-    def with_expert_settings(self, hidden_dim, num_groups, num_experts, expert_capacity, train_capacity_factor=None):
+    def with_expert_settings(self, hidden_dim, outer_batch, num_groups, num_experts, expert_capacity, train_capacity_factor=None):
         self.params.update({
             "hidden_dim": hidden_dim,
+            "outer_batch" : outer_batch,
             "num_groups": num_groups,
             "num_experts": num_experts,
             "expert_capacity": expert_capacity,
@@ -213,7 +188,8 @@ class TestConfigBuilder:
                     jax.random.PRNGKey(1),
                     shape=(self.params["batch_size"], self.params["seq_len"], self.params["input_dim"])
                 )),
-                loss_fn=lambda x: x.mean()
+                loss_fn=lambda x: x.mean(),
+                prefix="_unit_test"
             ),
             TestConfig(
                 setup=[
@@ -226,7 +202,8 @@ class TestConfigBuilder:
                     jax.random.PRNGKey(1),
                     shape=(self.params["batch_size"], self.params["seq_len"], self.params["input_dim"])
                 )),
-                loss_fn=lambda x: x.mean()
+                loss_fn=lambda x: x.mean(),
+                prefix="_integ_test"
             ),
         ]
     def build_test_configs_topk(self):
@@ -247,6 +224,7 @@ class TestConfigBuilder:
                            seq_len, self.params["num_experts"])
                 )),
                 conv_output=partial(_topkgather_to_topk, expert_cap=self.params["expert_capacity"]),
+                prefix="_unit_test"
             ),
             TestConfig(
                 setup=[
@@ -260,6 +238,7 @@ class TestConfigBuilder:
                     shape=(self.params["outer_batch"], self.params["num_groups"],
                            seq_len, self.params["num_experts"])
                 )),
+                prefix="_integ_test"
             ),
         ]
     
@@ -280,23 +259,23 @@ def _get_training_configs():
     for (batch, seq, input_dim,  hidden_dim, n_experts, n_groups, out_batch, capacity) in product(
          batchs, seqs, input_dims, hidden_dims, num_experts, num_groups, outer_batches, expert_capacities):
         
-        test_configs.extend(
-            builder.reset()
-                .with_dimensions(
-                    batch, seq, input_dim
-                )
-                .with_expert_settings(
-                    hidden_dim,
-                    n_groups,
-                    n_experts,
-                    capacity,
-                    train_capacity_factor=None
-                )
-                .build_test_configs_moe()
-            )
-        test_configs.extend(
-            builder.build_test_configs_topk()
-            )
+        if batch % out_batch != 0:
+            continue
+        
+        config = builder.reset().with_dimensions(batch, seq, input_dim).with_expert_settings(
+            hidden_dim,
+            out_batch,
+            n_groups,
+            n_experts,
+            capacity,
+            train_capacity_factor=None
+        ).build_test_configs_moe()
+        name = f"MoE_b{batch}_s{seq}_i{input_dim}_h{hidden_dim}_e{n_experts}_g{n_groups}_ob{out_batch}_ec{capacity}"
+        test_configs.extend([(name + cfg.prefix, cfg) for cfg in config])
+        
+        config = builder.build_test_configs_topk()
+        name = f"Gating_b{batch}_s{seq}_i{input_dim}_h{hidden_dim}_e{n_experts}_g{n_groups}_ob{out_batch}_ec{capacity}"
+        test_configs.extend([(name + cfg.prefix, cfg) for cfg in config])
 
     return test_configs
 
@@ -317,20 +296,20 @@ def _get_training_configs_bwd():
     for (batch, seq, input_dim,  hidden_dim, n_experts, n_groups, out_batch, capacity) in product(
          batchs, seqs, input_dims, hidden_dims, num_experts, num_groups, outer_batches, expert_capacities):
         
-        test_configs.extend(
-            builder.reset()
-                .with_dimensions(
-                    batch, seq, input_dim
-                )
-                .with_expert_settings(
+        if batch % out_batch != 0:
+            continue
+
+        config = builder.reset().with_dimensions(batch, seq, input_dim).with_expert_settings(
                     hidden_dim,
+                    out_batch,
                     n_groups,
                     n_experts,
                     capacity,
                     train_capacity_factor=None
-                )
-                .build_test_configs_moe()
-            )
+                ).build_test_configs_moe()
+        name = f"b{batch}_s{seq}_i{input_dim}_h{hidden_dim}_e{n_experts}_g{n_groups}_ob{out_batch}_ec{capacity}"
+        test_configs.extend([(name + cfg.prefix, cfg) for cfg in config])
+
     return test_configs
 
 # pylint: disable=no-self-use,protected-access
@@ -345,15 +324,15 @@ class TestImplCorrectness(TestCase):
                 inputs=inputs,
         )
 
-    @parameterized.parameters(_get_training_configs())
+    @parameterized.named_parameters(_get_training_configs())
     def test_fwd_correctness(self, cfg: TestConfig):
 
-        # @partial(jax.jit, backend=cfg.test.device)
+        @partial(jax.jit, backend=cfg.test.device)
         def test_fwd_call():
             test_output, _ = self._fwd_call(cfg.test_layer, cfg.test_state, cfg.inputs)
             return test_output
 
-        # @partial(jax.jit, backend=cfg.golden.device)
+        @partial(jax.jit, backend=cfg.golden.device)
         def golden_fwd_call():
             golden_output, _ =  self._fwd_call(cfg.golden_layer, cfg.golden_state, cfg.inputs)
             return golden_output
@@ -367,36 +346,36 @@ class TestImplCorrectness(TestCase):
         # Transfer results to CPU before comparison
         self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output))
 
-    # @parameterized.parameters(_get_training_configs_bwd())
-    # def test_bwd_correctness(self, cfg: TestConfig):
+    @parameterized.named_parameters(_get_training_configs_bwd())
+    def test_bwd_correctness(self, cfg: TestConfig):
 
-    #     @partial(jax.jit, backend=cfg.test.device)
-    #     def test_bwd_call(state):
-    #         test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
-    #         loss = cfg.loss_fn(test_output)
-    #         return loss
+        @partial(jax.jit, backend=cfg.test.device)
+        def test_bwd_call(state):
+            test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
+            loss = cfg.loss_fn(test_output)
+            return loss
 
-    #     @partial(jax.jit, backend=cfg.golden.device)
-    #     def golden_bwd_call(state):
-    #         golden_output, _ =  self._fwd_call(cfg.golden_layer, state, cfg.inputs)
-    #         loss = cfg.loss_fn(golden_output)
-    #         return loss
+        @partial(jax.jit, backend=cfg.golden.device)
+        def golden_bwd_call(state):
+            golden_output, _ =  self._fwd_call(cfg.golden_layer, state, cfg.inputs)
+            loss = cfg.loss_fn(golden_output)
+            return loss
         
-    #     test_loss, test_grads = jax.value_and_grad(test_bwd_call, has_aux=False)(
-    #         cfg.test_state
-    #     )
-    #     golden_loss, golden_grads = jax.value_and_grad(golden_bwd_call, has_aux=False)(
-    #         cfg.golden_state
-    #     )
+        test_loss, test_grads = jax.value_and_grad(test_bwd_call, has_aux=False)(
+            cfg.test_state
+        )
+        golden_loss, golden_grads = jax.value_and_grad(golden_bwd_call, has_aux=False)(
+            cfg.golden_state
+        )
 
-    #     # Transfer results to CPU before comparison
-    #     test_loss = jax.tree_map(jax.device_get, test_loss)
-    #     golden_loss = jax.tree_map(jax.device_get, golden_loss)
-    #     test_grads = jax.tree_map(jax.device_get, test_grads)
-    #     golden_grads = jax.tree_map(jax.device_get, golden_grads)
+        # Transfer results to CPU before comparison
+        test_loss = jax.tree_map(jax.device_get, test_loss)
+        golden_loss = jax.tree_map(jax.device_get, golden_loss)
+        test_grads = jax.tree_map(jax.device_get, test_grads)
+        golden_grads = jax.tree_map(jax.device_get, golden_grads)
         
-    #     self.assertNestedAllClose(test_loss, golden_loss)
-    #     self.assertNestedAllClose(test_grads, golden_grads)
+        self.assertNestedAllClose(test_loss, golden_loss)
+        self.assertNestedAllClose(test_grads, golden_grads)
 
 # # pylint: disable=no-self-use,protected-access
 # class TransformerFeedForwardMoETest(parameterized.TestCase):
