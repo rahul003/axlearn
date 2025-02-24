@@ -116,6 +116,15 @@ MOE_DIM_TO_MESH_AXIS_MAP = {
     "oegch": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
 }
 
+def get_ffn_layer_types():
+    ffn_type = os.getenv("MIXTRAL_MOE", "1")
+    if ffn_type == "0":
+        ffn_layer_types = ["dense"]
+    elif ffn_type == "1":
+        ffn_layer_types = ["sparse"]
+    elif ffn_type == "2":
+        ffn_layer_types = ["sparse", "dense"]
+    return ffn_layer_types
 
 def common_trainer_kwargs() -> dict[str, Any]:
     """Returns kwargs that are common to all configs."""
@@ -155,14 +164,6 @@ def get_trainer_kwargs(
             modification=StackedTransformerLayer.default_config(),
         )
     ]
-    trn2_model_modifications.append(
-        ModelConfigModifier.default_config().set(
-            target_config="model.decoder.transformer.layer.self_attention.attention."
-            "input_linear.input_linear",
-            modification=GroupedQKVLinear.default_config(),
-        )
-    )
-
     trn2_partition_spec_modifications = [
         PartitionSpecModifier.default_config().set(
             partition_specs={
@@ -176,15 +177,6 @@ def get_trainer_kwargs(
                     "output_partition_spec": ("fsdp", None, None),
                     "embedding_partition_spec": ("model", None),
                 },
-                # Sequence parallel shardings for norms.
-                "model.decoder.transformer.layer.self_attention.norm": {
-                    "input_partition_spec": ("fsdp", "model", None),
-                    "output_partition_spec": ("fsdp", None, None),
-                },
-                "model.decoder.transformer.layer.feed_forward.norm": {
-                    "input_partition_spec": ("fsdp", "model", None),
-                    "output_partition_spec": ("fsdp", None, None),
-                },
                 "model.decoder.output_norm": {
                     "input_partition_spec": ("fsdp", "model", None),
                     "output_partition_spec": ("fsdp", None, None),
@@ -197,10 +189,63 @@ def get_trainer_kwargs(
         ),
     ]
 
-    if os.getenv('MIXTRAL_MOE', '1') == '0':
-        trn2_partition_spec_modifications[0].partition_specs["model.decoder.transformer.layer.feed_forward.linear2"] = {
+    ffn_layer_types = get_ffn_layer_types()
+    if len(ffn_layer_types) == 1:
+        target_config="model.decoder.transformer.layer.self_attention.attention.input_linear.input_linear"
+        mcm = ModelConfigModifier.default_config().set(
+            target_config=target_config,
+            modification=GroupedQKVLinear.default_config(),
+        )
+        trn2_model_modifications.append(mcm)
+
+        trn2_partition_spec_modifications.append(
+            PartitionSpecModifier.default_config().set(
+                partition_specs={
+                    # Sequence parallel shardings for norms.
+                    "model.decoder.transformer.layer.self_attention.norm": {
+                        "input_partition_spec": ("fsdp", "model", None),
+                        "output_partition_spec": ("fsdp", None, None),
+                    },
+                    "model.decoder.transformer.layer.feed_forward.norm": {
+                        "input_partition_spec": ("fsdp", "model", None),
+                        "output_partition_spec": ("fsdp", None, None),
+                    },
+                },
+            )
+        )
+        if ffn_layer_types[0] == "dense":
+            trn2_partition_spec_modifications[-1].partition_specs[f"model.decoder.transformer.layer.feed_forward.linear2"] = {
                 "output_partition_spec": ("fsdp", None, None),
             }
+    elif len(ffn_layer_types) == 2:
+        for i in range(2):
+            target_config=f"model.decoder.transformer.layer.layer[{i}].self_attention.attention.input_linear.input_linear"
+            mcm = ModelConfigModifier.default_config().set(
+                target_config=target_config,
+                modification=GroupedQKVLinear.default_config(),
+            )
+            trn2_model_modifications.append(mcm)
+            trn2_partition_spec_modifications.append(
+                PartitionSpecModifier.default_config().set(
+                    partition_specs={
+                        # Sequence parallel shardings for norms.
+                        f"model.decoder.transformer.layer.layer[{i}].self_attention.norm": {
+                            "input_partition_spec": ("fsdp", "model", None),
+                            "output_partition_spec": ("fsdp", None, None),
+                        },
+                        f"model.decoder.transformer.layer.layer[{i}].feed_forward.norm": {
+                            "input_partition_spec": ("fsdp", "model", None),
+                            "output_partition_spec": ("fsdp", None, None),
+                        },
+                    },
+                )
+            )
+
+            if ffn_layer_types[i] == "dense":
+                trn2_partition_spec_modifications[-1].partition_specs[f"model.decoder.transformer.layer.layer[{i}].feed_forward.linear2"] = {
+                    "output_partition_spec": ("fsdp", None, None),
+                }
+
     # pylint: disable=use-dict-literal
     if model_size == "test":
         trainer_kwargs = dict(
@@ -398,7 +443,7 @@ def get_trainer_kwargs(
         )
     elif model_size == "Mistral-8x7B":
         # Num of parameters: 47B.
-        ffn_layer_types=["dense"] if os.getenv("MIXTRAL_MOE", "1") == "0" else ["sparse"]
+        ffn_layer_types = get_ffn_layer_types()
         neuron_mesh = mesh_shape_from_axes(fsdp=-1, model=4)
         trainer_kwargs = dict(
             model_kwargs=dict(
