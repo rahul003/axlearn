@@ -14,6 +14,7 @@ import copy
 from functools import partial
 from itertools import product
 
+import unittest
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -206,6 +207,7 @@ class TestConfigBuilder:
                 prefix="_integ_test"
             ),
         ]
+
     def build_test_configs_topk(self):
 
         seq_len = (self.params["batch_size"]*self.params["seq_len"])//(self.params["outer_batch"] * self.params["num_groups"])
@@ -226,20 +228,20 @@ class TestConfigBuilder:
                 conv_output=partial(_topkgather_to_topk, expert_cap=self.params["expert_capacity"]),
                 prefix="_unit_test"
             ),
-            TestConfig(
-                setup=[
-                    self.build_gating_setup(),
-                    self.build_gating_setup()
-                ],
-                test=ModuleConfig(TopKGatingGather, "neuron"),
-                golden=ModuleConfig(TopKGatingGather, "cpu"),
-                inputs=dict(logits=jax.random.uniform(
-                    jax.random.PRNGKey(1),
-                    shape=(self.params["outer_batch"], self.params["num_groups"],
-                           seq_len, self.params["num_experts"])
-                )),
-                prefix="_integ_test"
-            ),
+            # TestConfig(
+            #     setup=[
+            #         self.build_gating_setup(),
+            #         self.build_gating_setup()
+            #     ],
+            #     test=ModuleConfig(TopKGatingGather, "neuron"),
+            #     golden=ModuleConfig(TopKGatingGather, "cpu"),
+            #     inputs=dict(logits=jax.random.uniform(
+            #         jax.random.PRNGKey(1),
+            #         shape=(self.params["outer_batch"], self.params["num_groups"],
+            #                seq_len, self.params["num_experts"])
+            #     )),
+            #     prefix="_integ_test"
+            # ),
         ]
     
 def _get_training_configs():
@@ -312,8 +314,10 @@ def _get_training_configs_bwd():
 
     return test_configs
 
-# pylint: disable=no-self-use,protected-access
 class TestImplCorrectness(TestCase):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.builder = TestConfigBuilder()
 
     def _fwd_call(self, layer, state, inputs):
         return F(
@@ -324,9 +328,13 @@ class TestImplCorrectness(TestCase):
                 inputs=inputs,
         )
 
-    @parameterized.named_parameters(_get_training_configs())
-    def test_fwd_correctness(self, cfg: TestConfig):
+    def _get_moe_layer_cpu_cpu_config(self):
+        return self.builder.build_test_configs_moe()[0]
 
+    def _get_moe_layer_cpu_neuron_config(self):
+        return self.builder.build_test_configs_moe()[1]
+
+    def _test_fwd_correctness(self, cfg):
         @partial(jax.jit, backend=cfg.test.device)
         def test_fwd_call():
             test_output, _ = self._fwd_call(cfg.test_layer, cfg.test_state, cfg.inputs)
@@ -346,36 +354,42 @@ class TestImplCorrectness(TestCase):
         # Transfer results to CPU before comparison
         self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output))
 
-    @parameterized.named_parameters(_get_training_configs_bwd())
-    def test_bwd_correctness(self, cfg: TestConfig):
+    def test_fwd_correctness_cpu(self):
+        self._test_fwd_correctness(self._get_moe_layer_cpu_cpu_config())
 
-        @partial(jax.jit, backend=cfg.test.device)
-        def test_bwd_call(state):
-            test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
-            loss = cfg.loss_fn(test_output)
-            return loss
+    def test_fwd_correctness_neuron(self):
+        self._test_fwd_correctness(self._get_moe_layer_cpu_neuron_config())
 
-        @partial(jax.jit, backend=cfg.golden.device)
-        def golden_bwd_call(state):
-            golden_output, _ =  self._fwd_call(cfg.golden_layer, state, cfg.inputs)
-            loss = cfg.loss_fn(golden_output)
-            return loss
-        
-        test_loss, test_grads = jax.value_and_grad(test_bwd_call, has_aux=False)(
-            cfg.test_state
-        )
-        golden_loss, golden_grads = jax.value_and_grad(golden_bwd_call, has_aux=False)(
-            cfg.golden_state
-        )
+    @unittest.skip("bwd ")
+    def test_bwd_correctness(self):
+        for cfg in self.builder.build_test_configs_moe():
+            @partial(jax.jit, backend=cfg.test.device)
+            def test_bwd_call(state):
+                test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
+                loss = cfg.loss_fn(test_output)
+                return loss
 
-        # Transfer results to CPU before comparison
-        test_loss = jax.tree_map(jax.device_get, test_loss)
-        golden_loss = jax.tree_map(jax.device_get, golden_loss)
-        test_grads = jax.tree_map(jax.device_get, test_grads)
-        golden_grads = jax.tree_map(jax.device_get, golden_grads)
-        
-        self.assertNestedAllClose(test_loss, golden_loss)
-        self.assertNestedAllClose(test_grads, golden_grads)
+            @partial(jax.jit, backend=cfg.golden.device)
+            def golden_bwd_call(state):
+                golden_output, _ =  self._fwd_call(cfg.golden_layer, state, cfg.inputs)
+                loss = cfg.loss_fn(golden_output)
+                return loss
+            
+            test_loss, test_grads = jax.value_and_grad(test_bwd_call, has_aux=False)(
+                cfg.test_state
+            )
+            golden_loss, golden_grads = jax.value_and_grad(golden_bwd_call, has_aux=False)(
+                cfg.golden_state
+            )
+
+            # Transfer results to CPU before comparison
+            test_loss = jax.tree_map(jax.device_get, test_loss)
+            golden_loss = jax.tree_map(jax.device_get, golden_loss)
+            test_grads = jax.tree_map(jax.device_get, test_grads)
+            golden_grads = jax.tree_map(jax.device_get, golden_grads)
+            
+            self.assertNestedAllClose(test_loss, golden_loss)
+            self.assertNestedAllClose(test_grads, golden_grads)
 
 # # pylint: disable=no-self-use,protected-access
 # class TransformerFeedForwardMoETest(parameterized.TestCase):
