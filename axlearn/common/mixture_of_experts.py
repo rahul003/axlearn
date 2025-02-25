@@ -1385,7 +1385,6 @@ class TransformerFeedForwardMoE(BaseLayer):
                     mesh = thread_resources.env.physical_mesh
                     T = mesh.shape["model"]
                     output = jnp.zeros((T, O, G, group_len, cfg.input_dim), dtype=permuted_output.dtype)
-                    # output = with_sharding_constraint(output, PartitionSpec("model", ("data", "fsdp"), "expert", None, None))
                     min_k = min(self.config.gating.top_k, self.config.num_experts)
                     combine_outputs_sm = shard_map(
                         combine_outputs, 
@@ -1407,7 +1406,6 @@ class TransformerFeedForwardMoE(BaseLayer):
                     output = jnp.sum(output, axis=0)
                 else:
                     output = jnp.zeros((O, G, group_len, cfg.input_dim), dtype=input_dtype)
-                    output = with_sharding_constraint(output, PartitionSpec("model", ("data", "fsdp"), "expert", None, None))
                     min_k = min(self.config.gating.top_k, self.config.num_experts)
                     for k in range(min_k):
                         # indices: (O, G, S)
