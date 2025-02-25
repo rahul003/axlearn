@@ -30,7 +30,7 @@ from typing import Any, Literal, Sequence, Union
 import os
 import jax
 from jax.ad_checkpoint import checkpoint_policies as jax_remat_policies
-
+from axlearn.common.config import config_for_function
 from axlearn.common import causal_lm, config
 from axlearn.common.attention import (
     FusedGroupedQKVLinear,
@@ -53,7 +53,7 @@ from axlearn.common.trainer_config_modifier import (
     ModelConfigModifier,
     PartitionSpecModifier
 )
-from axlearn.common.utils import HybridMeshShape, MeshShape, PartitionSpec, DataPartitionType
+from axlearn.common.utils import HybridMeshShape, MeshShape, PartitionSpec, DataPartitionType, save_and_offload_only_these_names_regex
 from axlearn.experiments.text.gpt.common import (
     MESH_AXIS_NAMES,
     STEP_DTYPE,
@@ -403,7 +403,7 @@ def get_trainer_kwargs(
         trainer_kwargs = dict(
             model_kwargs=dict(
                 num_layers=int(os.getenv("NUM_LAYERS", 4)),
-                hidden_dim=32 * 32,
+                hidden_dim=32 * 4,
                 ffn_dim=scaled_hidden_dim(scale=3.5, round_up_to_multiples_of=128),
                 num_heads=32,
                 num_kv_heads=8,
@@ -448,20 +448,25 @@ def get_trainer_kwargs(
                             ),
                             *trn2_model_modifications,
                             *trn2_partition_spec_modifications,
-                            RematSpecModifier.default_config().set(
-                                remat_policies={
-                                    "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True,
-                                        policy=jax_remat_policies.nothing_saveable,
-                                    ),
-                                }
-                            ),
+                            # RematSpecModifier.default_config().set(
+                            #     remat_policies={
+                            #         "model.decoder.transformer.layer": RematSpec(
+                            #             prevent_cse=True,
+                            #             policy=config_for_function(save_and_offload_only_these_names_regex).set(
+                            #                     names_which_can_be_saved=".*",
+                            #                     names_which_can_be_offloaded="offload",
+                            #                     offload_src="device",
+                            #                     offload_dst="host",
+                            #                 )
+                            #             ),
+                            #     }
+                            # ),
                         ],
                     ),
                 ),
             ),
         )
-    # pylint: enable=use-dict-literal
+
     else:
         raise NotImplementedError(f"Unknown model size {model_size}.")
 
@@ -604,10 +609,10 @@ def model_config(
         expert_cfg=expert_config,
         **kwargs,
     )
-    if flash_attention:
-        cfg.decoder.transformer.layer.remat_spec = RematSpec(
-            prevent_cse=False, policy=jax_remat_policies.dots_saveable
-        )
+    # if flash_attention:
+    #     cfg.decoder.transformer.layer.remat_spec = RematSpec(
+    #         prevent_cse=False, policy=jax_remat_policies.dots_saveable
+    #     )
     return cfg
 
 

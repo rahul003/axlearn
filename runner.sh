@@ -16,7 +16,7 @@ JAX_COORDINATOR_PORT=41001
 export NEURON_RT_ROOT_COMM_ID="${MASTER_ADDR}:${MASTER_PORT}"
 export NEURON_PJRT_PROCESSES_NUM_DEVICES=$(printf '%s,' $(seq 1 $num_nodes | xargs -I {} echo $devices_per_node) | sed 's/,$//')
 export NEURON_PJRT_PROCESS_INDEX=$SLURM_NODEID
-
+# export JAX_PLATFORMS="cpu"
 
 # Install Runtime dependencies
 #sudo dpkg -i /fsx/apoorvgu/aws-neuronx-runtime-lib-2.x.19993.0-1bf746e12.deb
@@ -37,6 +37,8 @@ TEST_ARTIFACTS_PATH="${ARTIFACTS_PATH}/${JOB_ID}"
 mkdir -p "$TEST_ARTIFACTS_PATH"
 NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
 HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
+# --xla_dump_hlo_snapshots
+# --xla_force_host_platform_device_count=64 
 export XLA_FLAGS="--xla_dump_hlo_as_text --xla_dump_hlo_as_proto --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
 
 export MIXTRAL_MOE=$1
@@ -80,7 +82,8 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --no-internal-hlo-remat"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --enable-mixed-precision-accumulation"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} -O1"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --tensorizer-options='--enable-hoist-fsdp-collectives'"
-export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--remat-rope'"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--remat-rope' "
+#--internal-compiler-debug-mode=penguin"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --dump=${NEURON_DUMP_PATH}"
 
 # use to add debug logging at module level in xla

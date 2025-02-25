@@ -587,7 +587,7 @@ class SpmdTrainer(Module):
                         self.summary_writer(self.step, {"average_step_time": average_step_time})
                         num_steps = 0
                         start_time = now
-                    if self.step >= cfg.max_step:
+                    if self.step >= 3:
                         self._step_log("Reached max_step=%s. Stopping", cfg.max_step)
                         break
                 if self.step < cfg.max_step:
@@ -1071,7 +1071,9 @@ class SpmdTrainer(Module):
         return evaler_summaries
 
     def _pjit_train_step(self) -> jax.stages.Wrapped:
-        return pjit(
+        from jax_neuronx.experimental import debug_callback
+        return debug_callback(
+            pjit(
             self._train_step,
             in_shardings=(
                 self._trainer_state_partition_specs,
@@ -1086,6 +1088,7 @@ class SpmdTrainer(Module):
                 ),
             ),
             donate_argnums=(0,),  # donate the state
+            )
         )
 
     def compile_train_step(

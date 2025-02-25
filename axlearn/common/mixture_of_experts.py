@@ -1335,6 +1335,8 @@ class TransformerFeedForwardMoE(BaseLayer):
                 token_assignments= gating.dispatch_tensor
                 
                 token_assignments = with_sharding_constraint(token_assignments, cfg.dim_to_mesh_axis_map["ogec"])
+                z = jnp.any(token_assignments<0)
+                jax.debug.print("token_assignments: {x}", x=z)
                 token_assignments = token_assignments[..., None]       # (O, G, E, C, 1)
                 token_assignments = jnp.expand_dims(token_assignments, axis=2)  # (O, G, 1, E, C, 1)
                 
@@ -1377,6 +1379,8 @@ class TransformerFeedForwardMoE(BaseLayer):
                 token_permutation_idx, expert_index, expert_affinities_masked = token_permutation_idx.astype(jnp.int32), expert_index.astype(jnp.int32), expert_affinities_masked.astype(input_dtype)
                 token_permutation_idx = with_sharding_constraint(token_permutation_idx, cfg.dim_to_mesh_axis_map["ogse"])
                 expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, cfg.dim_to_mesh_axis_map["ogse"])
+                y = jnp.any(token_permutation_idx<0)
+                jax.debug.print("token_permutation: {x}", x=y)
 
                 permuted_output = jnp.reshape(x, (O, G, E*C, M))
                 permuted_output = with_sharding_constraint(permuted_output, cfg.dim_to_mesh_axis_map["ogsM"])
