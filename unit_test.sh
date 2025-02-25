@@ -3,7 +3,7 @@
 # export JAX_PLATFORMS=cpu
 export USE_SHARDMAP_FFN=0
 
-TEST_ARTIFACTS_PATH="/shared/aahila/test_artifacts"
+TEST_ARTIFACTS_PATH="test_artifacts"
 rm -rf "$TEST_ARTIFACTS_PATH"
 mkdir -p "$TEST_ARTIFACTS_PATH"
 NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
@@ -51,9 +51,9 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --dump=${NEURON_DUMP_PATH}"
 
 # JAX Cache
-export JAX_COMPILATION_CACHE_DIR="/shared/aahila/compiler/cache/"
+export JAX_COMPILATION_CACHE_DIR="jax_test_cache/"
 mkdir -p ${JAX_COMPILATION_CACHE_DIR}
 
-echo "setup env vars"
+source ../jaxmoe/bin/activate
 pytest $1
 
