@@ -9,7 +9,7 @@
 # google/praxis:
 # Copyright 2022 The Pax Authors.
 # Licensed under the Apache License, Version 2.0 (the "License").
-"""Integration Test for mixture_of_experts.py"""
+"""Unit Test for mixture_of_experts.py"""
 from functools import partial
 from itertools import product
 
@@ -19,6 +19,7 @@ from absl.testing import absltest, parameterized
 
 from axlearn.common.mixture_of_experts import (
     Top2Gating,
+    TopKGating,
     TransformerFeedForwardMoE,
     TopKGatingGather,
 )
@@ -59,6 +60,35 @@ class TestConfig():
 
         self.test_state = self.test_layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
         self.golden_state = self.test_state
+    
+def _topkgather_to_topk(output, expert_cap):
+    tok_perm_idx, expert_index, exp_aff_mask = output.combine_tensor
+
+    O, G, S, _ = tok_perm_idx.shape
+    E = exp_aff_mask.shape[-1]
+
+    exp_aff = jnp.take_along_axis(exp_aff_mask, expert_index, axis=-1)
+
+    base = jnp.zeros((O, G, S, E * expert_cap), dtype=exp_aff_mask.dtype)
+
+    idx_O, idx_G, idx_S = jnp.meshgrid(
+        jnp.arange(O), 
+        jnp.arange(G), 
+        jnp.arange(S), 
+        indexing='ij'
+    )
+
+    output_tensor = base.at[idx_O[..., None], idx_G[..., None], idx_S[..., None], tok_perm_idx].add(exp_aff)
+    output_tensor = output_tensor.reshape(O, G, S, E, expert_cap)
+
+    dispatch_tensor = output_tensor.astype(bool)
+
+    return TopKGatingGather.Output(
+        combine_tensor=output_tensor,
+        dispatch_tensor=dispatch_tensor,
+        load_balance_loss=output.load_balance_loss,
+        router_z_loss=output.router_z_loss
+    )
 
 class TestConfigBuilder:
     def __init__(self):
@@ -137,18 +167,19 @@ class TestConfigBuilder:
             TestConfig(
                 setup=[
                     self.build_moe_topkgather_setup(),
-                    self.build_moe_topkgather_setup()
+                    self.build_moe_top2_setup()
                 ],
-                test=ModuleConfig(TransformerFeedForwardMoE, "neuron"),
+                test=ModuleConfig(TransformerFeedForwardMoE, "cpu"),
                 golden=ModuleConfig(TransformerFeedForwardMoE, "cpu"),
                 inputs=dict(inputs=jax.random.uniform(
                     jax.random.PRNGKey(1),
                     shape=(self.params["batch_size"], self.params["seq_len"], self.params["input_dim"])
                 )),
                 loss_fn=lambda x: x.mean(),
-                prefix="_integ_test"
+                prefix="_unit_test"
             ),
         ]
+
     def build_test_configs_topk(self):
 
         seq_len = (self.params["batch_size"]*self.params["seq_len"])//(self.params["outer_batch"] * self.params["num_groups"])
@@ -159,14 +190,15 @@ class TestConfigBuilder:
                     self.build_gating_setup(),
                     self.build_gating_setup()
                 ],
-                test=ModuleConfig(TopKGatingGather, "neuron"),
-                golden=ModuleConfig(TopKGatingGather, "cpu"),
+                test=ModuleConfig(TopKGatingGather, "cpu"),
+                golden=ModuleConfig(TopKGating, "cpu"),
                 inputs=dict(logits=jax.random.uniform(
                     jax.random.PRNGKey(1),
                     shape=(self.params["outer_batch"], self.params["num_groups"],
                            seq_len, self.params["num_experts"])
                 )),
-                prefix="_integ_test"
+                conv_output=partial(_topkgather_to_topk, expert_cap=self.params["expert_capacity"]),
+                prefix="_unit_test"
             ),
         ]
     
@@ -256,20 +288,17 @@ class TestImplCorrectness(TestCase):
     def test_fwd_correctness(self, cfg: TestConfig):
 
         @partial(jax.jit, backend=cfg.test.device)
-        def test_fwd_call(inputs):
-            test_output, _ = self._fwd_call(cfg.test_layer, cfg.test_state, inputs)
+        def test_fwd_call():
+            test_output, _ = self._fwd_call(cfg.test_layer, cfg.test_state, cfg.inputs)
             return test_output
 
         @partial(jax.jit, backend=cfg.golden.device)
-        def golden_fwd_call(inputs):
-            golden_output, _ =  self._fwd_call(cfg.golden_layer, cfg.golden_state, inputs)
+        def golden_fwd_call():
+            golden_output, _ =  self._fwd_call(cfg.golden_layer, cfg.golden_state, cfg.inputs)
             return golden_output
         
-
-        inputs_test = jax.device_put(cfg.inputs, jax.devices(cfg.test.device)[0])
-        test_output = test_fwd_call(inputs_test)
-        inputs_golden = jax.device_put(cfg.inputs, jax.devices(cfg.golden.device)[0])
-        golden_output = golden_fwd_call(inputs_golden)
+        test_output = test_fwd_call()
+        golden_output = golden_fwd_call()
 
         if cfg.conv_output != None:
             test_output = cfg.conv_output(test_output)
@@ -281,27 +310,25 @@ class TestImplCorrectness(TestCase):
     def test_bwd_correctness(self, cfg: TestConfig):
 
         @partial(jax.jit, backend=cfg.test.device)
-        def test_bwd_call(inputs):
+        def test_bwd_call(state):
             def loss_fn(state):
-                test_output, _ = self._fwd_call(cfg.test_layer, state, inputs)
+                test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
                 return cfg.loss_fn(test_output)
             
-            loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(cfg.test_state)
+            loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(state)
             return loss, grads
 
         @partial(jax.jit, backend=cfg.golden.device)
-        def golden_bwd_call(inputs):
+        def golden_bwd_call(state):
             def loss_fn(state):
-                golden_output, _ = self._fwd_call(cfg.golden_layer, state, inputs)
+                golden_output, _ = self._fwd_call(cfg.golden_layer, state, cfg.inputs)
                 return cfg.loss_fn(golden_output)
             
-            loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(cfg.golden_state)
+            loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(state)
             return loss, grads
 
-        inputs_test = jax.device_put(cfg.inputs, jax.devices(cfg.test.device)[0])
-        test_loss, test_grads = test_bwd_call(inputs_test)
-        inputs_golden = jax.device_put(cfg.inputs, jax.devices(cfg.golden.device)[0])
-        golden_loss, golden_grads = golden_bwd_call(inputs_golden)
+        test_loss, test_grads = test_bwd_call(cfg.test_state)
+        golden_loss, golden_grads = golden_bwd_call(cfg.golden_state)
 
         # Transfer results to CPU before comparison
         test_loss = jax.tree_map(jax.device_get, test_loss)
