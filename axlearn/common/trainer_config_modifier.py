@@ -57,11 +57,22 @@ def _find_target_module(module_name: str, cfg: SpmdTrainer.Config) -> _FoundModu
     parent_module = None
 
     for target_module_key in target_modules:
+        is_list = False
+        index = None
+        if target_module_key[-1] == "]":
+            is_list = True
+            splits = target_module_key.split("[")
+            index = int(splits[1].split("]")[0])
+            target_module_key = splits[0]
         if not hasattr(curr_module, target_module_key):
             raise ValueError(f"{target_module_key} is not found in {curr_module}.")
         parent_module = curr_module
         key_in_parent = target_module_key
-        curr_module = getattr(curr_module, target_module_key)
+        if is_list:
+            curr_module = curr_module.layer[index]
+        else:
+            curr_module = getattr(curr_module, target_module_key)
+        is_list = False
     return _FoundModule(
         module=curr_module, parent_module=parent_module, key_in_parent=key_in_parent
     )
