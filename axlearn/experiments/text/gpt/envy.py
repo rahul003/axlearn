@@ -493,14 +493,14 @@ def get_trainer_kwargs(
                             ),
                             *trn2_model_modifications,
                             *trn2_partition_spec_modifications,
-                            RematSpecModifier.default_config().set(
-                                remat_policies={
-                                    "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True,
-                                        policy=jax_remat_policies.nothing_saveable,
-                                    ),
-                                }
-                            ),
+                            # RematSpecModifier.default_config().set(
+                            #     remat_policies={
+                            #         "model.decoder.transformer.layer": RematSpec(
+                            #             prevent_cse=True,
+                            #             policy=jax_remat_policies.nothing_saveable,
+                            #         ),
+                            #     }
+                            # ),
                         ],
                     ),
                 ),
@@ -648,10 +648,10 @@ def model_config(
         expert_cfg=expert_config,
         **kwargs,
     )
-    if flash_attention:
-        cfg.decoder.transformer.layer.remat_spec = RematSpec(
-            prevent_cse=False, policy=jax_remat_policies.dots_saveable
-        )
+    # if flash_attention:
+    #     cfg.decoder.transformer.layer.remat_spec = RematSpec(
+    #         prevent_cse=False, policy=jax_remat_policies.dots_saveable
+    #     )
     return cfg
 
 
