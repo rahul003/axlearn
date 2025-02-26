@@ -1338,6 +1338,8 @@ class TransformerFeedForwardMoE(BaseLayer):
                     debug_token_assignments = jnp.any(token_assignments<0)
                     jax.debug.print("x: {x}", x=debug_token_assignments)
                 token_assignments = with_sharding_constraint(token_assignments, cfg.dim_to_mesh_axis_map["ogec"])
+                z = jnp.any(token_assignments<0)
+                jax.debug.print("token_assignments: {x}", x=z)
                 token_assignments = token_assignments[..., None]       # (O, G, E, C, 1)
                 token_assignments = jnp.expand_dims(token_assignments, axis=2)  # (O, G, 1, E, C, 1)
                 
