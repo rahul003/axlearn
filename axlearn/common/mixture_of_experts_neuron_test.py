@@ -41,6 +41,7 @@ from axlearn.common.module import functional as F
 from axlearn.common.test_utils import assert_allclose
 from axlearn.common.test_utils import TestCase
 from axlearn.common.utils import get_recursively, set_recursively, shapes
+import contextlib
 
 MODULE_UNIT_TEST_ATOL=1e-6
 MODULE_UNIT_TEST_RTOL=1e-3
@@ -67,13 +68,14 @@ class TestConfig():
         
         for spec, val in setup[1].items():
             setattr(self.golden.module, spec, val)
-        
-        self.test_layer = test.module.instantiate(parent=None)
 
-        self.golden_layer = golden.module.instantiate(parent=None)
+        with jax.default_device(jax.devices('cpu')[0]):
+            self.test_layer = test.module.instantiate(parent=None)
 
-        self.test_state = self.test_layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
-        self.golden_state = self.test_state
+            self.golden_layer = golden.module.instantiate(parent=None)
+
+            self.test_state = self.test_layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
+            self.golden_state = self.test_state
     
 def _topkgather_to_topk(output, expert_cap):
     tok_perm_idx, expert_index, exp_aff_mask = output.combine_tensor
@@ -112,13 +114,13 @@ class TestConfigBuilder:
         self.params = {
             "batch_size": 1,
             "seq_len": 32,
-            "input_dim": 4,
-            "hidden_dim": 4,
-            "num_experts": 4,
+            "input_dim": 1024,
+            "hidden_dim": 4096,
+            "num_experts": 8,
             "num_groups": 1,
             "outer_batch": 1,
-            "expert_capacity": 1000,
-            "train_capacity_factor": None
+            "expert_capacity": 512,
+            "train_capacity_factor": 2
         }
         return self
     
@@ -318,6 +320,7 @@ class TestImplCorrectness(TestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.builder = TestConfigBuilder()
+        self.cpu_device = jax.devices('cpu')[0]
 
     def _fwd_call(self, layer, state, inputs):
         return F(
@@ -346,42 +349,45 @@ class TestImplCorrectness(TestCase):
             return golden_output
         
         test_output = test_fwd_call()
-        golden_output = golden_fwd_call()
-
-        if cfg.conv_output != None:
-            test_output = cfg.conv_output(test_output)
         
-        # Transfer results to CPU before comparison
-        self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output))
+        golden_output = golden_fwd_call()
+        
+        with jax.default_device(self.cpu_device):
+            if cfg.conv_output != None:
+                test_output = cfg.conv_output(test_output)
+            
+            # Transfer results to CPU before comparison
+            self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output))
 
     def test_fwd_correctness_cpu(self):
         self._test_fwd_correctness(self._get_moe_layer_cpu_cpu_config())
-
+    
     def test_fwd_correctness_neuron(self):
         self._test_fwd_correctness(self._get_moe_layer_cpu_neuron_config())
 
-    @unittest.skip("bwd ")
-    def test_bwd_correctness(self):
-        for cfg in self.builder.build_test_configs_moe():
-            @partial(jax.jit, backend=cfg.test.device)
-            def test_bwd_call(state):
-                test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
-                loss = cfg.loss_fn(test_output)
-                return loss
+    def test_bwd_correctness_cpu(self):
+        self._test_bwd_correctness(self._get_moe_layer_cpu_cpu_config())
+    
+    def test_bwd_correctness_neuron(self):
+        self._test_bwd_correctness(self._get_moe_layer_cpu_neuron_config())
 
-            @partial(jax.jit, backend=cfg.golden.device)
-            def golden_bwd_call(state):
-                golden_output, _ =  self._fwd_call(cfg.golden_layer, state, cfg.inputs)
-                loss = cfg.loss_fn(golden_output)
-                return loss
-            
-            test_loss, test_grads = jax.value_and_grad(test_bwd_call, has_aux=False)(
-                cfg.test_state
-            )
-            golden_loss, golden_grads = jax.value_and_grad(golden_bwd_call, has_aux=False)(
-                cfg.golden_state
-            )
+    def _test_bwd_correctness(self, cfg):
+        
+        def fwd_call(state):
+            test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
+            loss = cfg.loss_fn(test_output)
+            return loss
 
+        def run_step(state):
+            return jax.value_and_grad(fwd_call, has_aux=False)(state)
+
+        test_jit_vg = jax.jit(run_step, backend=cfg.test.device)
+        golden_jit_vg = jax.jit(run_step, backend=cfg.golden.device)
+
+        test_loss, test_grads = test_jit_vg(cfg.test_state)
+        golden_loss, golden_grads = test_jit_vg(cfg.golden_state)
+        
+        with jax.default_device(self.cpu_device):
             # Transfer results to CPU before comparison
             test_loss = jax.tree_map(jax.device_get, test_loss)
             golden_loss = jax.tree_map(jax.device_get, golden_loss)
@@ -1148,4 +1154,4 @@ class TestImplCorrectness(TestCase):
 
 
 if __name__ == "__main__":
-    absltest.main()
+    unittest.main()
