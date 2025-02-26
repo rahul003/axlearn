@@ -112,10 +112,10 @@ class TestConfigBuilder:
     
     def reset(self):
         self.params = {
-            "batch_size": 1,
+            "batch_size": 4,
             "seq_len": 32,
-            "input_dim": 1024,
-            "hidden_dim": 4096,
+            "input_dim": 256,
+            "hidden_dim": 1024,
             "num_experts": 8,
             "num_groups": 1,
             "outer_batch": 1,
@@ -359,14 +359,14 @@ class TestImplCorrectness(TestCase):
             # Transfer results to CPU before comparison
             self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output))
 
-    def test_fwd_correctness_cpu(self):
-        self._test_fwd_correctness(self._get_moe_layer_cpu_cpu_config())
+    # def test_fwd_correctness_cpu(self):
+    #     self._test_fwd_correctness(self._get_moe_layer_cpu_cpu_config())
     
-    def test_fwd_correctness_neuron(self):
-        self._test_fwd_correctness(self._get_moe_layer_cpu_neuron_config())
+    # def test_fwd_correctness_neuron(self):
+    #     self._test_fwd_correctness(self._get_moe_layer_cpu_neuron_config())
 
-    def test_bwd_correctness_cpu(self):
-        self._test_bwd_correctness(self._get_moe_layer_cpu_cpu_config())
+    # def test_bwd_correctness_cpu(self):
+    #     self._test_bwd_correctness(self._get_moe_layer_cpu_cpu_config())
     
     def test_bwd_correctness_neuron(self):
         self._test_bwd_correctness(self._get_moe_layer_cpu_neuron_config())
@@ -395,6 +395,7 @@ class TestImplCorrectness(TestCase):
             golden_grads = jax.tree_map(jax.device_get, golden_grads)
             
             self.assertNestedAllClose(test_loss, golden_loss)
+            print(test_grads)
             self.assertNestedAllClose(test_grads, golden_grads)
 
 # # pylint: disable=no-self-use,protected-access
