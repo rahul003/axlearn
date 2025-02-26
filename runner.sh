@@ -37,7 +37,7 @@ TEST_ARTIFACTS_PATH="${ARTIFACTS_PATH}/${JOB_ID}"
 mkdir -p "$TEST_ARTIFACTS_PATH"
 NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
 HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
-export XLA_FLAGS="--xla_dump_hlo_as_text --xla_dump_hlo_as_proto --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
+export XLA_FLAGS="--xla_dump_hlo_as_text --xla_dump_hlo_snapshots --xla_dump_hlo_as_proto --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
 
 export MIXTRAL_MOE=$1
 export NUM_LAYERS=$2
@@ -90,6 +90,8 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --dump=${NEURON_DUMP_PATH}"
 # JAX Cache
 export JAX_COMPILATION_CACHE_DIR="cache/"
 mkdir -p ${JAX_COMPILATION_CACHE_DIR}
+
+export DEBUG_CALLBACK=0
 
 deactivate || true
 # conda

@@ -1017,6 +1017,12 @@ class SpmdTrainer(Module):
             A dict containing 'loss' and 'aux' outputs. If force_run_evals is a set,
             force run the evalers in the set and return 'evaler_summaries' output.
         """
+
+        FORCE_EVALS=False
+        if FORCE_EVALS:
+            evaler_summaries = self._run_eval(force_runs=self._evalers.keys())
+            raise RuntimeError("Forced evals and exit")
+
         with jax.profiler.StepTraceAnnotation("train", step_num=self.step):
             run_with_xsc = self._xsc_check_policy and self._xsc_check_policy(self.step)
             compiled_train_step_fn = self._get_compiled_train_step_fn(
@@ -1071,22 +1077,42 @@ class SpmdTrainer(Module):
         return evaler_summaries
 
     def _pjit_train_step(self) -> jax.stages.Wrapped:
-        return pjit(
-            self._train_step,
-            in_shardings=(
-                self._trainer_state_partition_specs,
-                self._train_step_input_partition_specs(),
-            ),
-            out_shardings=(
-                self._trainer_state_partition_specs,
-                dict(
-                    summaries=None,
-                    loss=None,
-                    aux=None,
+        if os.getenv('DEBUG_CALLBACK', '0') == '1':
+            from jax_neuronx.experimental import debug_callback
+            return debug_callback(
+                pjit(
+                self._train_step,
+                in_shardings=(
+                    self._trainer_state_partition_specs,
+                    self._train_step_input_partition_specs(),
                 ),
-            ),
-            donate_argnums=(0,),  # donate the state
-        )
+                out_shardings=(
+                    self._trainer_state_partition_specs,
+                    dict(
+                        summaries=None,
+                        loss=None,
+                        aux=None,
+                    ),
+                ),
+                donate_argnums=(0,),  # donate the state
+            ))
+        else:
+            return pjit(
+                self._train_step,
+                in_shardings=(
+                    self._trainer_state_partition_specs,
+                    self._train_step_input_partition_specs(),
+                ),
+                out_shardings=(
+                    self._trainer_state_partition_specs,
+                    dict(
+                        summaries=None,
+                        loss=None,
+                        aux=None,
+                    ),
+                ),
+                donate_argnums=(0,),  # donate the state
+            )
 
     def compile_train_step(
         self,

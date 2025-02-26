@@ -64,6 +64,7 @@ from axlearn.common.utils import (
 )
 
 _USING_SHARDMAP_FFN=int(os.getenv('USE_SHARDMAP_FFN', 1))
+_DEBUG_CALLBACK=os.getenv('DEBUG_CALLBACK', '0')
 
 @jax.jit
 def down_proj(x, wo_weight):
@@ -1333,7 +1334,9 @@ class TransformerFeedForwardMoE(BaseLayer):
             with jax.named_scope("dispatch"):
                 # token_assignments: (O, G, E, C)
                 token_assignments= gating.dispatch_tensor
-                
+                if _DEBUG_CALLBACK == '1':
+                    debug_token_assignments = jnp.any(token_assignments<0)
+                    jax.debug.print("x: {x}", x=debug_token_assignments)
                 token_assignments = with_sharding_constraint(token_assignments, cfg.dim_to_mesh_axis_map["ogec"])
                 token_assignments = token_assignments[..., None]       # (O, G, E, C, 1)
                 token_assignments = jnp.expand_dims(token_assignments, axis=2)  # (O, G, 1, E, C, 1)
@@ -1377,7 +1380,9 @@ class TransformerFeedForwardMoE(BaseLayer):
                 token_permutation_idx, expert_index, expert_affinities_masked = token_permutation_idx.astype(jnp.int32), expert_index.astype(jnp.int32), expert_affinities_masked.astype(input_dtype)
                 token_permutation_idx = with_sharding_constraint(token_permutation_idx, cfg.dim_to_mesh_axis_map["ogse"])
                 expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, cfg.dim_to_mesh_axis_map["ogse"])
-
+                if _DEBUG_CALLBACK == '1':
+                    debug_token_permute = jnp.any(token_permutation_idx<0)
+                    jax.debug.print("y: {y}", y=debug_token_permute)
                 permuted_output = jnp.reshape(x, (O, G, E*C, M))
                 permuted_output = with_sharding_constraint(permuted_output, cfg.dim_to_mesh_axis_map["ogsM"])
 
