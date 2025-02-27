@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 
 # export JAX_PLATFORMS=cpu
-export USE_SHARDMAP_FFN=0
+export USE_SHARDMAP_FFN=1
 
-TEST_ARTIFACTS_PATH="/shared/aahila/test_artifacts"
+TEST_ARTIFACTS_PATH="/shared/drcanchi/test_artifacts"
 rm -rf "$TEST_ARTIFACTS_PATH"
 mkdir -p "$TEST_ARTIFACTS_PATH"
 NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
 HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
-export XLA_FLAGS="--xla_dump_hlo_as_text --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
+export XLA_FLAGS="--xla_force_host_platform_device_count=64 --xla_dump_hlo_as_text --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
 
 # PJRT Flags 
 export NEURON_FSDP_NUM_LAYER_EARLY_AG_SHIFT=1
@@ -51,7 +51,7 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --dump=${NEURON_DUMP_PATH}"
 
 # JAX Cache
-export JAX_COMPILATION_CACHE_DIR="/shared/aahila/compiler/cache/"
+export JAX_COMPILATION_CACHE_DIR="/shared/drcanchi/compiler/cache/"
 mkdir -p ${JAX_COMPILATION_CACHE_DIR}
 
 echo "setup env vars"
