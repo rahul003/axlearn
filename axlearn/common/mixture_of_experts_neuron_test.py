@@ -11,10 +11,8 @@
 # Licensed under the Apache License, Version 2.0 (the "License").
 """Integration Test for mixture_of_experts.py"""
 from functools import partial
-from itertools import product
 
 import jax
-import jax.numpy as jnp
 from absl.testing import absltest, parameterized
 
 from axlearn.common.module import functional as F
@@ -42,16 +40,15 @@ class TestImplCorrectnessInteg(TestCase):
     @parameterized.named_parameters(get_training_configs())
     def test_fwd_correctness(self, cfg: TestConfig):
 
-        @partial(jax.jit, backend=cfg.test.device)
+        @partial(jax.jit, device=jax.devices(cfg.test.device)[0])
         def test_fwd_call(inputs):
             test_output, _ = self._fwd_call(cfg.test_layer, cfg.test_state, inputs)
             return test_output
 
-        @partial(jax.jit, backend=cfg.golden.device)
+        @partial(jax.jit, device=jax.devices(cfg.golden.device)[0])
         def golden_fwd_call(inputs):
             golden_output, _ =  self._fwd_call(cfg.golden_layer, cfg.golden_state, inputs)
             return golden_output
-        
 
         inputs_test = jax.device_put(cfg.inputs, jax.devices(cfg.test.device)[0])
         test_output = test_fwd_call(inputs_test)

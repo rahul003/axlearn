@@ -18,6 +18,12 @@ from axlearn.common.mixture_of_experts import (
     TopKGatingGather,
 )
 
+from axlearn.common.layers import (
+    Dropout,
+    StochasticDepth,
+    RMSNorm,
+)
+
 jax.config.update('jax_platform_name', 'cpu')
 
 MODULE_UNIT_TEST_ATOL=1e-6
@@ -42,16 +48,17 @@ class TestConfig():
 
         for spec, val in setup[0].items():
             setattr(self.test.module, spec, val)
-        
+
         for spec, val in setup[1].items():
             setattr(self.golden.module, spec, val)
-        
-        self.test_layer = test.module.instantiate(parent=None)
 
-        self.golden_layer = golden.module.instantiate(parent=None)
+        with jax.default_device(jax.devices(self.test.device)[0]):
+            self.test_layer = test.module.instantiate(parent=None)
+            self.test_state = self.test_layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
 
-        self.test_state = self.test_layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
-        self.golden_state = self.test_state
+        with jax.default_device(jax.devices(self.golden.device)[0]):
+            self.golden_layer = golden.module.instantiate(parent=None)
+            self.golden_state = jax.device_put(self.test_state, jax.devices(self.golden.device)[0])
 
 def _topkgather_to_topk(output, expert_cap):
     tok_perm_idx, expert_index, exp_aff_mask = output.combine_tensor
@@ -130,7 +137,10 @@ class TestConfigBuilder:
                 name="gating",
                 expert_capacity=self.params["expert_capacity"],
                 train_capacity_factor=self.params["train_capacity_factor"]
-            )
+            ),
+            # "norm" : RMSNorm.default_config().set(eps=1e-5, forward_dtype=None),
+            "dropout" : Dropout.default_config().set(rate=None),
+            "stochastic_depth" : StochasticDepth.default_config().set(rate=None)
         }
     
     def build_moe_top2_setup(self):
@@ -227,7 +237,7 @@ class TestConfigBuilder:
             ),
         ]
     
-    def build_grid_space():
+    def build_grid_space(self):
         # Grid space for testing
         batchs =            [1, 4]
         seqs =              [16, 128]
@@ -242,7 +252,7 @@ class TestConfigBuilder:
 
         # Custom Configs
         # b s i h e g ob ec
-        grid_space.extend((2, 100, 64, 128, 2, 1, 1, 5))
+        grid_space.extend([(2, 100, 64, 128, 2, 1, 1, 5)])
 
         return grid_space
 
