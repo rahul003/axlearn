@@ -23,25 +23,6 @@ jax.config.update('jax_platform_name', 'cpu')
 MODULE_UNIT_TEST_ATOL=1e-6
 MODULE_UNIT_TEST_RTOL=1e-3
 
-# Grid space for testing
-# batchs =            [1, 4]
-# seqs =              [16, 128]
-# input_dims =        [64]
-# hidden_dims =       [128]
-# num_experts =       [2, 8]
-# num_groups =        [1, 4]
-# outer_batches =     [1, 2]
-# expert_capacities = [2, 1000]
-
-batchs =            [1]
-seqs =              [16]
-input_dims =        [64]
-hidden_dims =       [128]
-num_experts =       [2]
-num_groups =        [1]
-outer_batches =     [1]
-expert_capacities = [2]
-
 class ModuleConfig():
     def __init__(self, module = None, device = "cpu", mesh = (1,)):
         assert module is not None
@@ -246,13 +227,32 @@ class TestConfigBuilder:
             ),
         ]
     
+    def build_grid_space():
+        # Grid space for testing
+        batchs =            [1, 4]
+        seqs =              [16, 128]
+        input_dims =        [64]
+        hidden_dims =       [128]
+        num_experts =       [2, 8]
+        num_groups =        [1, 4]
+        outer_batches =     [1, 2]
+        expert_capacities = [2, 1000]
+
+        grid_space = list(product(batchs, seqs, input_dims, hidden_dims, num_experts, num_groups, outer_batches, expert_capacities))
+
+        # Custom Configs
+        # b s i h e g ob ec
+        grid_space.extend((2, 100, 64, 128, 2, 1, 1, 5))
+
+        return grid_space
+
+    
 def get_training_configs(is_unit: bool = False):
     builder = TestConfigBuilder()
 
     test_configs = []
 
-    for (batch, seq, input_dim,  hidden_dim, n_experts, n_groups, out_batch, capacity) in product(
-         batchs, seqs, input_dims, hidden_dims, num_experts, num_groups, outer_batches, expert_capacities):
+    for (batch, seq, input_dim,  hidden_dim, n_experts, n_groups, out_batch, capacity) in builder.build_grid_space():
         
         if batch % out_batch != 0:
             continue

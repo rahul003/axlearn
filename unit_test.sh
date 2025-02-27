@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-# export JAX_PLATFORMS=cpu
 export USE_SHARDMAP_FFN=0
 
 TEST_ARTIFACTS_PATH="/shared/aahila/test_artifacts"
@@ -45,6 +44,7 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-num-neuroncores-per-sengin
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --model-type transformer"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --no-internal-hlo-remat"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --enable-mixed-precision-accumulation"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options=--verify-hlo"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} -O1"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --tensorizer-options='--enable-hoist-fsdp-collectives'"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--remat-rope'"
