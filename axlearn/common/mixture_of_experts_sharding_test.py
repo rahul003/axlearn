@@ -13,6 +13,7 @@
 import copy
 from functools import partial
 from itertools import product
+import math 
 
 import jax
 import jax.numpy as jnp
@@ -84,9 +85,10 @@ class TestConfig():
         self.test = test
         self.golden = golden if golden is not None else test
         self.input_shape = input_shape
-        self.inputs = inputs  
+        self.inputs = inputs  # not used
         self.loss_fn = loss_fn
         self.conv_output = conv_output
+        self.num_devices = None 
         self.mesh_dims = self.get_mesh_from_spec(mesh_spec)
         self.prefix = prefix
 
@@ -103,34 +105,24 @@ class TestConfig():
         for spec, val in setup[1].items():
             setattr(self.golden.module, spec, val) 
         
-        if self.mesh_dims:
-            outer_batch = self.get_outer_batch() 
-            setattr(self.test.module, "outer_batch", outer_batch)
-            setattr(self.golden.module, "outer_batch", outer_batch)
-        
-        if self.mesh_dims:
-            
-            self.instantiate_modules_with_mesh() 
+        outer_batch = self.get_outer_batch() 
+        setattr(self.test.module, "outer_batch", outer_batch)
+        setattr(self.golden.module, "outer_batch", outer_batch)
+                    
+        self.instantiate_modules_with_mesh() 
 
-            #specify outsharding for jax.jit
-            out_pspec = PartitionSpec(('data','fsdp'), None, 'model')
-            self.out_shard_test = NamedSharding(mesh=self.mesh_test, spec = out_pspec) 
-            self.out_shard_golden = NamedSharding(mesh=self.mesh_golden, spec = out_pspec)
-
-        else: # TODO: merge code path for no explicit mesh 
-            self.test_layer = test.module.instantiate(parent=None)
-            self.golden_layer = golden.module.instantiate(parent=None)
-            self.test_state = self.test_layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
-            self.golden_state = self.test_state
-
+        #specify outsharding for jax.jit
+        out_pspec = PartitionSpec(('data','fsdp'), None, 'model')
+        self.out_shard_test = NamedSharding(mesh=self.mesh_test, spec = out_pspec) 
+        self.out_shard_golden = NamedSharding(mesh=self.mesh_golden, spec = out_pspec)
 
     def get_mesh_from_spec(self, mesh_spec):  
 
-        if not mesh_spec: 
-            return None 
-
         mesh = mesh_shape_from_axes(**mesh_spec)
-        mesh = infer_mesh_shape(mesh, num_devices=64) # TODO: support variable device count
+        mesh = infer_mesh_shape(mesh, num_devices=self.num_devices) 
+        self.num_devices = math.prod(mesh)
+
+        print("inferred mesh: ", mesh)
 
         return mesh 
     
@@ -142,7 +134,7 @@ class TestConfig():
 
         print("Instantiating module with mesh")
         device_type = self.test.device
-        devices = jax.devices(device_type) 
+        devices = jax.devices(device_type)[:self.num_devices]
         print("Test devices: ", devices)
         self.mesh_test = jax.sharding.Mesh(mesh_utils.create_device_mesh(self.mesh_dims, devices=devices), MESH_AXIS_NAMES) 
         with self.mesh_test: 
@@ -152,7 +144,7 @@ class TestConfig():
                     jax.random.PRNGKey(1), shape=self.input_shape))
 
         device_type = self.golden.device
-        devices = jax.devices(device_type) 
+        devices = jax.devices(device_type)[:self.num_devices]
         print("Golden devices: ", devices)
         self.mesh_golden = jax.sharding.Mesh(mesh_utils.create_device_mesh(self.mesh_dims, devices=devices), MESH_AXIS_NAMES) 
         with self.mesh_golden: 
@@ -363,7 +355,7 @@ def _get_training_configs():
     num_groups =        [1]
     outer_batches =     [1]
     expert_capacities = [2]
-    mesh_specs            =  [{"fsdp":-1, "model":4}]
+    mesh_specs       =  [{}, {"fsdp":-1, "model":4}]
 
     test_configs = []
 
@@ -383,7 +375,7 @@ def _get_training_configs():
         ).with_mesh_settings(
             mesh_spec
         ).build_test_configs_moe()
-        name = f"MoE_b{batch}_s{seq}_i{input_dim}_h{hidden_dim}_e{n_experts}_g{n_groups}_ob{out_batch}_ec{capacity}"
+        name = f"MoE_b{batch}_s{seq}_i{input_dim}_h{hidden_dim}_e{n_experts}_g{n_groups}_ob{out_batch}_ec{capacity}_mesh{mesh_spec}"
         test_configs.extend([(name + cfg.prefix, cfg) for cfg in config])
         
         # config = builder.build_test_configs_topk()
