@@ -86,7 +86,7 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --no-internal-hlo-remat"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --enable-mixed-precision-accumulation"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} -O1"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --tensorizer-options='--enable-hoist-fsdp-collectives'"
-export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--remat-rope'"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--remat-rope --verify-hlo'"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --dump=${NEURON_DUMP_PATH}"
 
 # use to add debug logging at module level in xla
@@ -133,9 +133,16 @@ OUTPUT_DIR="${TEST_ARTIFACTS_PATH}/axlearn_out"
 mkdir -p ${OUTPUT_DIR}
 DATA_DIR="gs://axlearn-public/tensorflow_datasets"
 # fuji-7B-v2-flash
+
+jax_backend=${3:-"neuron"}
+if [ "$jax_backend" == "cpu" ]; then
+	export XLA_FLAGS="${XLA_FLAGS} --xla_force_host_platform_device_count=64 "
+	export JAX_PLATFORMS="cpu"
+fi
+
 python -m axlearn.common.launch_trainer_main \
 	    --module=text.gpt.c4_trainer --config=envy-Mistral-8x7B \
 	        --trainer_dir=$OUTPUT_DIR --data_dir=$DATA_DIR \
-		    --jax_backend=neuron --mesh_selector=neuron-trn2.48xlarge-64 \
+		    --jax_backend=$jax_backend --mesh_selector=neuron-trn2.48xlarge-64 \
 		        --distributed_coordinator=$MASTER_ADDR:$JAX_COORDINATOR_PORT --num_processes=$num_nodes \
 			    --process_id=$NEURON_PJRT_PROCESS_INDEX
