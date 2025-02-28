@@ -112,7 +112,8 @@ class TestConfig():
         self.instantiate_modules_with_mesh() 
 
         #specify outsharding for jax.jit
-        out_pspec = PartitionSpec(('data','fsdp'), None, 'model')
+        #out_pspec = PartitionSpec(('data','fsdp'), None, 'model') 
+        out_pspec = PartitionSpec()
         self.out_shard_test = NamedSharding(mesh=self.mesh_test, spec = out_pspec) 
         self.out_shard_golden = NamedSharding(mesh=self.mesh_golden, spec = out_pspec)
 
@@ -384,38 +385,6 @@ def _get_training_configs():
 
     return test_configs
 
-def _get_training_configs_bwd():
-    builder = TestConfigBuilder()
-
-    batchs =            [1, 4]
-    seqs =              [16, 128]
-    input_dims =        [64]
-    hidden_dims =       [128]
-    num_experts =       [2, 8]
-    num_groups =        [1, 4]
-    outer_batches =     [1, 2]
-    expert_capacities = [2, 1000]
-
-    test_configs = []
-
-    for (batch, seq, input_dim,  hidden_dim, n_experts, n_groups, out_batch, capacity) in product(
-         batchs, seqs, input_dims, hidden_dims, num_experts, num_groups, outer_batches, expert_capacities):
-        
-        if batch % out_batch != 0:
-            continue
-
-        config = builder.reset().with_dimensions(batch, seq, input_dim).with_expert_settings(
-                    hidden_dim,
-                    out_batch,
-                    n_groups,
-                    n_experts,
-                    capacity,
-                    train_capacity_factor=None
-                ).build_test_configs_moe()
-        name = f"b{batch}_s{seq}_i{input_dim}_h{hidden_dim}_e{n_experts}_g{n_groups}_ob{out_batch}_ec{capacity}"
-        test_configs.extend([(name + cfg.prefix, cfg) for cfg in config])
-
-    return test_configs
 
 # pylint: disable=no-self-use,protected-access
 class TestImplCorrectness(TestCase):
@@ -453,36 +422,40 @@ class TestImplCorrectness(TestCase):
         # Transfer results to CPU before comparison
         self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output))
 
-    # @parameterized.named_parameters(_get_training_configs_bwd())
-    # def test_bwd_correctness(self, cfg: TestConfig):
+    @parameterized.named_parameters(_get_training_configs())
+    def test_bwd_correctness(self, cfg: TestConfig):
 
-    #     @partial(jax.jit, backend=cfg.test.device)
-    #     def test_bwd_call(state):
-    #         test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.inputs)
-    #         loss = cfg.loss_fn(test_output)
-    #         return loss
+        @partial(jax.jit, out_shardings=cfg.out_shard_test)
+        def test_bwd_call():
+            def loss_fn(state):
+                test_output, _ = self._fwd_call(cfg.test_layer, state, cfg.test_inputs)
+                return cfg.loss_fn(test_output)
+            
+            loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(cfg.test_state)
+            return  loss, grads
 
-    #     @partial(jax.jit, backend=cfg.golden.device)
-    #     def golden_bwd_call(state):
-    #         golden_output, _ =  self._fwd_call(cfg.golden_layer, state, cfg.inputs)
-    #         loss = cfg.loss_fn(golden_output)
-    #         return loss
+        @partial(jax.jit, out_shardings=cfg.out_shard_golden)
+        def golden_bwd_call():
+            def loss_fn(state):
+                golden_output, _ = self._fwd_call(cfg.golden_layer, state, cfg.golden_inputs)
+                return cfg.loss_fn(golden_output)
+            
+            loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(cfg.golden_state)
+            return loss, grads
         
-    #     test_loss, test_grads = jax.value_and_grad(test_bwd_call, has_aux=False)(
-    #         cfg.test_state
-    #     )
-    #     golden_loss, golden_grads = jax.value_and_grad(golden_bwd_call, has_aux=False)(
-    #         cfg.golden_state
-    #     )
+        with cfg.mesh_test:
+            test_loss, test_grads = test_bwd_call()
+        with cfg.mesh_golden:
+             golden_loss, golden_grads = golden_bwd_call()
 
-    #     # Transfer results to CPU before comparison
-    #     test_loss = jax.tree_map(jax.device_get, test_loss)
-    #     golden_loss = jax.tree_map(jax.device_get, golden_loss)
-    #     test_grads = jax.tree_map(jax.device_get, test_grads)
-    #     golden_grads = jax.tree_map(jax.device_get, golden_grads)
+        # Transfer results to CPU before comparison
+        test_loss = jax.device_get(test_loss)
+        golden_loss = jax.device_get( golden_loss)
+        test_grads = jax.device_get( test_grads)
+        golden_grads = jax.device_get( golden_grads)
         
-    #     self.assertNestedAllClose(test_loss, golden_loss)
-    #     self.assertNestedAllClose(test_grads, golden_grads)
+        self.assertNestedAllClose(test_loss, golden_loss)
+        self.assertNestedAllClose(test_grads, golden_grads)
 
 
 
