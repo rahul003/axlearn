@@ -51,9 +51,9 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --dump=${NEURON_DUMP_PATH}"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --auto-cast=none"
 
-# JAX Cache
-export JAX_COMPILATION_CACHE_DIR="/shared/aahila/compiler/cache/"
-mkdir -p ${JAX_COMPILATION_CACHE_DIR}
+# # JAX Cache
+# export JAX_COMPILATION_CACHE_DIR="/shared/aahila/compiler/cache/"
+# mkdir -p ${JAX_COMPILATION_CACHE_DIR}
 
 echo "setup env vars"
 pytest $1
