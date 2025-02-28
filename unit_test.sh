@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 
+export USE_SHARDMAP_FFN=0
+
 TEST_ARTIFACTS_PATH="/shared/aahila/test_artifacts"
 rm -rf "$TEST_ARTIFACTS_PATH"
 mkdir -p "$TEST_ARTIFACTS_PATH"
 NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
 HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
-export XLA_FLAGS="--xla_dump_hlo_as_text --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
+export XLA_FLAGS="--xla_dump_hlo_as_text --xla_dump_hlo_snapshots --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
 
 # PJRT Flags 
 export NEURON_FSDP_NUM_LAYER_EARLY_AG_SHIFT=1
@@ -13,7 +15,7 @@ export NEURON_FSDP_NUM_LAYER_LATE_RS_SHIFT=2
 export NEURON_ENABLE_INT_MATMUL_DOWNCAST=1
 export NEURON_FSDP=0
 export NEURON_FSDP_NUM_LAYER_COALESCE=-1
-export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1
+export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=0
 
 # Neuron runtime flags
 export NEURON_RT_DBG_CC_DMA_PACKET_SIZE=4096 && export NEURON_RT_DBG_DMA_PACKETIZATION_SIZE=104857
@@ -42,14 +44,16 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-num-neuroncores-per-sengin
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --model-type transformer"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --no-internal-hlo-remat"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --enable-mixed-precision-accumulation"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options=--verify-hlo"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} -O1"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --tensorizer-options='--enable-hoist-fsdp-collectives'"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--remat-rope'"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --dump=${NEURON_DUMP_PATH}"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --auto-cast=none"
 
-# JAX Cache
-export JAX_COMPILATION_CACHE_DIR="/shared/aahila/compiler/cache/"
-mkdir -p ${JAX_COMPILATION_CACHE_DIR}
+# # JAX Cache
+# export JAX_COMPILATION_CACHE_DIR="/shared/aahila/compiler/cache/"
+# mkdir -p ${JAX_COMPILATION_CACHE_DIR}
 
 echo "setup env vars"
 pytest $1

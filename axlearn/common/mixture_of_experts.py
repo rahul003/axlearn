@@ -357,7 +357,7 @@ class Top2Gating(BaseGating):
         mask_dtype: jnp.dtype = jnp.int32
         # Set expert_capacity to at least (group_size * capacity_factor) / num_experts. Default
         # to 2.0 for top-2 gating.
-        train_capacity_factor: float = 100.0
+        train_capacity_factor: float = 2.0
         eval_capacity_factor: float = 2.0
         # Number of examples per minibatch/group per expert. Each example is typically a vector
         # of size input_dim, representing embedded token or an element of Transformer layer output.
@@ -1089,7 +1089,7 @@ class TopKGatingGather(TopKGating):
             zero_tensor = jnp.zeros(1, dtype=token_permutation_idx.dtype)
             token_permutation_idx = jnp.maximum(token_permutation_idx, zero_tensor)
             token_assignments = jnp.maximum(token_assignments, zero_tensor)
-
+            
         with jax.named_scope("aux_loss"):
             aux_loss = self.compute_aux_loss(self.config, expert_mask_pre_capacity_drop, raw_gates)
         
