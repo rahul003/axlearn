@@ -17,17 +17,6 @@ export NEURON_RT_ROOT_COMM_ID="${MASTER_ADDR}:${MASTER_PORT}"
 export NEURON_PJRT_PROCESSES_NUM_DEVICES=$(printf '%s,' $(seq 1 $num_nodes | xargs -I {} echo $devices_per_node) | sed 's/,$//')
 export NEURON_PJRT_PROCESS_INDEX=$SLURM_NODEID
 
-
-# Install Runtime dependencies
-#sudo dpkg -i /fsx/apoorvgu/aws-neuronx-runtime-lib-2.x.19993.0-1bf746e12.deb
-#sudo dpkg -i /fsx/apoorvgu/aws-neuronx-collectives-2.x.21370.0-8cbb4877b.deb
-#if ! apt list 2>/dev/null | grep -q "^aws-neuronx-dkms/now 2.x.4125.0 amd64 \[installed,local\]"; then sudo dpkg -i --force-all /fsx/thangakr/binaries/aws-neuronx-dkms_2.x.4125.0_amd64.deb; fi
-#CHECK_STATUS=$?
-#if [ $CHECK_STATUS -ne 0 ]; then
-#	    echo "Driver version check failed! Terminating job."
-#	        exit 1
-#fi
-
 # Print nodenames for debug
 hostname
 
@@ -37,7 +26,7 @@ TEST_ARTIFACTS_PATH="${ARTIFACTS_PATH}/${JOB_ID}"
 mkdir -p "$TEST_ARTIFACTS_PATH"
 NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
 HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
-export XLA_FLAGS="--xla_dump_hlo_as_text --xla_dump_hlo_as_proto --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
+export XLA_FLAGS="--xla_dump_hlo_as_text --xla_dump_hlo_snapshots --xla_dump_hlo_as_proto --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
 
 
 # MIXTRAL_MOE being 
@@ -102,7 +91,7 @@ deactivate || true
 # eval "$(/fsx/apoorvgu/conda/bin/conda shell.bash hook)"
 # conda activate py310
 
-source /fsx/huilgolr/jaxmoe/bin/activate
+source ../jaxmoe/bin/activate
 
 echo "Listing apt dependencies"
 apt list --installed | grep neuron
