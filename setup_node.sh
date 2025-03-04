@@ -54,14 +54,8 @@ sudo apt-get install -y google-perftools
 TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` && INSTANCE_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s  http://169.254.169.254/latest/meta-data/instance-id)
 echo "instance_id:$INSTANCE_ID hostname:$(hostname)"
 echo "runtime versions"
-sudo apt list | grep neuron | grep installed
-
 echo "==============================================="
 echo "Dependency versions"
 echo "==============================================="
 apt list | grep neuron | grep installed
-pip freeze | grep neuron
-echo "==============================================="
-
-neuron-ls
 echo "Setup took $SECONDS s"
