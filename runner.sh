@@ -166,11 +166,10 @@ else
 	# 0 adds dense MLP layers
 	# 1 adds all sparse MLP layers
 	# 2 adds alternating sparse and dense layers
-
 	export MIXTRAL_MOE=$1
 	export NUM_LAYERS=$2
 	python -m axlearn.common.launch_trainer_main \
-		--module=text.gpt.c4_trainer --config=envy-Mistral-150B \
+		--module=text.gpt.c4_trainer --config=envy-Mistral-toy \
 		--trainer_dir=$OUTPUT_DIR --data_dir=$DATA_DIR \
 		--jax_backend=$jax_backend --mesh_selector=neuron-trn2.48xlarge-64 \
 		--distributed_coordinator=$MASTER_ADDR:$JAX_COORDINATOR_PORT --num_processes=$num_nodes \
