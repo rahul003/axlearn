@@ -26,16 +26,8 @@ TEST_ARTIFACTS_PATH="${ARTIFACTS_PATH}/${JOB_ID}"
 mkdir -p "$TEST_ARTIFACTS_PATH"
 NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
 HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
+PROFILE_DUMP_PATH=${TEST_ARTIFACTS_PATH}/profiles
 export XLA_FLAGS="--xla_dump_hlo_as_text --xla_dump_hlo_snapshots --xla_dump_hlo_as_proto --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
-
-
-# MIXTRAL_MOE being 
-# 0 adds dense MLP layers
-# 1 adds all sparse MLP layers
-# 2 adds alternating sparse and dense layers
-
-export MIXTRAL_MOE=$1
-export NUM_LAYERS=$2
 
 # PJRT Flags 
 export NEURON_FSDP_NUM_LAYER_EARLY_AG_SHIFT=1
@@ -76,6 +68,7 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --enable-mixed-precision-accumulation
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} -O1"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --tensorizer-options='--enable-hoist-fsdp-collectives'"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--remat-rope --verify-hlo'"
+# export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-compiler-debug-mode=penguin"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --dump=${NEURON_DUMP_PATH}"
 
 # use to add debug logging at module level in xla
@@ -87,10 +80,6 @@ export JAX_COMPILATION_CACHE_DIR="cache/"
 mkdir -p ${JAX_COMPILATION_CACHE_DIR}
 
 deactivate || true
-# conda
-# eval "$(/fsx/apoorvgu/conda/bin/conda shell.bash hook)"
-# conda activate py310
-
 source ../jaxmoe/bin/activate
 
 echo "Listing apt dependencies"
@@ -129,9 +118,61 @@ if [ "$jax_backend" == "cpu" ]; then
 	export JAX_PLATFORMS="cpu"
 fi
 
-python -m axlearn.common.launch_trainer_main \
-	    --module=text.gpt.c4_trainer --config=envy-Mistral-8x7B \
-	        --trainer_dir=$OUTPUT_DIR --data_dir=$DATA_DIR \
-		    --jax_backend=$jax_backend --mesh_selector=neuron-trn2.48xlarge-64 \
-		        --distributed_coordinator=$MASTER_ADDR:$JAX_COORDINATOR_PORT --num_processes=$num_nodes \
-			    --process_id=$NEURON_PJRT_PROCESS_INDEX
+upload_profile() {
+	neff_path=$1
+	ntff_path=$2
+	profile_name=$3
+	set -x
+	curl -X POST -m 1800 -F "neff=@${neff_path}" -F "ntff=@${ntff_path}" -F "name=${profile_name}" http://localhost:8050/api/upload > /dev/null || true
+	set +x
+}
+
+profile() {
+	set -ex
+	neff_path=$1
+	profile_dir=$2
+	s3_profile_path=$3
+	NEURON_RT_ENABLE_DGE_NOTIFICATIONS=1 NEURON_RT_ASYNC_EXEC_MAX_INFLIGHT_REQUESTS=1 NEURON_RT_VIRTUAL_CORE_SIZE=2 neuron-profile capture -r 64 --num-exec 3 \
+		--collectives-worker-count $((64* $SLURM_JOB_NUM_NODES)) \
+		--collectives-worker-start-id $((64 * $SLURM_PROCID)) \
+		-i 0 \
+		-n $neff_path \
+		-s $profile_dir/profile.ntff
+
+	echo "Done profiling"
+
+	upload_dir=$profile_dir/to_upload
+	mkdir -p $upload_dir
+	cp $profile_dir/profile_rank_0_exec_3.ntff $upload_dir
+	cd $(dirname $neff_path)
+	tar -cvf penguin-text.tar penguin-sg*
+	cp penguin-text.tar $upload_dir
+	cp file.neff $upload_dir
+	aws s3 sync $upload_dir $s3_profile_path
+	# if [ $SLURM_PROCID -eq 0 ]; then
+    #   upload_profile $neff_path ${upload_profile_path}_rank_0_exec_3.ntff rh_${SLURM_JOB_NAME}_${SLURM_JOB_ID}
+    # fi
+}
+
+if [ "$1" = "profile" ]; then
+	job_dir=$2
+	s3_profile_path=$3
+	NEFF_PATH=$(ls ${job_dir}/neuron_dump/**/file.neff | tail -n1)
+	PROFILE_DIR=${job_dir}/profiles
+	mkdir -p $PROFILE_DIR
+	profile $NEFF_PATH $PROFILE_DIR $s3_profile_path
+else
+	# MIXTRAL_MOE being
+	# 0 adds dense MLP layers
+	# 1 adds all sparse MLP layers
+	# 2 adds alternating sparse and dense layers
+
+	export MIXTRAL_MOE=$1
+	export NUM_LAYERS=$2
+	python -m axlearn.common.launch_trainer_main \
+		--module=text.gpt.c4_trainer --config=envy-Mistral-150B \
+		--trainer_dir=$OUTPUT_DIR --data_dir=$DATA_DIR \
+		--jax_backend=$jax_backend --mesh_selector=neuron-trn2.48xlarge-64 \
+		--distributed_coordinator=$MASTER_ADDR:$JAX_COORDINATOR_PORT --num_processes=$num_nodes \
+		--process_id=$NEURON_PJRT_PROCESS_INDEX
+fi
