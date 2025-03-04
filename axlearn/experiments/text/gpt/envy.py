@@ -73,7 +73,7 @@ from axlearn.experiments.text.gpt.common import (
 from axlearn.experiments.text.gpt.fuji import offload_attention_proj_policy
 from axlearn.experiments.trainer_config_utils import TrainerConfigFn
 
-MODEL_SIZES = ("test", "Switch-Base", "Switch-Large", "Switch-XXL", "Mistral-8x7B")
+MODEL_SIZES = ("test", "Switch-Base", "Switch-Large", "Switch-XXL", "Mistral-8x7B", "Mistral-toy", "Mistral-8x20B")
 
 NUM_EXPERTS = {
     "test": 8,
@@ -81,6 +81,8 @@ NUM_EXPERTS = {
     "Switch-Large": 128,
     "Switch-XXL": 64,
     "Mistral-8x7B": 8,
+    "Mistral-toy": 8,
+    "Mistral-8x20B": 8,
 }
 
 # T5 uses 32128 vocab size, we make it 32768 for simplicity.
@@ -91,7 +93,9 @@ MAX_SEQUENCE_LENGTH = {
     "Switch-Base": 8192,
     "Switch-Large": 8192,
     "Switch-XXL": 8192,
-    "Mistral-8x7B": 256,
+    "Mistral-toy": 256,
+    "Mistral-8x7B": 4096,
+    "Mistral-8x20B": 4096,
 }
 
 
@@ -441,14 +445,14 @@ def get_trainer_kwargs(
             # TODO(kelvin-zou): not verified with real job.
             mesh_shape=mesh_shape_from_axes(fsdp=-1, expert=16, model=8),
         )
-    elif model_size == "Mistral-8x7B":
+    elif model_size in ["Mistral-8x7B", "Mistral-toy"]:
         # Num of parameters: 47B.
         ffn_layer_types = get_ffn_layer_types()
         neuron_mesh = mesh_shape_from_axes(fsdp=-1, model=4)
         trainer_kwargs = dict(
             model_kwargs=dict(
                 num_layers=int(os.getenv("NUM_LAYERS", 4)),
-                hidden_dim=32 * 32,
+                hidden_dim=32 * 32 if model_size == "Mistral-toy" else 32 * 128,
                 ffn_dim=scaled_hidden_dim(scale=3.5, round_up_to_multiples_of=128),
                 num_heads=32,
                 num_kv_heads=8,
@@ -460,7 +464,7 @@ def get_trainer_kwargs(
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
             max_sequence_length=max_sequence_length,
-            train_batch_size=128,  # 8M tokens.
+            train_batch_size=128, # 8M tokens.
             max_step=250_000,
             mesh_shape=mesh_shape_from_axes(fsdp=-1, model=8),
             mesh_rules=(
@@ -482,6 +486,54 @@ def get_trainer_kwargs(
                         ],
                     ),
                 ),
+                (
+                    "neuron-(trn2|trn2n).48xlarge-64",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                # TP within the chip, FSDP across chips.
+                                # Each TRN2 chip has 4 XLA cores.
+                                mesh_shape=neuron_mesh
+                            ),
+                            *trn2_model_modifications,
+                            *trn2_partition_spec_modifications,
+                            # RematSpecModifier.default_config().set(
+                            #     remat_policies={
+                            #         "model.decoder.transformer.layer": RematSpec(
+                            #             prevent_cse=True,
+                            #             policy=jax_remat_policies.nothing_saveable,
+                            #         ),
+                            #     }
+                            # ),
+                        ],
+                    ),
+                ),
+            ),
+        )
+    elif model_size == "Mistral-8x20B":
+        # Num of parameters: 150B.
+        ffn_layer_types = get_ffn_layer_types()
+        neuron_mesh = mesh_shape_from_axes(fsdp=-1, model=16)
+        trainer_kwargs = dict(
+            model_kwargs=dict(
+                # 40 layers gets to about 150B
+                num_layers=int(os.getenv("NUM_LAYERS", 4)),
+                hidden_dim=32*192,
+                ffn_dim=scaled_hidden_dim(scale=3.5, round_up_to_multiples_of=128),
+                num_heads=32,
+                num_kv_heads=16,
+                num_experts=NUM_EXPERTS[model_size],
+                train_capacity_factor=2.0,
+                num_groups=1,
+                ffn_layer_types=ffn_layer_types,
+                outer_batch_size=get_outer_batch_from_mesh(MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, neuron_mesh),
+            ),
+            learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
+            max_sequence_length=max_sequence_length,
+            train_batch_size=128, # 8M tokens.
+            max_step=250_000,
+            mesh_shape=mesh_shape_from_axes(fsdp=-1, model=8),
+            mesh_rules=(
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",
                     ChainConfigModifier.default_config().set(

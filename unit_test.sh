@@ -2,7 +2,7 @@
 
 export USE_SHARDMAP_FFN=1
 
-TEST_ARTIFACTS_PATH="/shared/aahila/test_artifacts"
+TEST_ARTIFACTS_PATH="test_artifacts"
 rm -rf "$TEST_ARTIFACTS_PATH"
 mkdir -p "$TEST_ARTIFACTS_PATH"
 NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
@@ -47,7 +47,7 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --enable-mixed-precision-accumulation
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options=--verify-hlo"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} -O1"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --tensorizer-options='--enable-hoist-fsdp-collectives'"
-export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--remat-rope'"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--remat-rope --verify-hlo'"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --dump=${NEURON_DUMP_PATH}"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --auto-cast=none"
 
@@ -56,5 +56,5 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --auto-cast=none"
 # mkdir -p ${JAX_COMPILATION_CACHE_DIR}
 
 echo "setup env vars"
-pytest $1
-
+source ../jaxmoe/bin/activate
+pytest axlearn/common/mixture_of_experts_neuron_test.py

@@ -35,14 +35,14 @@ COLLECTIVES=$ENV_DROP_DIR/aws-neuronx-collectives-*.deb
 TOOLS=$ENV_DROP_DIR/aws-neuronx-tools-*.deb
 DKMS=$ENV_DROP_DIR/aws-neuronx-dkms_*.deb
 
-sudo dpkg -i $RUNTIME $COLLECTIVES $TOOLS #$DKMS
+sudo dpkg -i $RUNTIME $COLLECTIVES $TOOLS $DKMS
 
 sudo apt-get install -y linux-headers-$(uname -r) || true
 sudo apt-get remove -y aws-neuronx-devtools || true
 
 sudo apt-get remove -y --allow-change-held-packages aws-neuronx-tools aws-neuronx-collectives aws-neuronx-runtime-lib
 # Install Neuron OS packages and dependencies
-sudo dpkg -i $RUNTIME $COLLECTIVES $TOOLS #$DKMS
+sudo dpkg -i $RUNTIME $COLLECTIVES $TOOLS $DKMS
 # sudo apt-get -o Dpkg::Options::="--force-overwrite" install --reinstall --allow-downgrades -y aws-neuronx-dkms
 
 # Tracing collectives
@@ -54,14 +54,8 @@ sudo apt-get install -y google-perftools
 TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` && INSTANCE_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s  http://169.254.169.254/latest/meta-data/instance-id)
 echo "instance_id:$INSTANCE_ID hostname:$(hostname)"
 echo "runtime versions"
-sudo apt list | grep neuron | grep installed
-
 echo "==============================================="
 echo "Dependency versions"
 echo "==============================================="
 apt list | grep neuron | grep installed
-pip freeze | grep neuron
-echo "==============================================="
-
-neuron-ls
 echo "Setup took $SECONDS s"
