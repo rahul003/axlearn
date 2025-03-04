@@ -74,9 +74,6 @@ def default_xla_options(
             xla_tpu_scoped_vmem_limit_kib=98304,
             # For megascale performance.
             xla_jf_crs_combiner_threshold_count=10,
-            # TODO(hanzhi-zhou): temporary workaround to avoid PCIe overload when using multi-slice
-            # v6e training caused by allreduce over DCN. This flag doesn't impact performance.
-            xla_tpu_iova_dma_chunk_size_bytes=1048576,
         )
         options.update(
             # Improved performance for v6e.
@@ -126,16 +123,6 @@ def default_xla_options(
             xla_tpu_data_parallel_opt_different_sized_ops="true",
             # Group non-blocking DCN collectives into as few stages as possible.
             xla_tpu_enable_sunk_dcn_allreduce_done_with_host_reduction="true",
-            # Aborting the coordinator after collecting errors from all workers.
-            # All workers will also abort after they detect the coordinator is shutdown.
-            megascale_error_reporter_abort_on_hang="true",
-            # Similar to megascale_error_reporter_abort_on_hang but for unrecoverable errors.
-            megascale_error_reporter_abort_on_error="true",
-            # Increase the timeout at which a hang is detected/reported, default is 5m.
-            megascale_graph_hang_threshold="10m",
-            # Similar to megascale_graph_hang_threshold but specific to within a launch_id.
-            # Default is 1m.
-            megascale_graph_within_launch_hang_threshold="10m",
         )
 
     # Validate options. Will never fail if this function is implemented correctly.
@@ -144,7 +131,7 @@ def default_xla_options(
             int(v)
             continue
         except ValueError:
-            assert v in [True, False, "true", "false", "megachip_tccontrol", "10m"], (k, v)
+            assert v in [True, False, "true", "false", "megachip_tccontrol"], (k, v)
 
     return options
 

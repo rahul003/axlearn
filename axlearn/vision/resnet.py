@@ -42,7 +42,8 @@ from axlearn.common.layers import (
     get_stochastic_depth_linear_rate,
 )
 from axlearn.common.module import Module
-from axlearn.common.utils import Tensor
+
+Tensor = jnp.ndarray
 
 
 def batch_norm():

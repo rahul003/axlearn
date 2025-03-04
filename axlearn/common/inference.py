@@ -191,13 +191,7 @@ class InferenceRunner(Module):
         )
         return cfg
 
-    def __init__(
-        self,
-        cfg: Config,
-        *,
-        parent: Optional[Module],
-        devices: Optional[np.ndarray] = None,
-    ):
+    def __init__(self, cfg: Config, *, parent: Optional[Module]):
         super().__init__(cfg, parent=parent)
 
         cfg = self.config
@@ -212,8 +206,7 @@ class InferenceRunner(Module):
             [device.platform for device in jax.local_devices()],
         )
         logging.info("Mesh shape: %s", cfg.mesh_shape)
-        if devices is None:
-            devices = utils.create_device_mesh(cfg.mesh_shape)
+        devices = utils.create_device_mesh(cfg.mesh_shape)
         mesh = jax.sharding.Mesh(devices, cfg.mesh_axis_names)
         logging.info("Global mesh: %s", mesh)
         self._mesh = mesh

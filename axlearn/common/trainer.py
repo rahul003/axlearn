@@ -51,10 +51,10 @@ from axlearn.common.utils import (
     HybridMeshShape,
     MeshShape,
     Nested,
+    NestedPartitionSpec,
     NestedTensor,
     PartitionSpec,
     Tensor,
-    TensorSpec,
     count_model_params,
     flatten_items,
     match_regex_rules,
@@ -63,9 +63,9 @@ from axlearn.common.utils import (
 
 
 class TrainerState(NamedTuple):
-    prng_key: Union[Tensor, TensorSpec, jax.sharding.NamedSharding]
-    model: Union[NestedTensor, Nested[TensorSpec], Nested[jax.sharding.NamedSharding]]
-    learner: Union[NestedTensor, Nested[TensorSpec], Nested[jax.sharding.NamedSharding]]
+    prng_key: Union[Tensor, NestedPartitionSpec]
+    model: Union[NestedTensor, NestedPartitionSpec]
+    learner: Union[NestedTensor, NestedPartitionSpec]
 
 
 # pylint: disable-next=too-many-instance-attributes
@@ -119,7 +119,6 @@ class SpmdTrainer(Module):
         # The mesh axis names. The names can be referenced in ParameterSpec.mesh_axes.
         mesh_axis_names: Required[Sequence[str]] = REQUIRED
         # Subset of mesh axis names over which the leaves of the input batch are sharded.
-        # TODO(markblee): Deprecate this field in favor of `input.input_partitioner`.
         batch_axis_names: Union[str, Sequence[str]] = "data"
 
         # An optional list of (regex, MeshShape) pairs to override the default mesh configuration.
@@ -202,13 +201,9 @@ class SpmdTrainer(Module):
         # The provided config should instantiate to a thunk that returns the context manager.
         context_manager: Optional[ConfigOr[Callable[[], ContextManager]]] = None
 
-        # If False, assumes the train_step may need to be recompiled and go through the lowering
-        # and compilation process every train step and rely on compilation cache to prevent
-        # excessive recompilations. Note: this could introduce overhead to training due to
-        # pre-compilation checks (such as sharding check) that increases the step time for some
-        # models. Note that this cache is always disabled at steps when xsc is enabled.
-        # Defaults to None which is interpreted as True.
-        cache_compiled_train_step: Optional[bool] = None
+        # The input partition:
+        # Options: FULL (default), BATCH, REPLICATED
+        input_partition_type: Optional[DataPartitionType] = DataPartitionType.FULL
 
     def __init__(
         self,
@@ -283,7 +278,6 @@ class SpmdTrainer(Module):
             else:
                 xsc_check_policy = maybe_instantiate(cfg.xsc_check_policy)
         self._xsc_check_policy: Optional[Callable[[int], bool]] = xsc_check_policy
-        self._compiled_train_step: Optional[jax.stages.Compiled] = None
 
         # Create all children within the mesh context so that utils.input_partition_spec() works
         # properly.
@@ -320,8 +314,8 @@ class SpmdTrainer(Module):
                 model=self._model_param_specs,
                 learner=self._learner_state_partition_specs,
             )
-            self._trainer_state_partition_specs: TrainerState = jax.tree.map(
-                lambda spec: spec.sharding, self._trainer_state_specs
+            self._trainer_state_partition_specs = jax.tree.map(
+                lambda spec: spec.mesh_axes, self._trainer_state_specs
             )
             # Create evalers, which depend on model_param_partition_specs.
             self._evalers = {}
@@ -975,8 +969,7 @@ class SpmdTrainer(Module):
     ) -> Callable[[TrainerState, NestedTensor], tuple[TrainerState, NestedTensor]]:
         """Build a fully compiled train step function.
 
-        Relies on the JAX pjit cache to avoid recompilation when with_xsc=True or
-        cache_compiled_train_step=False.
+        Relies on the JAX pjit cache to avoid recompilation where possible.
 
         Args:
             train_state: A TrainerState instance.
@@ -989,17 +982,8 @@ class SpmdTrainer(Module):
         Raises:
             RuntimeError: If `with_xsc` is requested on heterogenous device kinds.
         """
-        if (
-            self.config.cache_compiled_train_step is not False
-            and not with_xsc
-            and self._compiled_train_step is not None
-        ):
-            return self._compiled_train_step
         if not with_xsc:
-            self._compiled_train_step = self.compile_train_step(
-                trainer_state=trainer_state, input_batch=input_batch
-            )
-            return self._compiled_train_step
+            return self.compile_train_step(trainer_state=trainer_state, input_batch=input_batch)
         # Get device kinds and assert that they are homogenous.
         device_kinds = set(d.device_kind for d in jax.devices())
         if len(device_kinds) != 1:
@@ -1124,6 +1108,7 @@ class SpmdTrainer(Module):
         Returns:
             A compiled training step, with signature matching self._pjit_train_step's return.
         """
+
         with self.mesh(), self._context_manager():
             if trainer_state is None:
                 # Do not run init(), which requires real devices.

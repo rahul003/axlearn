@@ -5,10 +5,6 @@
 # google/jax:
 # Copyright 2018 Google LLC.
 # Licensed under the Apache License, Version 2.0 (the "License").
-#
-# AI-Hypercomputer/maxtext:
-# Copyright 2024 The MaxText Authors.
-# Licensed under the Apache License, Version 2.0 (the "License").
 
 """Common utilities."""
 
@@ -27,7 +23,7 @@ import traceback
 import types
 from collections.abc import Mapping, Sequence
 from enum import Enum
-from typing import Any, Callable, Literal, NamedTuple, Optional, Protocol, TypeVar, Union
+from typing import Any, Callable, NamedTuple, Optional, Protocol, TypeVar, Union
 
 import jax
 import numpy as np
@@ -43,7 +39,7 @@ from jax.experimental import mesh_utils, multihost_utils
 from jax.sharding import PartitionSpec
 
 from axlearn.common import serialization
-from axlearn.common.config import ConfigOr, is_named_tuple, maybe_instantiate, register_validator
+from axlearn.common.config import ConfigOr, is_named_tuple, maybe_instantiate
 
 # New code should use Nested[XX] instead of NestedXX.
 # Old definitions are provided for backwards compatibility.
@@ -52,7 +48,7 @@ Nested = Union[_NestedT, dict[str, "Nested[_NestedT]"]]
 
 Tensor = jax.Array
 NestedTree = Union[Any, dict[str, Any]]
-NestedTensor = Union[Tensor, dict[str, Any]]  # DEPRECATED, use Nested[Tensor].
+NestedTensor = Union[Tensor, dict[str, Any]]
 NestedPartitionSpec = Optional[Union[PartitionSpec, dict[str, Any]]]
 
 # The device mesh shape in the form of a tuple of ints.
@@ -91,13 +87,6 @@ class HybridMeshShape:
         return len(self.ici_mesh_shape)
 
 
-# "device" = Accelerator memory, e.g. HBM.
-# "pinned_host" = Page locked memory on CPU, which can be address directly by accelerators by
-# direct memory access (DMA). For TPU, "pinned_host" memory layout follows TPU device tile
-# layout and usually cannot be zero-copy converted to a CPU-tensor.
-MemoryKind = Literal["device", "pinned_host"]
-
-
 @dataclasses.dataclass
 class TensorSpec:
     """Specification of a Tensor.
@@ -108,23 +97,16 @@ class TensorSpec:
     shape: Sequence[int]
     dtype: Optional[jnp.dtype] = None
     mesh_axes: Optional[PartitionSpec] = None
-    memory_kind: Optional[MemoryKind] = None
 
     @property
     def sharding(self) -> jax.sharding.Sharding:
         mesh = thread_resources.env.physical_mesh
-        return jax.sharding.NamedSharding(mesh, self.mesh_axes, memory_kind=self.memory_kind)
+        return jax.sharding.NamedSharding(mesh, self.mesh_axes)
 
 
 NestedTensorSpec = Optional[Union[TensorSpec, dict[str, Any]]]
 RematType = Union[type(Saveable), Offloadable, type(Recompute)]
 SavePattern = Union[str, re.Pattern, None]
-
-# Register a config validator for RematType.
-register_validator(
-    match_fn=lambda x: isinstance(x, (type(Saveable), Offloadable, type(Recompute))),
-    validate_fn=lambda x: None,
-)
 
 
 class RematPolicy(Protocol):
@@ -259,8 +241,8 @@ def default_remat_combine_fn(preferred_remat_type: Optional[RematType] = None) -
 
 
 def combine_remat_policies(
-    policy_1: ConfigOr[RematPolicy],
-    policy_2: ConfigOr[RematPolicy],
+    policy_1: RematPolicy,
+    policy_2: RematPolicy,
     *,
     combine_fn: ConfigOr[RematCombineFn] = default_remat_combine_fn(),
 ):
@@ -276,8 +258,6 @@ def combine_remat_policies(
     Returns:
         A `RematPolicy`.
     """
-    policy_1 = maybe_instantiate(policy_1)
-    policy_2 = maybe_instantiate(policy_2)
     combine_fn = maybe_instantiate(combine_fn)
 
     def convert_to_enum(p: Union[RematType, bool]) -> RematType:
@@ -606,7 +586,7 @@ def as_numpy_array(x: Any):
     raise NotImplementedError(f"{type(x)}: {x}")
 
 
-def with_sharding_constraint(x: Tensor, shardings):
+def with_sharding_constraint(x, shardings):
     mesh = thread_resources.env.physical_mesh
     if mesh.empty or mesh.size == 1:
         return x
@@ -769,35 +749,31 @@ class DataPartitionType(Enum):
     # Data are partitioned across batch axis only.
     BATCH = "batch"
 
-
-def data_partition_type_to_spec(
-    partition: Union[DataPartitionType, PartitionSpec],
-) -> PartitionSpec:
+def data_partition_type_to_spec(partition: DataPartitionType, * , batch_axis_names: Union[str, Sequence[str]] = ("data", "fsdp")) -> PartitionSpec:
     """Returns a PartitionSpec for the given partition type."""
     if partition == DataPartitionType.FULL:
         return input_partition_spec()
     elif partition == DataPartitionType.REPLICATED:
-        return PartitionSpec(None)
-    elif isinstance(partition, PartitionSpec):
-        return partition
+        return None
+    elif partition == DataPartitionType.BATCH:
+        return PartitionSpec(batch_axis_names)
     else:
         raise NotImplementedError(f"Unsupported partition: {partition}")
 
 
-# TODO(markblee): Rename to `host_to_global_array` for consistency with `global_to_host_array`.
 def host_to_global_device_array(
     host_arrays: Nested[Union[np.ndarray, Tensor]],
     *,
-    partition: Union[PartitionSpec, DataPartitionType] = DataPartitionType.FULL,
-) -> Nested[Tensor]:
+    partition: DataPartitionType = DataPartitionType.FULL,
+    batch_axis_names: Union[str, Sequence[str]] = ("data", "fsdp"),
+) -> NestedTensor:
     """Converts the given host device arrays to global device arrays.
 
     Must be called within the context of a Mesh.
 
     Args:
         host_arrays: A nested tree of device arrays in host memory. Usually these present the
-            per-host portion of the global input batch. We currently assume that per-host portions
-            form a uniform sharding across the batch.
+            per-host portion of the global input batch.
         partition: How the global array should be partitioned.
 
     Returns:
@@ -805,29 +781,22 @@ def host_to_global_device_array(
         leaves. Each global device array is partitioned according to `partition`.
 
     Raises:
-        NotImplementedError: If the given `partition` type is not supported.
+        NotImplementedError: if the given `partition` type is not supported.
     """
-    if isinstance(partition, DataPartitionType):
-        logging.log_first_n(
-            logging.WARNING,
-            "Passing DataPartitionType is deprecated. Please specify a PartitionSpec directly.",
-            n=1,
-        )
-
     mesh = thread_resources.env.physical_mesh
+    partition_spec = data_partition_type_to_spec(partition, batch_axis_names=batch_axis_names)
     partition_specs = complete_partition_spec_tree(
-        jax.tree_util.tree_structure(host_arrays),
-        data_partition_type_to_spec(partition),
+        jax.tree_util.tree_structure(host_arrays), partition_spec
     )
     process_count = jax.process_count()
 
-    def make_gda(x: np.ndarray, partition_spec: PartitionSpec):
+    def make_gda(x, partition_spec):
         if partition == DataPartitionType.FULL:
             global_shape = (x.shape[0] * process_count, *x.shape[1:])
         elif partition == DataPartitionType.REPLICATED:
             global_shape = (x.shape[0], *x.shape[1:])
-        elif isinstance(partition, PartitionSpec):
-            global_shape = None  # Allow jax to infer.
+        elif partition == DataPartitionType.BATCH:
+            global_shape = (x.shape[0] * process_count, *x.shape[1:])
         else:
             raise NotImplementedError(f"Unsupported partition: {partition}")
         return jax.make_array_from_process_local_data(
@@ -839,93 +808,65 @@ def host_to_global_device_array(
     return jax.tree.map(make_gda, host_arrays, partition_specs)
 
 
-# TODO(markblee): Remove partition arg.
 def global_to_host_array(
-    global_arrays: Nested[Tensor],
-    *,
-    partition: Optional[DataPartitionType] = DataPartitionType.FULL,
-) -> Nested[Tensor]:
-    """Extracts host addressable data from each Tensor in `global_arrays`.
+    global_arrays: NestedTensor, *, partition: DataPartitionType = DataPartitionType.FULL
+) -> NestedTensor:
+    """Extracts host addressable rows from each Tensor in `global_arrays`.
 
     Args:
-        global_arrays: A nested Tensor.
-            Each leaf Tensor must be uniformly partitioned across each dim.
-        partition: Deprecated.
+        global_arrays: A NestedTensor.
+            Each leaf Tensor must have shape [global_batch_size, ...] with identical
+            global_batch_size across tensors.
+            The tensors must be partitioned in the same way and can be partitioned only along the
+            batch axis.
+        partition: How the global array should be partitioned.
 
     Returns:
-        A nested Tensor with the same structure as `global_array`. Each leaf Tensor will have shape
-        `process_shape` where `process_shape` will be equal to `global_shape` if the global Tensors
-        are replicated. If the global Tensors are partitioned across hosts, the `process_shape` will
-        represent the host-local portion.
+        A NestedTensor with the same structure as `global_array`. Each leaf Tensor will have shape
+        [host_batch_size, ...] where `host_batch_size` will be equal to `global_batch_size` if the
+        global Tensors are replicated or `global_batch_size // process_count` if the global Tensors
+        are partitioned across hosts.
     """
-    if partition is not None:
-        logging.log_first_n(logging.WARNING, "Specifying partition is deprecated.", n=1)
 
-    def index_to_shard(
-        shards: list[jax.Shard], global_shape: Sequence[int]
-    ) -> dict[tuple, jax.Shard]:
-        """Returns a mapping from (sorted) indices to shards.
+    def sort_global_shards(global_shards: list[jax.Shard]) -> list[jax.Shard]:
+        # We should sort jax.Array.global_shards by using this function to guarantee
+        # round-trip equality of host_to_global_device_array and global_to_host_array.
+        # Shards are sorted in-place.
+        global_shards.sort(key=lambda shard: shard.index)
+        return global_shards
 
-        Each key is a tuple of length `len(global_shape)`.
-        Each element of the tuple is a `(start, limit)` tuple, specifying the start and limit
-        indices of the shard along the global shape dim.
-        """
-        index_to_shard = []
-        for shard in shards:
-            index = tuple(
-                (s.start or 0, s.stop or global_shape[dim]) for dim, s in enumerate(shard.index)
+    global_array_items = flatten_items(global_arrays)
+    if not global_array_items:
+        return global_arrays  # no leaf Tensor.
+    first_path, first_value = global_array_items[0]
+    sorted_first_value_shards = sort_global_shards(first_value.global_shards)
+    first_value_shard_is_local = [shard.data is not None for shard in sorted_first_value_shards]
+    batch_size = first_value.shape[0]
+
+    def get_local_array(path: str, value: Tensor) -> Tensor:
+        if value.shape[0] != batch_size:
+            raise ValueError(
+                f"Value batch size mismatch: {batch_size} @ {first_path} vs. "
+                f"{value.shape[0]} @ {path} of {shapes(global_arrays)}"
             )
-            index_to_shard.append((index, shard))
-        index_to_shard.sort(key=lambda x: x[0])
-        return dict(index_to_shard)
+        sorted_value_shards = sort_global_shards(value.global_shards)
+        value_shard_is_local = [shard.data is not None for shard in sorted_value_shards]
+        if value_shard_is_local != first_value_shard_is_local:
+            raise ValueError(
+                f"Value shard mismatch: {first_value_shard_is_local} @ {first_path} vs. "
+                f"{value_shard_is_local} @ {path}"
+            )
+        local_data = [shard.data for shard in sorted_value_shards if shard.data is not None]
+        if not local_data:
+            raise ValueError(f"No local shard found: {sorted_value_shards}.")
+        if partition == DataPartitionType.FULL:
+            return np.concatenate(local_data, axis=0)
+        elif partition == DataPartitionType.REPLICATED:
+            return local_data[0]
+        else:
+            raise NotImplementedError(f"Unsupported partition: {partition}")
 
-    def get_local_array(value: Tensor) -> np.ndarray:
-        # Note that we ensure consistent ordering of addressable shards by sorting by index below.
-        local_shards: list[jax.Shard] = value.addressable_shards
-        if not local_shards:
-            raise ValueError(f"No local shards for {value}")
-
-        # If value is replicated, return any shard.
-        if value.is_fully_replicated:
-            return np.asarray(local_shards[0].data)
-
-        # A mapping from (unique) global index to local shards.
-        global_index_to_local_shard = index_to_shard(local_shards, value.shape)
-        # A mapping from dim -> local slices.
-        dim_to_local_slices: list[list[slice]] = [[] for _ in range(value.ndim)]
-
-        # For each dim, we bucket global slices into the corresponding local slice index.
-        for dim, slices in enumerate(dim_to_local_slices):
-            global_to_local = {}
-            for global_index in global_index_to_local_shard:
-                global_slice = global_index[dim]
-                size = global_slice[1] - global_slice[0]
-                if global_slice not in global_to_local:
-                    # This exploits the fact that global slices are already sorted.
-                    bucket_idx = len(global_to_local)
-                    global_to_local[global_slice] = bucket_idx
-                else:
-                    # Along a given dim, global slices can appear multiples times if the array is
-                    # replicated along a different dim, in which case the local slice is the same.
-                    bucket_idx = global_to_local[global_slice]
-
-                # We require uniform sharding along each dim.
-                assert not slices or (slices[-1].stop - slices[-1].start) == size
-                start = bucket_idx * size
-                slices.append(slice(start, start + size))
-
-        # The local shape can be inferred from the last offset along each dim.
-        local_shape = tuple(local_slices[-1].stop for local_slices in dim_to_local_slices)
-
-        # Build the final output array.
-        output = np.empty(local_shape, dtype=value.dtype)
-        for local_index, local_shard in zip(
-            zip(*dim_to_local_slices), global_index_to_local_shard.values()
-        ):
-            output[tuple(local_index)] = local_shard.data
-        return output
-
-    return jax.tree.map(get_local_array, global_arrays)
+    return jax.tree.map(get_local_array, tree_paths(global_arrays), global_arrays)
 
 
 def get_recursively(
@@ -1315,78 +1256,10 @@ def register_per_param_settings(
     return settings
 
 
-def _reshape_mesh_to_rings(a: np.ndarray, *, shape: tuple[int, int]) -> np.ndarray:
-    """Reshapes device mesh to rings for 64x4 or 32x8 mesh shape.
-
-    Adapted from maxtext and made some code simplifications. Reference:
-    https://github.com/AI-Hypercomputer/maxtext/blob/7f0dcef34f4857476d19b4ca9ceada654246c0b0/MaxText/max_utils.py#L474.
-
-    64x4 and 32x8 are non-native mesh sizes on v6e and v5e and require careful arrangement of
-    devices to achieve good performance.
-    """
-    b = []
-    if shape == (64, 4):
-        for i in range(8):
-            b.append([])
-            for j in range(8):
-                a_i = i * 2
-                a_j = j * 2
-                # Forms a ring of size 4.
-                b[i].append([a[a_i, a_j], a[a_i, a_j + 1], a[a_i + 1, a_j + 1], a[a_i + 1, a_j]])
-    elif shape == (32, 8):
-        for i in range(8):
-            b.append([])
-            for j in range(4):
-                a_i = i * 2
-                a_j = j * 4
-                # Forms a ring of size 8.
-                b[i].append(
-                    [
-                        a[a_i, a_j],
-                        a[a_i, a_j + 1],
-                        a[a_i, a_j + 2],
-                        a[a_i, a_j + 3],
-                        a[a_i + 1, a_j + 3],
-                        a[a_i + 1, a_j + 2],
-                        a[a_i + 1, a_j + 1],
-                        a[a_i + 1, a_j],
-                    ]
-                )
-    else:
-        raise ValueError(f"The target mesh shape {shape} is not implemented.")
-    return np.reshape(np.array(b), shape)
-
-
-def _maybe_get_special_mesh(
-    mesh_shape: MeshShape, *, devices: np.ndarray
-) -> Optional[tuple[int, int]]:
-    """Checks if any of the special mesh shapes are applicable."""
-    if int(np.prod(mesh_shape)) != 256:
-        return None
-    if getattr(devices[0], "device_kind", None) not in [
-        "TPU v5e",
-        "TPU v6e",
-        "TPU v6 lite",
-        "TPU v5 lite",
-    ]:
-        return None
-
-    filtered_mesh = tuple(filter(lambda x: x != 1, mesh_shape))
-    target_shapes = [(64, 4), (32, 8)]
-    return None if filtered_mesh not in target_shapes else filtered_mesh
-
-
 def build_standard_mesh(mesh_shape: MeshShape, *, devices: np.ndarray) -> np.ndarray:
     logging.info("Building device mesh.")
     mesh_shape = infer_mesh_shape(mesh_shape, num_devices=devices.size)
     try:
-        if (shape := _maybe_get_special_mesh(mesh_shape, devices=devices)) is not None:
-            # If any of the special mesh shapes is applicable, use them.
-            mesh = mesh_utils.create_device_mesh([16, 16], devices=devices)
-            mesh = _reshape_mesh_to_rings(mesh, shape=shape)
-            mesh = mesh.reshape(mesh_shape)
-            logging.log_first_n(logging.INFO, "Using custom mesh: %s", 1, str(mesh))
-            return mesh
         return mesh_utils.create_device_mesh(mesh_shape, devices=devices)
     except NotImplementedError as e:
         logging.warning(
@@ -1702,8 +1575,8 @@ class DeviceUsage:
     """Usage measurements for a device."""
 
     device_id: int
-    device_duty_cycle_percent: Optional[float] = None
-    device_utilization: Optional[float] = None
+    tensorcore_duty_cycle_percent: Optional[float] = None
+    tensorcore_utilization: Optional[float] = None
     hbm_memory_usage_bytes: Optional[int] = None
     hbm_memory_total_bytes: Optional[int] = None
     hbm_memory_bandwidth_utilization: Optional[float] = None
@@ -1741,19 +1614,3 @@ def validate_contains_paths(x: Nested[Tensor], paths: Sequence[str]):
                 f"Input is expected to contain '{path}'; "
                 f"instead, it contains: '{jax.tree_structure(x)}'."
             ) from e
-
-
-def prune_empty(in_tree: Nested[Tensor]) -> Nested[Tensor]:
-    """Returns a shallow copy of the input tree with empty subtrees pruned.
-
-    If a tree would be made empty by removal of its subtrees, it will also be pruned.
-    This is a shallow copy because leaf nodes (non-dict values) are not deep-copied.
-
-    Args:
-        in_tree: the input tree to be pruned.
-
-    Returns:
-        The pruned copy of the input tree.
-    """
-    # Note that falsey values or empty Tensors are not considered empty.
-    return prune_tree(in_tree, lambda _, v: isinstance(v, dict) and not v)

@@ -3,18 +3,17 @@
 """FlashAttention layers."""
 
 from collections.abc import Sequence
-from typing import Optional, cast
+from typing import Optional
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 from jax.experimental.shard_map import shard_map
 from jax.interpreters.pxla import thread_resources
 from jax.sharding import PartitionSpec
 
-from axlearn.common.attention import Dropout, ForwardMode, GroupedQueryAttention
+from axlearn.common.attention import Dropout, GroupedQueryAttention
 from axlearn.common.attention_bias import BaseAttentionBias
-from axlearn.common.config import REQUIRED, ConfigBase, ConfigModifier, Required, config_class
+from axlearn.common.config import config_class
 from axlearn.common.flash_attention.utils import (
     MultiHeadAttentionImpl,
     flash_attention_implementation,
@@ -111,46 +110,9 @@ class FlashAttention(GroupedQueryAttention):
         cfg = self.config
         return attention_logit_biases.partition_spec(cfg.mha_dim_to_partition_spec)
 
-    def _maybe_repeat_kv_heads(self, key_or_value: Tensor) -> Tensor:
-        """Repeats key or value heads dim to be shardable."""
-        cfg = self.config
-        partition_spec = cfg.mha_dim_to_partition_spec["bsnh"]
-        global_mesh = thread_resources.env.physical_mesh
-        if (
-            partition_spec == PartitionSpec(None)
-            or len(partition_spec) != 4
-            or partition_spec[-2] is None
-        ):
-            return key_or_value
-
-        axis = partition_spec[-2]
-        if isinstance(axis, tuple):
-            axis_size = np.prod([global_mesh.shape[x] for x in axis])
-        else:
-            axis_size = global_mesh.shape[axis]
-        # There will be sharding error if axis_size > num_heads.
-        if cfg.num_heads < axis_size:
-            raise ValueError(
-                f"num_heads ({cfg.num_heads}) must be greater than or equal to "
-                f"the number of devices {axis_size} in the mesh axis {axis}."
-            )
-        num_head_repeats = axis_size // key_or_value.shape[-2]
-        # Repeat along the num_heads dim: [batch, source_length, repeated_num_heads, per_head_dim].
-        if num_head_repeats > 1:
-            key_or_value = jnp.repeat(key_or_value, num_head_repeats, axis=-2)
-
-        if key_or_value.shape[-2] % axis_size != 0:
-            raise ValueError(
-                f"repeated_num_heads dim size {key_or_value.shape[-2]} must be "
-                f"fully divisible by mesh axis {axis} size {axis_size}."
-            )
-
-        return key_or_value
-
     def _compute_attention(
         self,
         *,
-        mode: ForwardMode,
         q_proj: Tensor,
         k_proj: Tensor,
         v_proj: Tensor,
@@ -159,24 +121,14 @@ class FlashAttention(GroupedQueryAttention):
         cfg: FlashAttention.Config = self.config
         backend = self._backend()
 
-        # Repeats key/value heads dim if necessary.
-        k_proj = self._maybe_repeat_kv_heads(k_proj)
-        v_proj = self._maybe_repeat_kv_heads(v_proj)
-
         batch, target_len, num_heads, _ = q_proj.shape
         _, source_len, _, _ = k_proj.shape
 
         attention_logit_biases = attention_logit_biases.astype(q_proj.dtype)
 
-        # Note: prefill (INIT_STATE) is not is_decoding because query and key have the same shape.
-        # Note: this is a heuristic and it is possible (although not currently common) to do
-        # an extend_step even if we aren't in decoding. A more robust method could instead directly
-        # look at whether we need gradients or not, which could be done by adding a custom_vjp.
-        is_decoding = mode == ForwardMode.EXTEND_STEP
         jit_attn: MultiHeadAttentionImpl = flash_attention_implementation(
             backend=backend,
             softmax_scale=1.0,
-            is_decoding=is_decoding,
             block_size=cfg.tpu_block_size,
             dropout_rate=cfg.dropout.rate,
         )
@@ -203,8 +155,9 @@ class FlashAttention(GroupedQueryAttention):
             in_specs=(
                 # Q [batch_size, seq_len, num_heads, per_head_dim].
                 cfg.mha_dim_to_partition_spec["btnh"],
-                # KV [batch_size, seq_len, repeated_num_heads, per_head_dim].
-                # repeated_num_heads should be divided evenly by the n axis.
+                # KV [batch_size, seq_len, num_kv_heads, per_head_dim].
+                # Note: while num_kv_heads can be different from num_heads, their partition spec
+                # should be the same.
                 cfg.mha_dim_to_partition_spec["bsnh"],
                 cfg.mha_dim_to_partition_spec["bsnh"],
                 # Bias that can broadcast to [batch_size, num_heads, seq_len, seq_len].
@@ -285,30 +238,3 @@ def default_output_dim_to_partition_spec(
         "btnh": PartitionSpec(batch_axis_names, sp_axis_name, tp_axis_name, None),
         "bnts": PartitionSpec(batch_axis_names, tp_axis_name, sp_axis_name, None),
     }
-
-
-class FlashBlockSizeModifier(ConfigModifier):
-    """Modified the tpu_block_size config of FlashAttention."""
-
-    @config_class
-    class Config(ConfigModifier.Config):
-        """Configures FlashBlockSizeModifier."""
-
-        tpu_block_size: Required[int] = REQUIRED
-
-    def __call__(self, cfg: ConfigBase) -> ConfigBase:
-        tpu_block_size = self.config.tpu_block_size
-
-        def is_flash_config(cfg):
-            return isinstance(cfg, FlashAttention.Config)
-
-        def visit_fn(_, value):
-            if is_flash_config(value):
-                value = cast(FlashAttention.Config, value)
-                value.tpu_block_size = tpu_block_size
-
-        def enter_fn(_, value, default_kv):
-            return None if is_flash_config(value) else default_kv
-
-        cfg.visit(visit_fn=visit_fn, enter_fn=enter_fn)
-        return cfg

@@ -346,8 +346,9 @@ class OrbaxCheckpointer(BaseCheckpointer):
                     state=ocp.args.PyTreeRestore(item=state, restore_args=restore_args),
                 ),
             )
-        except FileNotFoundError as e:
-            # Orbax raises FileNotFoundError if there are no checkpoints.
+        except TypeError as e:
+            # Orbax hits TypeError if there are no checkpoints, since it attempts to format `None`
+            # as the step dir.
             if step is not None:
                 raise ValueError(f"Failed to restore at step {step}.") from e
             logging.info("Could not find any completed checkpoints under %s: %s", cfg.dir, e)

@@ -11,7 +11,6 @@ from axlearn.common.config import (
     ConfigBase,
     ConfigModifier,
     ConfigOr,
-    Configurable,
     Required,
     config_class,
     maybe_instantiate,
@@ -20,6 +19,63 @@ from axlearn.common.gradient_accumulation import with_minibatch_steps
 from axlearn.common.metrics import MetricAccumulator
 from axlearn.common.trainer import SpmdTrainer
 from axlearn.common.utils import HybridMeshShape, MeshShape, PartitionSpec
+
+
+class _FoundModule(NamedTuple):
+    """Module found in recursive search of matching module."""
+
+    # The module found
+    module: ConfigModifier.Config
+    # The parent of the module found
+    parent_module: ConfigModifier.Config
+    # Key of the found module in parent
+    key_in_parent: ConfigModifier.Config
+
+
+def _find_target_module(module_name: str, cfg: SpmdTrainer.Config) -> _FoundModule:
+    """Recursively search for the target module matching module_name in provided cfg.
+
+    Args:
+        module_name: Name of the target module
+        cfg: The trainer config to be searched for module_name
+
+    Raises:
+        ValueError: The module_name is not found.
+
+    Returns:
+        A Tuple(curr_module, key_in_parent, parent_module)
+            curr_module: Module found
+            parent_module: The parent module
+            key_in_parent: Key in parent for the found module
+    """
+
+    # Here we assume x.y.z format.
+    # One example would be model.decoder.transformer.layer.
+    target_modules = module_name.split(".")
+    curr_module = cfg
+    key_in_parent = None
+    parent_module = None
+
+    for target_module_key in target_modules:
+        is_list = False
+        index = None
+        if target_module_key[-1] == "]":
+            is_list = True
+            splits = target_module_key.split("[")
+            index = int(splits[1].split("]")[0])
+            target_module_key = splits[0]
+        if not hasattr(curr_module, target_module_key):
+            raise ValueError(f"{target_module_key} is not found in {curr_module}.")
+        parent_module = curr_module
+        key_in_parent = target_module_key
+        if is_list:
+            curr_module = curr_module.layer[index]
+        else:
+            curr_module = getattr(curr_module, target_module_key)
+        is_list = False
+    return _FoundModule(
+        module=curr_module, parent_module=parent_module, key_in_parent=key_in_parent
+    )
 
 
 class GradientAccumulationModifier(ConfigModifier):
@@ -102,8 +158,11 @@ class RematSpecModifier(ConfigModifier):
         """
 
         for module_name, remat_spec in self._remat_policies.items():
-            cfg.set_recursively(module_name.split(".") + ["remat_spec"], value=remat_spec)
-
+            found_module = _find_target_module(module_name, cfg)
+            # Here we assume all modules have remat_spec attribute.
+            if not hasattr(found_module.module, "remat_spec"):
+                raise ValueError(f"{found_module.module} does not have remat_spec attribute")
+            found_module.module.remat_spec = remat_spec
         return cfg
 
 
@@ -138,40 +197,39 @@ class MeshShapeModifier(ConfigModifier):
         return cfg
 
 
-class ModuleConfigModifier(ConfigModifier):
+class ModelConfigModifier(ConfigModifier):
     """Update the model config for the trainer config."""
 
     @config_class
     class Config(ConfigModifier.Config):
-        """Configure ModuleConfigModifier.
+        """Configure ModelConfigModifier.
 
         Attributes:
-            target_config: Target module path
-                (e.g. `model.decoder.transformer.layer`) to be modified.
-            modification: The new config to replace the target module's config.
+            model_cfg_modifications: A mapping from module path
+                (e.g. `model.decoder.transformer.layer`) to a Config.
         """
 
+        # model_cfg_modifications: Dict[str, Callable[[ConfigBase], ConfigBase]] = {}
         target_config: Required[str] = REQUIRED
-        modification: Required[Configurable.Config] = REQUIRED
+        modification: Required[Callable[[ConfigBase], ConfigBase]] = REQUIRED
 
     def __init__(self, cfg: Config):
         super().__init__(cfg)
+        # self._model_cfg_modifications = self.config.model_cfg_modifications
         self._target_config = self.config.target_config
         self._modification = self.config.modification
 
-    def _merge_configs(
-        self, target_cfg: Configurable.Config, found_module: Configurable.Config
-    ) -> Configurable.Config:
+    def _merge_configs(self, target_cfg: ConfigBase, found_module: ConfigBase) -> ConfigBase:
         """Merge configurations from the config being replaced on a best effort basis.
 
         Merge Rules:
-            - Klass is not changed, use target cfg.
-            - If field exists in both then use from class being replaced.
-            - Otherwise keep the value from target_cfg.
+            - Klass is not changed, use target cfg
+            - If field exists in both then use from class being replaced
+            - Otherwise keep the value from target_cfg
 
         Args:
-            target_cfg: Configuration that will replace found_module.
-            found_module: Existing configuration whose class will be replaced
+            target_cfg: configuration that will replace found_module.
+            found_module: existing configuration whose class will be replaced
                 but it's confguration will be merged with target_cfg.
 
         Returns:
@@ -181,8 +239,8 @@ class ModuleConfigModifier(ConfigModifier):
         for key in target_cfg.keys():
             if key == "klass":
                 continue
-            elif hasattr(found_module, key) and hasattr(target_cfg, key):
-                setattr(target_cfg, key, getattr(found_module, key))
+            elif hasattr(found_module.module, key) and hasattr(target_cfg, key):
+                setattr(target_cfg, key, getattr(found_module.module, key))
         return target_cfg
 
     def __call__(self, cfg: SpmdTrainer.Config) -> SpmdTrainer.Config:
@@ -198,9 +256,10 @@ class ModuleConfigModifier(ConfigModifier):
             The modified trainer config.
         """
 
-        found_module = cfg.get_recursively(self._target_config.split("."))
+        found_module = _find_target_module(self._target_config, cfg)
         self._modification = self._merge_configs(self._modification, found_module)
-        cfg.set_recursively(self._target_config.split("."), value=self._modification)
+        # Replace in the parent config
+        setattr(found_module.parent_module, found_module.key_in_parent, self._modification)
         return cfg
 
 
@@ -237,10 +296,13 @@ class PartitionSpecModifier(ConfigModifier):
             The modified trainer config.
         """
         for module_name, partition_spec_dict in self._attribute_dicts.items():
+            found_module = _find_target_module(module_name, cfg)
             for partition_spec_name, partition_spec in partition_spec_dict.items():
-                cfg.set_recursively(
-                    module_name.split(".") + [partition_spec_name], value=partition_spec
-                )
+                if not hasattr(found_module.module, partition_spec_name):
+                    raise ValueError(
+                        f"{found_module.module} does not have {partition_spec_name} attribute"
+                    )
+                setattr(found_module.module, partition_spec_name, partition_spec)
 
         return cfg
 

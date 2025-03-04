@@ -28,7 +28,7 @@ def mock_gcp_settings(module_name: Union[str, Sequence[str]], settings: dict[str
         return value
 
     def gcp_settings_from_active_config(project_or_zone: str):
-        return settings.get(project_or_zone, None)
+        return settings[project_or_zone]
 
     if isinstance(module_name, str):
         module_name = [module_name]

@@ -17,6 +17,7 @@ from axlearn.common.attention_bias import (
     MaskFnAttentionBias,
     SegmentIdAttentionBias,
     TensorAttentionBias,
+    ZeroAttentionBias,
     split,
 )
 from axlearn.common.flash_attention.gpu_attention import cudnn_dot_product_attention
@@ -105,10 +106,9 @@ MultiHeadAttentionImpl = Callable[[Tensor, Tensor, Tensor, Tensor, Optional[Tens
 
 
 def flash_attention_implementation(
-    backend: Literal["cpu", "tpu", "gpu", "xla", "neuron"],
+    backend: Literal["cpu", "tpu", "gpu", "xla"],
     *,
-    softmax_scale: float = 1.0,
-    is_decoding: bool = False,
+    softmax_scale: float,
     block_size: int = 128,
     dropout_rate: Optional[float] = 0.0,
 ) -> MultiHeadAttentionImpl:
@@ -117,11 +117,9 @@ def flash_attention_implementation(
     Args:
         backend: A valid XLA backend name. 'cpu' intended for testing only.
         softmax_scale: A scalar value applied to the logits before softmax.
-        is_decoding: Whether it is in decoding.
         block_size: The size of the computation-block unit, only applies to the 'tpu' backend.
             A multiple of 128, and should be less than the target sequence length.
             Smaller values are more memory efficient but less compute efficient.
-        dropout_rate: The optional dropout rate.
 
     Returns:
         A jitted function implementing multi-head attention for the given backend.
@@ -145,18 +143,16 @@ def flash_attention_implementation(
     ) -> Tensor:
         # Fall back to plain MHA implementation when the seq_len is not be divisible by
         # block size.
-        is_single_step_gpu_decoding = is_decoding and query.shape[1] == 1 and backend == "gpu"
+        is_gpu_decoding = query.shape[1] == 1 and backend == "gpu"
+        if not is_gpu_decoding and query.shape[1] % block_size != 0:
+            backend = "xla"
         # For non-GPU decoding, fall back to non-flash implementation and merge all biases
         # into a dense floating point bias tensor since that implementation does not
         # support target_positions.
-        if not is_single_step_gpu_decoding:
-            if is_decoding:
-                # TODO(senyut): Support TPU decoding.
-                backend = "xla"
-                bias = TensorAttentionBias(bias.value())
-            if query.shape[1] % block_size != 0:
-                backend = "xla"
-
+        if not is_gpu_decoding and query.shape[1] == 1:
+            # TODO(senyut): Support TPU decoding.
+            backend = "xla"
+            bias = TensorAttentionBias(bias.value())
         if dropout_rate != 0.0 and backend not in ("gpu", "xla", "cpu"):
             raise NotImplementedError("Dropout is only implemented for GPU, CPU and XLA.")
 
@@ -182,15 +178,14 @@ def flash_attention_implementation(
         if backend == "gpu":
             # TODO(hanzhi-zhou): supports small q sequence length for future use cases such as
             # speculative decoding.
-            if is_single_step_gpu_decoding:
+            if query.shape[1] == 1:
                 # Decoding case. We should not repeat kv heads to match q heads for FlashDecoding.
                 # Note: decoding is always causal. Discard the causal mask if present.
                 mask, explicit_bias = split(bias, MaskFnAttentionBias)
                 if mask is None or mask.target_positions is None:
                     raise RuntimeError("Cannot retrive MaskFnAttentionBias or target_positions.")
                 mask_fn = mask.mask
-                query_time_step = mask.target_positions[:, -1]
-                kv_seq_len = query_time_step + 1
+                kv_seq_len = mask.target_positions + 1
                 logging.info("Using mask_fn=%s for FlashDecoding.", mask_fn)
 
                 bias = explicit_bias.value()
@@ -208,7 +203,6 @@ def flash_attention_implementation(
                     mask_fn=mask_fn,
                     kv_seq_len=kv_seq_len,
                     softmax_scale=softmax_scale,
-                    interpret=_interpret(backend),
                 )
 
             key = _repeat_kv_heads(query.shape[2], key)
@@ -216,23 +210,23 @@ def flash_attention_implementation(
 
             # We have two implementations to choose from.
             # Both support `causal`.
-            # Only pallas supports `segment_ids` and `mask_fn`.
-            mask, segment_ids, explicit_bias = split(
-                bias, MaskFnAttentionBias, SegmentIdAttentionBias
+            # One supports `segment_ids`.
+            causal, segment_ids, explicit_bias = split(
+                bias, CausalAttentionBias, SegmentIdAttentionBias
             )
 
             # Fall back to triton gpu kernel if:
             # - segment_ids is not None, or
-            # - mask fn is not empty, or
+            # - explicit_bias is not empty, or
             # - query/key/value is in float32.
             if (
                 segment_ids.has_value()
-                or mask.has_value()
+                or explicit_bias.has_value()
                 or jnp.float32 in (query.dtype, key.dtype, value.dtype)
                 or query.shape[1] != key.shape[1]
+                or dropout_rate != 0.0
             ):
                 logging.warning("Flash attention falling back to Triton GPU kernel.")
-                logging.warning("explicit_bias after extracting mask: %s", explicit_bias.value())
                 return gpu_flash_attention(
                     query,
                     key,
@@ -241,16 +235,11 @@ def flash_attention_implementation(
                     segment_ids=get_segment_ids(segment_ids),
                     prng_key=prng_key,
                     softmax_scale=softmax_scale,
-                    mask_fn=mask.mask if mask.has_value() else None,
+                    causal=causal.has_value(),
                     dropout_rate=dropout_rate,
-                    interpret=_interpret(backend),
                 )
             else:
-                causal, explicit_bias = split(
-                    bias,
-                    CausalAttentionBias,
-                )
-                # TODO(kelvinzou): verify cudnn's mask support with BoolAttentionBias.
+                explicit_bias += segment_ids
                 return cudnn_dot_product_attention(
                     query,
                     key,
@@ -258,7 +247,7 @@ def flash_attention_implementation(
                     bias=explicit_bias.value(),
                     softmax_scale=softmax_scale,
                     causal=causal.has_value(),
-                    dropout_rate=dropout_rate,
+                    dropout_rate=0.0,
                 )
 
         elif backend == "tpu":
@@ -277,39 +266,14 @@ def flash_attention_implementation(
                 query,
                 key,
                 value,
-                is_decoding=is_decoding,
                 bias=explicit_bias.value(),
                 segment_ids=get_segment_ids(segment_ids),
-                mask=mask,
+                # The `from_sequence()` function guarantees that if there is only one
+                # mask, it is returned without modification.
+                # This allows the `causal` path in `_legacy_tpu_flash_attention()` to work.
+                mask=mask if not isinstance(mask, ZeroAttentionBias) else None,
                 softmax_scale=softmax_scale,
                 block_size=block_size,
-                interpret=_interpret(backend),
-            )
-
-        elif backend == "neuron":
-            # pylint: disable=import-outside-toplevel
-            from axlearn.common.flash_attention.neuron_attention import (
-                flash_attention as neuron_flash_attention,
-            )
-
-            key = _repeat_kv_heads(query.shape[2], key)
-            value = _repeat_kv_heads(query.shape[2], value)
-
-            # other_biases includes SegmentIdAttentionBias among other biases.
-            causal, other_biases = split(bias, CausalAttentionBias)
-
-            # TODO(apoorvtintin): Remove this once dropout support in kernel is ready.
-            if dropout_rate > 0:
-                raise NotImplementedError("Backend Neuron does not have dropout support yet")
-
-            return neuron_flash_attention(
-                query,
-                key,
-                value,
-                bias=other_biases.value(),
-                causal=causal.has_value(),
-                softmax_scale=softmax_scale,
-                dropout_rate=dropout_rate,
             )
 
         elif backend == "neuron":
@@ -338,8 +302,8 @@ def flash_attention_implementation(
             key = _repeat_kv_heads(query.shape[2], key)
             value = _repeat_kv_heads(query.shape[2], value)
             if backend == "cpu":
-                logging.info("Flash attention CPU backend is for testing only.")
-            logging.info("Flash attention falling back using plain MHA implementation")
+                logging.warning("Flash attention CPU backend is for testing only.")
+            logging.warning("Flash attention falling back using plain MHA implementation")
 
             # `causal` is supported.
             # `segment_ids` is supported.
@@ -361,7 +325,3 @@ def flash_attention_implementation(
         raise NotImplementedError(f"Backend ({backend}) does not have an implementation.")
 
     return jit_attn
-
-
-def _interpret(backend: str):
-    return backend == "cpu"

@@ -23,7 +23,7 @@ import tensorflow as tf
 from absl import flags, logging
 from absl.testing import absltest, parameterized
 from jax import numpy as jnp
-from jax._src.interpreters import pxla
+from jax._src import pjit as pjit_lib
 from jax.experimental import checkify
 
 from axlearn.common import (
@@ -464,23 +464,20 @@ class TrainerTest(test_utils.TestCase):
         # The prng_key per step is deterministic.
         np.testing.assert_array_equal(output_a["aux"]["prng_key"], output_b["aux"]["prng_key"])
 
-    @parameterized.product(
-        [{"platform": "cpu", "mesh_shape": (1, 1)}, {"platform": "tpu", "mesh_shape": (4, 1)}],
-        enable_python_cache=[True, False],
+    @parameterized.parameters(
+        {"platform": "cpu", "mesh_shape": (1, 1)},
+        {"platform": "tpu", "mesh_shape": (4, 1)},
     )
     # pylint: enable=duplicate-code
-    def test_xsc_check_policy_and_compilation_cache(
+    def test_xsc_check_policy(
         self,
         *,
         platform,
         mesh_shape,
-        enable_python_cache,
     ):
         if not test_utils.is_supported_platform(platform):
             return
-        cfg: SpmdTrainer.Config = SpmdTrainer.default_config().set(
-            name="test_trainer", train_dtype=jnp.bfloat16
-        )
+        cfg = SpmdTrainer.default_config().set(name="test_trainer", train_dtype=jnp.bfloat16)
         cfg.dir = tempfile.mkdtemp()
         cfg.mesh_axis_names = ("data", "model")
         cfg.mesh_shape = mesh_shape
@@ -500,7 +497,6 @@ class TrainerTest(test_utils.TestCase):
         cfg.vlog = 2
         # Set XSC policy.
         cfg.xsc_check_policy = lambda step: (step in [7, 8])
-        cfg.cache_compiled_train_step = enable_python_cache
 
         # Test training run.
         trainer: SpmdTrainer = cfg.set(max_step=12).instantiate(parent=None)
@@ -520,29 +516,17 @@ class TrainerTest(test_utils.TestCase):
             trainer, "compile_train_step", side_effect=mock_compile_train_step
         ) as mocked_compile_fn:
             # pylint: disable=protected-access
-            start_cache_hits = pxla._cached_lowering_to_hlo.cache_info().hits
+            start_cache_hits = pjit_lib._pjit_lower_cached.cache_info().hits
             output_a = trainer.run(prng_key=jax.random.PRNGKey(123))
-            end_cache_hits = pxla._cached_lowering_to_hlo.cache_info().hits
+            end_cache_hits = pjit_lib._pjit_lower_cached.cache_info().hits
             # pylint: enable=protected-access
+            # We expect to have hit the lowering cache on all but one step.
+            self.assertEqual(end_cache_hits - start_cache_hits, cfg.max_step - 1)
+            self.assertEqual(mocked_compile_fn.call_count, cfg.max_step)
             if platform == "tpu":
-                if not enable_python_cache:
-                    # We expect to have hit the lowering cache on all but one step.
-                    self.assertEqual(end_cache_hits - start_cache_hits, cfg.max_step - 1)
-                    self.assertEqual(mocked_compile_fn.call_count, cfg.max_step)
-                else:
-                    # We expect to have hit the lowering cache on xsc steps.
-                    self.assertEqual(end_cache_hits - start_cache_hits, 2)
-                    self.assertEqual(mocked_compile_fn.call_count, 3)
                 # Should have been called with compile options on two steps.
                 self.assertEqual(compiled_with_options_call_count[0], 2)
             else:
-                if not enable_python_cache:
-                    self.assertEqual(end_cache_hits - start_cache_hits, cfg.max_step - 1)
-                    self.assertEqual(mocked_compile_fn.call_count, cfg.max_step)
-                else:
-                    # We won't hit any cache since we have python cache.
-                    self.assertEqual(end_cache_hits - start_cache_hits, 0)
-                    self.assertEqual(mocked_compile_fn.call_count, 1)
                 # XSC check should be disabled.
                 self.assertEqual(compiled_with_options_call_count[0], 0)
 
@@ -1160,7 +1144,7 @@ class CompatibilityTest(test_utils.TestCase):
                 cfg = self.config
                 if cfg.kind == "chex":
                     param = struct_test.Chex(
-                        field_d=jnp.array(4),
+                        field_d=jnp.array(0),
                         field_b=jnp.array(1),
                         field_a=jnp.array(2),
                         field_c=jnp.array(3),

@@ -1,7 +1,6 @@
 # Copyright © 2023 Apple Inc.
 
 """Tests FlashAttention layers."""
-
 # pylint: disable=ungrouped-imports
 import math
 import os
@@ -21,21 +20,20 @@ os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 import jax
 import jax.numpy as jnp
 import pytest
-from absl.testing import absltest, parameterized
+from absl.testing import parameterized
 from jax.experimental import mesh_utils
 from jax.sharding import Mesh
 
-from axlearn.common.attention import Dropout, GroupedQKVLinear, GroupedQueryAttention, QKVLinear
+from axlearn.common.attention import Dropout, GroupedQueryAttention
 from axlearn.common.attention_bias import (
-    CausalAttentionBias,
     CompositeAttentionBias,
     SegmentIdAttentionBias,
-    SlidingWindowAttentionBias,
     TensorAttentionBias,
     bool_to_bias,
+    sliding_window_causal_mask,
 )
 from axlearn.common.base_layer import BaseLayer
-from axlearn.common.config import config_class
+from axlearn.common.config import config_class, config_for_function
 from axlearn.common.flash_attention.layer import (
     FlashAttention,
     default_mha_dim_to_partition_spec,
@@ -94,13 +92,12 @@ def _fake_inputs(
 def _prepare_layers(
     *,
     num_heads,
-    num_kv_heads,
     per_head_dim,
     mesh_axis_names,
-    mask,
+    causal,
+    sliding_window_size,
     inference=False,
     set_layer_bias_recursively=False,
-    tpu_block_size=512,
     dropout_rate=0.0,
 ):
     hidden_dim = num_heads * per_head_dim
@@ -111,28 +108,32 @@ def _prepare_layers(
         num_heads=num_heads,
         dtype=jnp.bfloat16,
         dropout=Dropout.default_config().set(rate=dropout_rate),
-        input_linear=GroupedQKVLinear.default_config().set(num_kv_heads=num_kv_heads)
-        if num_kv_heads is not None
-        else QKVLinear.default_config(),
     )
     ref_cfg = GroupedQueryAttention.default_config().set(**kwargs)
 
     if inference:
-        ref_cfg.input_linear.set(dtype=jnp.bfloat16)
+        ref_cfg.input_linear.set(dtype=jnp.bfloat16, cache_dtype=None)
     test_cfg = (
         FlashAttention.default_config()
         .set(**kwargs)
         .set(
             mha_dim_to_partition_spec=default_mha_dim_to_partition_spec(mesh_axis_names),
             output_dim_to_partition_spec=default_output_dim_to_partition_spec(mesh_axis_names),
-            tpu_block_size=tpu_block_size,
         )
     )
     if inference:
-        test_cfg.input_linear.set(dtype=jnp.bfloat16)
+        test_cfg.input_linear.set(dtype=jnp.bfloat16, cache_dtype=None)
 
-    ref_cfg.set(mask=mask)
-    test_cfg.set(mask=mask)
+    if sliding_window_size is not None:
+        assert causal
+        mask_fn = config_for_function(sliding_window_causal_mask).set(
+            sliding_window_size=sliding_window_size
+        )
+        ref_cfg.set(mask=mask_fn)
+        test_cfg.set(mask=mask_fn)
+    else:
+        ref_cfg.set(causal=causal)
+        test_cfg.set(causal=causal)
 
     set_bias_recursively(ref_cfg, set_layer_bias_recursively)
     set_bias_recursively(test_cfg, set_layer_bias_recursively)
@@ -179,16 +180,6 @@ class TestFlashAttention(TestCase):
             batch=2,
             seq_len=384,
             num_heads=4,
-            num_kv_heads=None,
-            per_head_dim=32,
-            mesh=(1, 1),
-            mesh_axis_names=("data", "model"),
-        ),
-        dict(
-            batch=2,
-            seq_len=384,
-            num_heads=4,
-            num_kv_heads=1,
             per_head_dim=32,
             mesh=(1, 1),
             mesh_axis_names=("data", "model"),
@@ -197,7 +188,6 @@ class TestFlashAttention(TestCase):
             batch=2,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(1, 1),
             mesh_axis_names=("data", "model"),
@@ -206,7 +196,6 @@ class TestFlashAttention(TestCase):
             batch=2,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(1, 1),
             mesh_axis_names=("data", "fsdp"),
@@ -215,7 +204,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(2, 2),
             mesh_axis_names=("data", "fsdp"),
@@ -224,7 +212,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(8, 1),
             mesh_axis_names=("data", "model"),
@@ -233,7 +220,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(4, 1),
             mesh_axis_names=("data", "model"),
@@ -242,7 +228,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(2, 2),
             mesh_axis_names=("data", "model"),
@@ -251,7 +236,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=128,
             mesh=(2, 2),
             mesh_axis_names=("data", "model"),
@@ -260,16 +244,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=2,
-            per_head_dim=128,
-            mesh=(1, 4),
-            mesh_axis_names=("data", "model"),
-        ),
-        dict(
-            batch=8,
-            seq_len=2048,
-            num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(1, 1, 8, 1),
             mesh_axis_names=("data", "expert", "fsdp", "model"),
@@ -278,7 +252,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(1, 1, 4, 1),
             mesh_axis_names=("data", "expert", "fsdp", "model"),
@@ -287,7 +260,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(1, 1, 8),
             mesh_axis_names=("data", "expert", "fsdp"),
@@ -296,7 +268,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(1, 1, 4),
             mesh_axis_names=("data", "expert", "fsdp"),
@@ -305,7 +276,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(1, 2, 4, 1),
             mesh_axis_names=("data", "expert", "fsdp", "model"),
@@ -314,7 +284,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(1, 2, 2, 1),
             mesh_axis_names=("data", "expert", "fsdp", "model"),
@@ -323,7 +292,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(1, 1, 2, 2),
             mesh_axis_names=("data", "expert", "fsdp", "model"),
@@ -332,7 +300,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(1, 2, 1, 2, 1),
             mesh_axis_names=("data", "seq", "expert", "fsdp", "model"),
@@ -341,7 +308,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=64,
             mesh=(1, 2, 2, 2),
             mesh_axis_names=("data", "expert", "fsdp", "model"),
@@ -350,7 +316,6 @@ class TestFlashAttention(TestCase):
             batch=8,
             seq_len=2048,
             num_heads=4,
-            num_kv_heads=None,
             per_head_dim=128,
             mesh=(1, 2, 1, 2, 2),
             mesh_axis_names=("data", "seq", "expert", "fsdp", "model"),
@@ -373,77 +338,30 @@ class TestFlashAttention(TestCase):
                 dropout=OtherDropout.default_config(), **required_kwargs
             ).instantiate(parent=None)
 
-    def test_gqa_kv_heads(self):
-        """Tests _maybe_repeat_kv_heads."""
-        batch_size = 8
-        num_heads = 8
-        num_kv_heads = 4
-        seq_len = 2048
-        per_head_dim = 128
-
-        hidden_dim = num_heads * per_head_dim
-
-        mesh = (1, 8)
-        mesh_axis_names = ("data", "model")
-        devices = [
-            mock.Mock(spec=jax.Device, platform="tpu", coords=(0, 0, i), core_on_chip=0)
-            for i in range(math.prod(mesh))
-        ]
-        with Mesh(mesh_utils.create_device_mesh(mesh, devices), mesh_axis_names):
-            kwargs = dict(
-                query_dim=hidden_dim,
-                key_dim=hidden_dim,
-                value_dim=hidden_dim,
-                num_heads=num_heads,
-                dtype=jnp.bfloat16,
-                input_linear=GroupedQKVLinear.default_config().set(num_kv_heads=num_kv_heads)
-                if num_kv_heads is not None
-                else QKVLinear.default_config(),
-                mha_dim_to_partition_spec={
-                    "btnh": PartitionSpec("data", None, "model", None),
-                    "bsnh": PartitionSpec("data", None, "model", None),
-                    "bnts": PartitionSpec("data", None, "model", None),
-                },
-            )
-            cfg = FlashAttention.default_config().set(**kwargs)
-            layer = cfg.set(name="test").instantiate(parent=None)
-
-            kv = jnp.zeros((batch_size, seq_len, num_kv_heads, per_head_dim))
-            repeated = layer._maybe_repeat_kv_heads(kv)  # pylint: disable=protected-access
-            self.assertEqual(repeated.shape[2], 8)
-
-    @parameterized.parameters(_TEST_CONFIGS)
-    def test_backend(
-        self, batch, seq_len, num_heads, num_kv_heads, per_head_dim, mesh, mesh_axis_names
-    ):
+    @parameterized.parameters(
+        [kwargs for kwargs in _TEST_CONFIGS if math.prod(kwargs["mesh"]) == 1]
+    )
+    def test_backend(self, batch, seq_len, num_heads, per_head_dim, mesh, mesh_axis_names):
         del batch, seq_len
-        devices = [
-            mock.Mock(spec=jax.Device, platform="tpu", coords=(0, 0, i), core_on_chip=0)
-            for i in range(math.prod(mesh))
-        ]
+        mock_device = mock.Mock(spec=jax.Device)
+        mock_device.platform = "tpu"
+        mock_device.coords = (0, 0, 0)
+        mock_device.core_on_chip = 0
+        devices = [mock_device]
 
-        with Mesh(
-            mesh_utils.create_device_mesh(
-                mesh,
-                devices,
-                allow_split_physical_axes=True,
-            ),
-            mesh_axis_names,
-        ):
+        with Mesh(mesh_utils.create_device_mesh(mesh, devices), mesh_axis_names):
             test_layer, _, _, _ = _prepare_layers(
                 num_heads=num_heads,
-                num_kv_heads=num_kv_heads,
                 per_head_dim=per_head_dim,
                 mesh_axis_names=mesh_axis_names,
-                mask=CausalAttentionBias.default_config(),
+                causal=True,
+                sliding_window_size=None,
             )
             backend = test_layer._backend()  # pylint: disable=protected-access
             self.assertEqual(backend, "tpu")
 
     @parameterized.parameters(_TEST_CONFIGS)
-    def test_shard_biases(
-        self, batch, seq_len, num_heads, num_kv_heads, per_head_dim, mesh, mesh_axis_names
-    ):
+    def test_shard_biases(self, batch, seq_len, num_heads, per_head_dim, mesh, mesh_axis_names):
         if not is_supported_mesh_shape(mesh):
             pytest.skip(reason=f"Unsupported mesh {mesh}.")
 
@@ -459,10 +377,10 @@ class TestFlashAttention(TestCase):
         with Mesh(mesh_utils.create_device_mesh(mesh), mesh_axis_names):
             test_layer, _, _, _ = _prepare_layers(
                 num_heads=num_heads,
-                num_kv_heads=num_kv_heads,
                 per_head_dim=per_head_dim,
                 mesh_axis_names=mesh_axis_names,
-                mask=CausalAttentionBias.default_config(),
+                causal=True,
+                sliding_window_size=None,
             )
             bias = jnp.ones((batch, num_heads, seq_len, seq_len))
             bias = as_tensor_bias(bias)
@@ -494,7 +412,8 @@ class TestFlashAttention(TestCase):
     @parameterized.product(
         _TEST_CONFIGS,
         query_len_multiplier=[0.5, 1, 2],
-        attn_type=["full", "causal", "sliding_window"],
+        causal=[False, True],
+        sliding_window_size=[None, 4],
         use_bias=[False, True],
         use_segment_ids=[False, True],
         input_dtype=[jnp.bfloat16, jnp.float32],
@@ -505,12 +424,12 @@ class TestFlashAttention(TestCase):
         batch,
         seq_len,
         num_heads,
-        num_kv_heads,
         per_head_dim,
         mesh,
         mesh_axis_names,
         query_len_multiplier,
-        attn_type,
+        causal,
+        sliding_window_size,
         use_bias,
         use_segment_ids,
         input_dtype,
@@ -518,7 +437,9 @@ class TestFlashAttention(TestCase):
     ):
         if not is_supported_mesh_shape(mesh):
             pytest.skip(reason=f"Unsupported mesh {mesh}.")
-        if attn_type != "full" and use_bias:
+        if not causal and sliding_window_size is not None:
+            pytest.skip(reason="Sliding window attention must be causal.")
+        if causal and use_bias:
             # TODO(c_lan): Investigate the numerical errors when both causal and bias are used.
             pytest.skip(reason="Only one of causal and use_bias can be True.")
         if use_segment_ids and query_len_multiplier != 1:
@@ -529,22 +450,14 @@ class TestFlashAttention(TestCase):
         if dropout_rate > 0.0 and jax.default_backend() == "tpu":
             pytest.skip("Dropout is implemented for GPU only.")
 
-        if attn_type == "full":
-            mask = None
-        elif attn_type == "causal":
-            mask = CausalAttentionBias.default_config()
-        elif attn_type == "sliding_window":
-            mask = SlidingWindowAttentionBias.default_config(sliding_window_size=4)
-
         with Mesh(mesh_utils.create_device_mesh(mesh), mesh_axis_names):
             test_layer, ref_layer, params, hidden_dim = _prepare_layers(
                 num_heads=num_heads,
-                num_kv_heads=num_kv_heads,
                 per_head_dim=per_head_dim,
                 mesh_axis_names=mesh_axis_names,
-                mask=mask,
+                causal=causal,
+                sliding_window_size=sliding_window_size,
                 dropout_rate=dropout_rate,
-                tpu_block_size=128,
             )
 
             query_len = int(query_len_multiplier * seq_len)
@@ -579,12 +492,13 @@ class TestFlashAttention(TestCase):
             # cudnn dropout will be used and it uses different PRNG than ours.
             if dropout_rate == 0.0 or use_segment_ids:
                 self.assertNestedAllClose(ref_out.data, test_out.data, atol=0.05)
-        jax.clear_caches()
+        jax.extend.backend.clear_backends()
 
     @parameterized.product(
         _TEST_CONFIGS,
         query_len_multiplier=[0.5, 1, 2],
-        attn_type=["full", "causal", "sliding_window"],
+        causal=[False, True],
+        sliding_window_size=[None, 4],
         use_bias=[False, True],
         use_segment_ids=[False, True],
         set_layer_bias_recursively=[False, True],
@@ -595,12 +509,12 @@ class TestFlashAttention(TestCase):
         batch,
         seq_len,
         num_heads,
-        num_kv_heads,
         per_head_dim,
         mesh,
         mesh_axis_names,
         query_len_multiplier,
-        attn_type,
+        causal,
+        sliding_window_size,
         use_bias,
         use_segment_ids,
         set_layer_bias_recursively,
@@ -610,45 +524,51 @@ class TestFlashAttention(TestCase):
             pytest.skip(reason=f"Unsupported mesh {mesh}.")
         if use_segment_ids and query_len_multiplier != 1:
             pytest.skip("Segment IDs are not supported for Q and K with different lengths.")
-        if attn_type == "sliding_window" and query_len_multiplier > 1:
+        if not causal and sliding_window_size is not None:
+            pytest.skip(reason="Sliding window attention must be causal.")
+        if sliding_window_size is not None and query_len_multiplier > 1:
             # When sliding window is enabled and q_len > kv_len, there might be be fully masked
             # rows.
             pytest.skip(reason="Sliding window attention does not make sense when q_len > kv_len.")
         if dropout_rate > 0.0 and jax.default_backend() == "tpu":
             pytest.skip("Dropout is implemented for GPU only.")
 
-        if attn_type != "full" and use_bias:
+        if causal and use_bias:
             # TODO(c_lan): Investigate the numerical errors when both causal and bias are used.
             pytest.skip(reason="Only one of causal and use_bias can be True.")
 
         with Mesh(mesh_utils.create_device_mesh(mesh), mesh_axis_names):
             hidden_dim = num_heads * per_head_dim
+            if sliding_window_size is not None:
+                mask_fn = config_for_function(sliding_window_causal_mask).set(
+                    sliding_window_size=sliding_window_size
+                )
+            else:
+                mask_fn = None
+
             kwargs = dict(
                 query_dim=hidden_dim,
                 key_dim=hidden_dim,
                 value_dim=hidden_dim,
                 num_heads=num_heads,
                 dtype=jnp.bfloat16,
+                causal=causal and (mask_fn is None),
+                mask=mask_fn,
                 dropout=Dropout.default_config().set(rate=dropout_rate),
-                input_linear=GroupedQKVLinear.default_config().set(num_kv_heads=num_kv_heads)
-                if num_kv_heads is not None
-                else QKVLinear.default_config(),
             )
-            if attn_type == "causal":
-                kwargs["mask"] = CausalAttentionBias.default_config()
-            elif attn_type == "sliding_window":
-                kwargs["mask"] = SlidingWindowAttentionBias.default_config(sliding_window_size=4)
-
-            ref_layer_cfg = GroupedQueryAttention.default_config().set(**kwargs)
-            test_layer_cfg = FlashAttention.default_config().set(
-                tpu_block_size=128,
-                mha_dim_to_partition_spec=default_mha_dim_to_partition_spec(mesh_axis_names),
-                output_dim_to_partition_spec=default_output_dim_to_partition_spec(mesh_axis_names),
-                **kwargs,
+            ref_cfg = DummyModel.default_config().set(
+                layer=GroupedQueryAttention.default_config().set(**kwargs),
             )
-
-            ref_cfg = DummyModel.default_config().set(layer=ref_layer_cfg)
-            test_cfg = DummyModel.default_config().set(layer=test_layer_cfg)
+            test_cfg = DummyModel.default_config().set(
+                layer=FlashAttention.default_config().set(
+                    tpu_block_size=128,
+                    mha_dim_to_partition_spec=default_mha_dim_to_partition_spec(mesh_axis_names),
+                    output_dim_to_partition_spec=default_output_dim_to_partition_spec(
+                        mesh_axis_names
+                    ),
+                    **kwargs,
+                )
+            )
             set_bias_recursively(ref_cfg, set_layer_bias_recursively)
             set_bias_recursively(test_cfg, set_layer_bias_recursively)
             ref_layer = ref_cfg.set(name="ref").instantiate(parent=None)
@@ -688,9 +608,6 @@ class TestFlashAttention(TestCase):
             # pylint: disable-next=protected-access
             elif dropout_rate > 0.0 and test_layer.layer._backend() == "gpu":
                 atol, rtol = 2.5e-4, 1e-3
-            # pylint: disable-next=protected-access
-            elif num_kv_heads and test_layer.layer._backend() == "cpu":
-                atol, rtol = 1e-4, 1e-2
             # Can be 1e-5 on x86_64/GPU/TPU, needed to be slightly higher on ARM.
             else:
                 atol, rtol = 1e-4, 1e-3
@@ -700,54 +617,48 @@ class TestFlashAttention(TestCase):
             if dropout_rate == 0.0 or use_segment_ids:
                 self.assertNestedAllClose(ref_value, test_value, atol=atol, rtol=rtol)
                 self.assertNestedAllClose(ref_grads, test_grads, atol=atol, rtol=rtol)
-        jax.clear_caches()
+        jax.extend.backend.clear_backends()
 
     @parameterized.product(
-        _TEST_CONFIGS, attn_type=["causal", "sliding_window"], use_bias=[True, False]
+        _TEST_CONFIGS, causal=[True], sliding_window_size=[None, 4], use_bias=[True, False]
     )
     def test_extend_step(
         self,
         batch,
         seq_len,
         num_heads,
-        num_kv_heads,
         per_head_dim,
         mesh,
         mesh_axis_names,
-        attn_type,
+        causal,
+        sliding_window_size,
         use_bias,
     ):
         print(
             f"batch={batch}, seq_len={seq_len} (ignored->16), num_heads={num_heads}, \n"
             f"per_head_dim={per_head_dim}, mesh={mesh}, mesh_axis_names={mesh_axis_names}, \n"
-            f"attn_type={attn_type}"
+            f"causal={causal}, sliding_window_size={sliding_window_size}"
         )
-
         # Limit generation length to 16 to save test time.
         seq_len = 16
         dtype = jnp.bfloat16
 
         if not is_supported_mesh_shape(mesh):
             pytest.skip(reason=f"Unsupported mesh {mesh}.")
+        if not causal and sliding_window_size is not None:
+            pytest.skip(reason="Sliding window attention must be causal.")
 
         named_sharding = dict(zip(mesh_axis_names, mesh))
         if "seq" in named_sharding and named_sharding["seq"] > 1:
             pytest.skip(reason="Unsupported seq dim sharding for decoding.")
 
-        if attn_type == "full":
-            mask = None
-        elif attn_type == "causal":
-            mask = CausalAttentionBias.default_config()
-        elif attn_type == "sliding_window":
-            mask = SlidingWindowAttentionBias.default_config(sliding_window_size=4)
-
         with Mesh(mesh_utils.create_device_mesh(mesh), mesh_axis_names):
             test_layer, ref_layer, params, hidden_dim = _prepare_layers(
                 num_heads=num_heads,
-                num_kv_heads=num_kv_heads,
                 per_head_dim=per_head_dim,
                 mesh_axis_names=mesh_axis_names,
-                mask=mask,
+                causal=causal,
+                sliding_window_size=sliding_window_size,
                 inference=True,
             )
             tpu_block_size = test_layer.config.tpu_block_size
@@ -807,13 +718,13 @@ class TestFlashAttention(TestCase):
             # Prepare initial states.
             initial_state, initial_output = test_layer.init_states(
                 time_step=None,
-                query=TensorSpec([batch, seq_len], dtype=dtype),
+                query=TensorSpec([batch, seq_len]),
                 kv_state=kv_state,
                 attention_logit_biases=None,
             )
             ref_initial_state, ref_inital_output = ref_layer.init_states(
                 time_step=None,
-                query=TensorSpec([batch, seq_len], dtype=dtype),
+                query=TensorSpec([batch, seq_len]),
                 kv_state=kv_state,
                 attention_logit_biases=None,
             )
@@ -846,11 +757,13 @@ class TestFlashAttention(TestCase):
                     inputs["attention_logit_biases"] = jnp.expand_dims(
                         causal_bias[:, :, t, :], axis=2
                     )
+
                 ref_inputs["query"] = cur_query
                 if use_bias:
                     ref_inputs["attention_logit_biases"] = jnp.expand_dims(
                         causal_bias[:, :, t, :], axis=2
                     )
+
                 ref_extend_step_outputs, _ = F(
                     ref_layer,
                     state=params,
@@ -901,8 +814,4 @@ class TestFlashAttention(TestCase):
                 test_out.data,
                 atol=2e-2,
             )
-        jax.clear_caches()
-
-
-if __name__ == "__main__":
-    absltest.main()
+        jax.extend.backend.clear_backends()

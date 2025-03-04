@@ -4,6 +4,7 @@
 Input format is json line with each line in OpenAI requests style.
 """
 import asyncio
+import logging
 import os
 from datetime import timedelta
 from typing import Any, Optional
