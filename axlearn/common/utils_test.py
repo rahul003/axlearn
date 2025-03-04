@@ -9,6 +9,7 @@ import sys
 from collections import OrderedDict
 from collections.abc import Iterable, Sequence
 from typing import Any, NamedTuple, Optional, Union
+from unittest import mock
 
 # pylint: disable=no-self-use
 import jax
@@ -16,7 +17,6 @@ import jaxlib
 import numpy as np
 import pytest
 import tensorflow as tf
-import torch
 from absl.testing import absltest, parameterized
 from jax import numpy as jnp
 from jax.ad_checkpoint import checkpoint_policies as jax_remat_policies
@@ -71,6 +71,7 @@ from axlearn.common.utils import (
     infer_mesh_shape,
     input_partition_spec,
     match_regex_rules,
+    prune_empty,
     prune_tree,
     pytree_children,
     replicate_to_local_data,
@@ -239,6 +240,9 @@ class TreeUtilsTest(TestCase):
         np.testing.assert_array_equal(a, b)
 
     def test_as_tensor(self):
+        # pylint: disable-next=import-outside-toplevel
+        import torch
+
         # From a number.
         self.assertTensorEqual(jnp.ones([], dtype=jnp.int32), as_tensor(1))
         # From a numpy array.
@@ -340,6 +344,9 @@ class TreeUtilsTest(TestCase):
         np.testing.assert_array_equal(a, b)
 
     def test_as_numpy_array(self):
+        # pylint: disable-next=import-outside-toplevel
+        import torch
+
         # From a number.
         self.assertNumpyArrayEqual(np.ones([], dtype=np.int64), as_numpy_array(1))
         # From a numpy array.
@@ -779,6 +786,35 @@ class TreeUtilsTest(TestCase):
         mask = utils.sequence_mask(lengths=jnp.array(lengths), max_len=max_len, dtype=dtype)
         expected = jnp.array(expected).astype(dtype if dtype else jnp.int32)
         self.assertNestedAllClose(mask, expected)
+
+    def test_prune_empty_state(self):
+        state = {
+            "state": {
+                "tensor": jnp.array(0),
+                "nested": {
+                    "empty": {},
+                    "not_empty": jnp.array([]),
+                },
+            },
+            "removed": {
+                "nested": {
+                    "deep_nested": {},
+                },
+                "sibling": {
+                    "deep_nested": {},
+                },
+            },
+        }
+        expected = {
+            "state": {
+                "tensor": jnp.array(0),
+                "nested": {
+                    "not_empty": jnp.array([]),
+                },
+            },
+        }
+        actual = prune_empty(state)
+        self.assertNestedAllClose(expected, actual)
 
 
 class SimilarNamesTest(TestCase):
@@ -1554,11 +1590,32 @@ class DeviceMeshTest(TestCase):
             "logical_mesh": HybridMeshShape(ici_mesh_shape=(1, -1, 16), dcn_mesh_shape=(-1, 1, 1)),
             "expected": (2, 16, 16),
         },
+        # Test a case when a special optimized mesh can be used.
+        {
+            "logical_mesh": HybridMeshShape(
+                ici_mesh_shape=(1, 64, 1, 4), dcn_mesh_shape=(-1, 1, 1, 1)
+            ),
+            "expected": (2, 64, 1, 4),
+            "is_custom": True,
+        },
+        # Test a case when a special optimized mesh can be used.
+        {
+            "logical_mesh": HybridMeshShape(ici_mesh_shape=(1, 64, 4), dcn_mesh_shape=(-1, 1, 1)),
+            "expected": (2, 64, 4),
+            "is_custom": True,
+        },
+        # Test a case when a special optimized mesh can be used.
+        {
+            "logical_mesh": HybridMeshShape(ici_mesh_shape=(1, 32, 8), dcn_mesh_shape=(-1, 1, 1)),
+            "expected": (2, 32, 8),
+            "is_custom": True,
+        },
     )
     def test_create_device_mesh_multi_slice_tpuv5e(
         self,
         logical_mesh: Union[MeshShape, HybridMeshShape],
         expected: Optional[Union[MeshShape, Exception]] = None,
+        is_custom: bool = False,
     ):
         slice_physical_mesh = (16, 16, 1)
         num_slices = 2
@@ -1571,7 +1628,7 @@ class DeviceMeshTest(TestCase):
         devices = [
             DummyMultiSliceTpuDevice(
                 platform="tpu",
-                device_kind="TPU v5litepod",
+                device_kind="TPU v5 lite",
                 process_index=(len(coords) * slice_index + ix) // 4,
                 coords=coord,
                 slice_index=slice_index,
@@ -1583,8 +1640,15 @@ class DeviceMeshTest(TestCase):
             with self.assertRaisesRegex(type(expected), str(expected)):
                 create_device_mesh(mesh_shape=logical_mesh, devices=devices)
         else:
+            # pylint: disable-next=protected-access
+            custom_mesh_fn = mock.Mock(wraps=utils._reshape_mesh_to_rings)
+            with mock.patch.object(utils, "_reshape_mesh_to_rings", custom_mesh_fn):
+                device_mesh = create_device_mesh(mesh_shape=logical_mesh, devices=devices)
+            if is_custom:
+                self.assertEqual(custom_mesh_fn.call_count, num_slices)
+            else:
+                custom_mesh_fn.assert_not_called()
             # Check that the constructed mesh has the expected shape.
-            device_mesh = create_device_mesh(mesh_shape=logical_mesh, devices=devices)
             self.assertEqual(expected or logical_mesh, device_mesh.shape)
 
             # Check that the sub_mesh along the first non-singleton mesh axis only contains devices
@@ -1705,33 +1769,8 @@ class HybridMeshShapeTest(TestCase):
 class HostToGlobalArrayTest(TestCase):
     """Tests host_to_global_device_array."""
 
-    @pytest.mark.neuron
-    def test_partition_batch(self):
-        """Test a case where each process produces a slice."""
-        device_count = jax.device_count()
-        process_count = jax.process_count()
-        print(f"{device_count=}, {process_count=}")
-        assert device_count > 1
-
-        global_shape = (device_count // 2, 1)
-        assert global_shape[0] % process_count == 0
-        per_feed_size = global_shape[0] // process_count
-        feed_index = jax.process_index()
-
-        with jax.sharding.Mesh(np.array(jax.devices()).reshape(device_count // 2, 2), ("x", "y")):
-            start = feed_index * per_feed_size
-            local_x = jnp.arange(start, start + per_feed_size)[:, None]
-
-            # Construct global array.
-            global_x = host_to_global_device_array(local_x, partition=DataPartitionType.BATCH, batch_axis_names="x")
-
-            # Compare against expected.
-            expected = jnp.arange(global_shape[0])[:, None]
-            self.assertEqual(jnp.mean(expected), jnp.mean(global_x))
-            self.assertNestedEqual(expected, replicate_to_local_data(global_x))
-
-    @pytest.mark.tpu
-    def test_partition_full(self):
+    @pytest.mark.for_8_devices
+    def test_one_per_device(self):
         """Test a case where each process produces a slice."""
         device_count = jax.device_count()
         process_count = jax.process_count()
@@ -1755,9 +1794,46 @@ class HostToGlobalArrayTest(TestCase):
             self.assertEqual(jnp.mean(expected), jnp.mean(global_x))
             self.assertNestedEqual(expected, replicate_to_local_data(global_x))
 
+    @pytest.mark.for_8_devices
+    def test_one_per_process(self):
+        """Test a case where every process produces a slice.
+
+        This is recommended to run on >1 process, e.g. v5e-16.
+        """
+
+        device_count = jax.device_count()
+        process_count = jax.process_count()
+        print(f"{device_count=}, {process_count=}")
+        assert device_count > 1
+
+        # Build an array that has dim=0 smaller than num devices, but still >= num processes.
+        global_shape = (device_count // 2, 2)
+        assert global_shape[0] % process_count == 0
+        process_shape = global_shape[0] // process_count
+
+        feed_index = jax.process_index()
+        global_array = jax.random.uniform(jax.random.PRNGKey(123), shape=global_shape)
+
+        with jax.sharding.Mesh(np.array(jax.devices()).reshape(device_count // 2, 2), ("x", "y")):
+            # Shard dim=0 only along data.
+            logical_sharding = PartitionSpec("x")
+
+            # Each process has a slice.
+            local_x = global_array[feed_index * process_shape : (feed_index + 1) * process_shape]
+            batch = host_to_global_device_array(local_x, partition=logical_sharding)
+
+            # Check that sharding is as expected.
+            self.assertEqual(logical_sharding, batch.sharding.spec)
+
+            # Check that contents are as expected.
+            self.assertNestedEqual(global_array, replicate_to_local_data(batch))
+
     @pytest.mark.tpu
     def test_every_other_process(self):
-        """Test a case where every other process produces a slice."""
+        """Test a case where every other process produces a slice.
+
+        In this case, we require a dispatch step.
+        """
 
         device_count = jax.device_count()
         process_count = jax.process_count()

@@ -13,7 +13,7 @@ import jax
 import enum
 import functools
 import itertools
-from typing import Any, Optional, Union
+from typing import Any, List, NamedTuple, Optional, Union
 
 from jax.ad_checkpoint import checkpoint_policies as jax_remat_policies
 
@@ -40,7 +40,7 @@ from axlearn.common.trainer_config_modifier import (
     ChainConfigModifier,
     GradientAccumulationModifier,
     MeshShapeModifier,
-    ModelConfigModifier,
+    ModuleConfigModifier,
     PartitionSpecModifier,
     RematSpecModifier,
 )
@@ -62,7 +62,7 @@ from axlearn.experiments.text.gpt.common import (
 )
 from axlearn.experiments.text.gpt.common import model_config as common_model_config
 from axlearn.experiments.text.gpt.common import scaled_hidden_dim
-from axlearn.experiments.trainer_config_utils import TrainerConfigFn
+from axlearn.experiments.trainer_config_utils import TrainerConfigFn, V6eFlashConfigModifier
 
 MODEL_SIZES = ("test", "1B", "3B", "7B", "8B", "70B")
 
@@ -71,13 +71,15 @@ class Version(enum.Enum):
     V1 = 1
     V2 = 2
     V3 = 3
+    V3_TIKTOKEN = "3-tiktoken"
 
 
 # Mapping from Fuji versions to vocab sizes.
 VOCAB_SIZE = {
     Version.V1: 32 * 1024,
     Version.V2: 32 * 1024,
-    Version.V3: 128256,
+    Version.V3: 128 * 1024,
+    Version.V3_TIKTOKEN: 128256,
 }
 
 
@@ -86,6 +88,7 @@ MAX_SEQUENCE_LENGTH = {
     Version.V1: 2048,
     Version.V2: 4096,
     Version.V3: 8192,
+    Version.V3_TIKTOKEN: 8192,
 }
 
 
@@ -93,6 +96,7 @@ ROPE_THETA = {
     Version.V1: 1e4,
     Version.V2: 1e4,
     Version.V3: 5e5,
+    Version.V3_TIKTOKEN: 5e5,
 }
 
 # Mapping from Fuji versions to total number of tokens used in training.
@@ -111,6 +115,13 @@ TOTAL_TOKENS = {
         "test": 15 * (1024**4),  # 15T tokens
         "1B": 15 * (1024**4),  # 15T tokens
         "3B": 15 * (1024**4),  # 15T tokens
+        "7B": 15 * (1024**4),  # 15T tokens
+        "70B": 15 * (1024**4),  # 15T tokens
+    },
+    Version.V3_TIKTOKEN: {
+        "test": 15 * (1024**4),  # 15T tokens
+        "1B": 15 * (1024**4),  # 15T tokens
+        "3B": 15 * (1024**4),  # 15T tokens
         "8B": 15 * (1024**4),  # 15T tokens
         "70B": 15 * (1024**4),  # 15T tokens
     },
@@ -122,6 +133,7 @@ TOKENS_PER_BATCH = {
     Version.V1: 4 * (1024**2),
     Version.V2: 4 * (1024**2),
     Version.V3: 16 * (1024**2),
+    Version.V3_TIKTOKEN: 16 * (1024**2),
 }
 
 def offload_dots_saveable_policy(*_, **__):
@@ -139,40 +151,42 @@ def offload_attention_proj_policy(*_, **__):
     )
 
 
-def get_trainer_kwargs(
+class _Trn2CustomConfig(NamedTuple):
+    """Config modifications required to run Fuji models on TRN2."""
+
+    # Module config modifications.
+    module_modifications: List[ModuleConfigModifier.Config]
+    # Partition spec modifications.
+    partition_spec_modifications: List[PartitionSpecModifier.Config]
+
+
+def _generate_trn2_custom_configs(
     model_size: str,
     *,
-    vocab_size: int,
     version: Version,
-    flash_attention: bool = False,
-) -> dict[str, Any]:
-    """Construct default trainer kwargs given a model size."""
-    tokens_per_batch = TOKENS_PER_BATCH[version]
-    if model_size not in TOTAL_TOKENS[version]:
-        return {}
-    max_step = TOTAL_TOKENS[version][model_size] // tokens_per_batch
-    max_sequence_length = MAX_SEQUENCE_LENGTH[version]
-    train_batch_size = tokens_per_batch // max_sequence_length
+) -> _Trn2CustomConfig:
+    """Generate custom module config and PartitionSpec modification for TRN2.
 
-    # Whether to use grouped query attention.
-    num_kv_heads = None
-    if version == Version.V3:
-        num_kv_heads = 8
+    Args:
+        model_size: Size of the Fuji model.
+        version: Version of the Fuji model.
 
-    rope_theta = ROPE_THETA[version]
-
-    # TRN2 specific model config modifications
-    trn2_model_modifications = [
+    Returns:
+        A _Trn2CustomConfig object that contains the generated modifications.
+    """
+    # TRN2 specific model config modifications.
+    trn2_module_modifications = [
         # Neuron compiler has a module to detect repeating blocks and reuse them during compilation.
         # So compile time does not grow with the number of layers.
-        ModelConfigModifier.default_config().set(
+        ModuleConfigModifier.default_config().set(
             target_config="model.decoder.transformer",
             modification=StackedTransformerLayer.default_config(),
         )
     ]
+    # Grouped QKV is only used in fuji-v3 except in fuji-v2 if model is 70B.
     if version == Version.V3 or (model_size == "70B" and version != Version.V1):
-        trn2_model_modifications.append(
-            ModelConfigModifier.default_config().set(
+        trn2_module_modifications.append(
+            ModuleConfigModifier.default_config().set(
                 target_config="model.decoder.transformer.layer.self_attention.attention."
                 "input_linear.input_linear",
                 modification=GroupedQKVLinear.default_config(),
@@ -188,25 +202,25 @@ def get_trainer_kwargs(
                         "model",
                         ("expert", "fsdp", "seq"),
                     ),
-                    "input_partition_spec": ("fsdp", None),
-                    "output_partition_spec": ("fsdp", None, None),
+                    "input_partition_spec": (("data", "fsdp"), None),
+                    "output_partition_spec": (("data", "fsdp"), None, None),
                     "embedding_partition_spec": ("model", None),
                 },
                 # Sequence parallel shardings for norms.
                 "model.decoder.transformer.layer.self_attention.norm": {
-                    "input_partition_spec": ("fsdp", "model", None),
-                    "output_partition_spec": ("fsdp", None, None),
+                    "input_partition_spec": (("data", "fsdp"), "model", None),
+                    "output_partition_spec": (("data", "fsdp"), None, None),
                 },
                 "model.decoder.transformer.layer.feed_forward.norm": {
-                    "input_partition_spec": ("fsdp", "model", None),
-                    "output_partition_spec": ("fsdp", None, None),
+                    "input_partition_spec": (("data", "fsdp"), "model", None),
+                    "output_partition_spec": (("data", "fsdp"), None, None),
                 },
                 "model.decoder.output_norm": {
-                    "input_partition_spec": ("fsdp", "model", None),
-                    "output_partition_spec": ("fsdp", None, None),
+                    "input_partition_spec": (("data", "fsdp"), "model", None),
+                    "output_partition_spec": (("data", "fsdp"), None, None),
                 },
                 "model.decoder.transformer.layer.feed_forward.linear2": {
-                    "output_partition_spec": ("fsdp", None, None),
+                    "output_partition_spec": (("data", "fsdp"), None, None),
                 },
             },
         ),
@@ -215,6 +229,7 @@ def get_trainer_kwargs(
     trn2_lm_head_partition_spec = [
         PartitionSpecModifier.default_config().set(
             partition_specs={
+                # Vocab parallel embeddings sharding from Megatron LM.
                 "model.decoder.lm_head": {
                     "param_partition_spec": (
                         "model",
@@ -224,7 +239,48 @@ def get_trainer_kwargs(
             },
         ),
     ]
+    if model_size in ("70B", "8B"):
+        trn2_partition_spec_modifications += trn2_lm_head_partition_spec
 
+    return _Trn2CustomConfig(
+        module_modifications=trn2_module_modifications,
+        partition_spec_modifications=trn2_partition_spec_modifications,
+    )
+
+
+def get_trainer_kwargs(
+    model_size: str,
+    *,
+    vocab_size: int,
+    version: Version,
+    flash_attention: bool = False,
+) -> dict[str, Any]:
+    """Construct default trainer kwargs given a model size."""
+    tokens_per_batch = TOKENS_PER_BATCH[version]
+    max_step = TOTAL_TOKENS[version][model_size] // tokens_per_batch
+    max_sequence_length = MAX_SEQUENCE_LENGTH[version]
+    train_batch_size = tokens_per_batch // max_sequence_length
+
+    # Whether to use grouped query attention.
+    num_kv_heads = None
+    if version in (Version.V3, Version.V3_TIKTOKEN):
+        num_kv_heads = 8
+
+    rope_theta = ROPE_THETA[version]
+
+    trn2_config = _generate_trn2_custom_configs(model_size, version=version)
+    offload_dots_saveable_policy = config_for_function(
+        extended_checkpoint_policies.offload_dots_saveable
+    ).set(offload_src="device", offload_dst="pinned_host")
+    # To make it work better with v3 8k sequence length.
+    offload_attention_proj_policy = config_for_function(
+        extended_checkpoint_policies.save_and_offload_only_these_names_regex
+    ).set(
+        names_which_can_be_saved=None,
+        names_which_can_be_offloaded=RematRegexSavePatterns.NATIVE_ATTENTION.value,
+        offload_src="device",
+        offload_dst="pinned_host",
+    )
     # dict() is more readable here.
     # pylint: disable=use-dict-literal
     if model_size == "test":
@@ -276,8 +332,8 @@ def get_trainer_kwargs(
                                 # Each TRN2 chip has 4 XLA cores.
                                 mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
                             ),
-                            *trn2_model_modifications,
-                            *trn2_partition_spec_modifications,
+                            *trn2_config.module_modifications,
+                            *trn2_config.partition_spec_modifications,
                         ],
                     ),
                 ),
@@ -310,8 +366,8 @@ def get_trainer_kwargs(
                                 # Each TRN2 chip has 4 XLA cores.
                                 mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
                             ),
-                            *trn2_model_modifications,
-                            *trn2_partition_spec_modifications,
+                            *trn2_config.module_modifications,
+                            *trn2_config.partition_spec_modifications,
                         ],
                     ),
                 ),
@@ -414,6 +470,7 @@ def get_trainer_kwargs(
                                     ),
                                 }
                             ),
+                            V6eFlashConfigModifier.default_config(),
                         ],
                     ),
                 ),
@@ -426,7 +483,7 @@ def get_trainer_kwargs(
                 # v2 on gpu-p5.48xlarge-256, step time: 1.78s/step, MFU 39%.
                 # TODO(kelvin-zou): need to match 1.5s/step perf on TransformerEngine.
                 (
-                    "gpu-(p5.48xlarge|p4de.24xlarge|a3-highgpu-8g)-(256|512|1024)",
+                    "gpu-(p5.48xlarge|p4de.24xlarge|a3-highgpu-8g|a3-megagpu-8g)-(256|512|1024)",
                     mesh_shape_from_axes(data=-1, fsdp=8),
                 ),
                 (
@@ -438,8 +495,8 @@ def get_trainer_kwargs(
                                 # Each TRN2 chip has 4 XLA cores.
                                 mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
                             ),
-                            *trn2_model_modifications,
-                            *trn2_partition_spec_modifications,
+                            *trn2_config.module_modifications,
+                            *trn2_config.partition_spec_modifications,
                         ],
                     ),
                 ),
@@ -520,7 +577,7 @@ def get_trainer_kwargs(
                 ),
                 ("tpu-v5p-.*", mesh_shape_from_axes(data=-1, fsdp=8)),
                 (
-                    "gpu-(p5.48xlarge|p4de.24xlarge|a3-highgpu-8g)-(256|512|1024)",
+                    "gpu-(p5.48xlarge|p4de.24xlarge|a3-highgpu-8g|a3-megagpu-8g)-(256|512|1024)",
                     mesh_shape_from_axes(data=-1, fsdp=8),
                 ),
                 (
@@ -532,8 +589,8 @@ def get_trainer_kwargs(
                                 # Each TRN2 chip has 4 XLA cores.
                                 mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
                             ),
-                            *trn2_model_modifications,
-                            *(trn2_partition_spec_modifications + trn2_lm_head_partition_spec),
+                            *trn2_config.module_modifications,
+                            *trn2_config.partition_spec_modifications,
                         ],
                     ),
                 ),
@@ -597,6 +654,7 @@ def get_trainer_kwargs(
                                     ),
                                 }
                             ),
+                            V6eFlashConfigModifier.default_config(),
                         ],
                     ),
                 ),
@@ -616,6 +674,7 @@ def get_trainer_kwargs(
                                     ),
                                 }
                             ),
+                            V6eFlashConfigModifier.default_config(),
                             GradientAccumulationModifier.default_config().set(grad_acc_steps=4),
                         ],
                     ),
@@ -655,8 +714,8 @@ def get_trainer_kwargs(
                                     ),
                                 }
                             ),
-                            *trn2_model_modifications,
-                            *(trn2_partition_spec_modifications + trn2_lm_head_partition_spec),
+                            *trn2_config.module_modifications,
+                            *trn2_config.partition_spec_modifications,
                         ],
                     ),
                 ),
@@ -666,8 +725,9 @@ def get_trainer_kwargs(
         raise NotImplementedError(f"Unknown model size {model_size}.")
     model_kwargs = trainer_kwargs.pop("model_kwargs")
     model_kwargs.setdefault("vocab_size", vocab_size)
-    backend = jax.default_backend()
-    trainer_kwargs["input_partition_type"] = None if backend != "neuron" else DataPartitionType.BATCH
+    if version == Version.V3_TIKTOKEN:  # tiktoken tokenizer
+        model_kwargs["pad_token_id"] = 128004
+        model_kwargs["eos_token_id"] = 128001
     trainer_kwargs["model_cfg"] = model_config(**model_kwargs)
     trainer_kwargs["learner_cfg"] = adamw_decoupled_learner_config(
         max_step=trainer_kwargs["max_step"],
@@ -690,6 +750,8 @@ def model_config(
     ffn_dim: Optional[Union[int, config.FunctionConfigBase]] = None,
     flash_attention: bool = False,
     stack_cfg: Optional[BaseStackedTransformerLayer.Config] = None,
+    pad_token_id: Optional[int] = None,
+    eos_token_id: Optional[int] = None,
 ) -> causal_lm.Model.Config:
     """Returns an LM model config based on the given hyperparams.
 
@@ -708,6 +770,8 @@ def model_config(
         flash_attention: Whether to enable flash attention.
         stack_cfg: The transformer stack config.
             If None, defaults to a RepeatedTransformerLayer.
+        pad_token_id: Int ID of the inputs to be masked for self-attention.
+        eos_token_id: Int ID of the end of sequence token id.
 
     Returns:
         A causal LM config.
@@ -745,6 +809,8 @@ def model_config(
         lm_head_cfg=LmHead.default_config() if not shared_lm_head else None,
         attention_cfg=flash_attention_config() if flash_attention else atten_cfg,
         attention_qkv_linear=atten_qkv_linear,
+        pad_token_id=pad_token_id,
+        eos_token_id=eos_token_id,
     )
     return cfg
 
@@ -763,6 +829,8 @@ def trainer_configs(
     for version, model_size, flash_attention in itertools.product(
         Version, MODEL_SIZES, [True, False]
     ):
+        if model_size not in TOTAL_TOKENS[version]:  # This combination does not exist.
+            continue
         vocab_size = VOCAB_SIZE[version]
         config_name = make_config_name(
             arch=arch,
@@ -773,8 +841,6 @@ def trainer_configs(
         kwargs = get_trainer_kwargs(
             model_size, vocab_size=vocab_size, version=version, flash_attention=flash_attention
         )
-        if len(kwargs) == 0:  # This combination does not exist
-            continue
         max_sequence_length = kwargs.pop("max_sequence_length")
         # pylint: disable-next=unexpected-keyword-arg,missing-kwoa
         config_map[config_name] = get_trainer_config_fn(
@@ -828,9 +894,13 @@ def trainer_configs(
 
                 # The original config was supposed to run on >= 32 machines.
                 # pylint: disable=cell-var-from-loop
-                cfg.input.batcher.global_batch_size //= 128 if version == Version.V3 else 32
+                cfg.input.input_dispatcher.global_logical_batch_size //= (
+                    128 if version in (Version.V3, Version.V3_TIKTOKEN) else 32
+                )
                 for evaler in cfg.evalers.values():
-                    evaler.input.batcher.global_batch_size //= 128 if version == Version.V3 else 32
+                    evaler.input.input_dispatcher.global_logical_batch_size //= (
+                        128 if version in (Version.V3, Version.V3_TIKTOKEN) else 32
+                    )
                 # pylint: enable=cell-var-from-loop
                 return cfg
 

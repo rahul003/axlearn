@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import unittest
 
-import chex
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -20,6 +19,7 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from axlearn.common.attention_bias import (
     CausalAttentionBias,
     MaskFnAttentionBias,
+    SlidingWindowAttentionBias,
     ZeroAttentionBias,
     causal_mask,
     sliding_window_causal_mask,
@@ -29,14 +29,10 @@ from axlearn.common.flash_attention.utils import mha_reference
 from axlearn.common.test_utils import TestCase, is_supported_mesh_shape
 from axlearn.common.utils import Tensor
 
-# Comment out to test on CPU manually. Technically, this test runs on the CPU, albeit very slowly.
-if jax.default_backend() != "tpu":
-    pytest.skip(reason="Incompatible hardware", allow_module_level=True)
-
 
 def setUpModule():
-    # If on CPU, emulate 4 devices.
-    chex.set_n_cpu_devices(4)
+    if jax.default_backend() not in ("tpu", "cpu"):
+        pytest.skip(reason="Incompatible hardware", allow_module_level=True)
 
 
 def jax_fn_mask(query_position: Tensor, key_position: Tensor) -> Tensor:
@@ -84,9 +80,19 @@ class TestFlashAttention(TestCase):
 
     @parameterized.parameters(
         [ZeroAttentionBias(), splash_attention_mask.FullMask((8, 8))],
-        [CausalAttentionBias(shape=(8, 8)), splash_attention_mask.CausalMask(shape=(8, 8))],
         [
-            MaskFnAttentionBias(sliding_window_causal_mask(4), shape=(8, 8)),
+            CausalAttentionBias(
+                target_positions=jnp.arange(8)[None], source_positions=jnp.arange(8)[None]
+            ),
+            splash_attention_mask.CausalMask(shape=(8, 8)),
+        ],
+        [
+            SlidingWindowAttentionBias(
+                sliding_window_causal_mask(4),
+                sliding_window_size=4,
+                target_positions=jnp.arange(8)[None],
+                source_positions=jnp.arange(8)[None],
+            ),
             splash_attention_mask.LocalMask(shape=(8, 8), window_size=(4, 0), offset=0),
         ],
     )
@@ -102,7 +108,6 @@ class TestFlashAttention(TestCase):
         sliding_window_size=[1024],
         num_heads=[4],
         per_head_dim=[256],
-        mesh=[(4, 1)],
         mesh_axis_names=[("data", "model")],
     )
     def test_forward(
@@ -113,11 +118,12 @@ class TestFlashAttention(TestCase):
         per_head_dim,
         mask_fn,
         sliding_window_size,
-        mesh,
         mesh_axis_names,
     ):
-        if not is_supported_mesh_shape(mesh):
-            pytest.skip(reason=f"Unsupported mesh {mesh}.")
+        if jax.default_backend() == "cpu" and seq_len > 1024:
+            pytest.skip(reason="Too slow on CPU.")
+        mesh = (1, 1) if jax.default_backend() == "cpu" else (4, 1)
+        self.assertTrue(is_supported_mesh_shape(mesh))
 
         k1, k2, k3 = jax.random.split(jax.random.PRNGKey(0), 3)
         q = jax.random.normal(
@@ -148,10 +154,16 @@ class TestFlashAttention(TestCase):
                 if mask_fn == "zero":
                     mask = ZeroAttentionBias()
                 elif mask_fn == "causal":
-                    mask = CausalAttentionBias(shape=(seq_len, seq_len))
+                    mask = CausalAttentionBias(
+                        target_positions=jnp.arange(seq_len)[None],
+                        source_positions=jnp.arange(seq_len)[None],
+                    )
                 elif mask_fn.startswith("sliding"):
-                    mask = MaskFnAttentionBias(
-                        sliding_window_causal_mask(sliding_window_size), shape=(seq_len, seq_len)
+                    mask = SlidingWindowAttentionBias(
+                        sliding_window_causal_mask(sliding_window_size),
+                        sliding_window_size=sliding_window_size,
+                        target_positions=jnp.arange(seq_len)[None],
+                        source_positions=jnp.arange(seq_len)[None],
                     )
 
                 attn = lambda q, k, v: tpu_attention.tpu_flash_attention(
@@ -253,7 +265,13 @@ class TestFlashAttention(TestCase):
         legacy_flash_wrapper = unittest.mock.Mock(wraps=tpu_attention._legacy_tpu_flash_attention)
 
         if mask is not None:
-            mask = MaskFnAttentionBias(mask, shape=(query_len, kv_len))
+            mask = MaskFnAttentionBias(
+                mask,
+                target_positions=jnp.arange(query_len)[None],
+                source_positions=jnp.arange(kv_len)[None],
+            )
+        else:
+            mask = ZeroAttentionBias()
 
         def fn(q, k, v, bias, ids):
             record_legacy_call = unittest.mock.patch.object(

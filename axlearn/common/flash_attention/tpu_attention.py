@@ -2,9 +2,10 @@
 
 """Wrappers for FlashAttention on TPU in JAX with logit bias support."""
 import functools
-from typing import Optional, Union
+from typing import Optional
 
 import jax
+import jax.ad_checkpoint
 import jax.numpy as jnp
 import numpy as np
 from absl import logging
@@ -35,10 +36,14 @@ from axlearn.common.attention import apply_attention_logit_biases
 from axlearn.common.attention_bias import (
     CausalAttentionBias,
     MaskFnAttentionBias,
+    SlidingWindowAttentionBias,
     ZeroAttentionBias,
     as_attention_bias,
 )
+from axlearn.common.flash_attention.remat import FLASH_ATTN_RESIDUAL_NAME
 from axlearn.common.utils import Tensor
+
+MaskFnOrZero = MaskFnAttentionBias | ZeroAttentionBias
 
 
 def tpu_flash_attention(
@@ -48,8 +53,9 @@ def tpu_flash_attention(
     bias: Tensor = None,  # [batch_size, num_heads, target_len, source_len]
     segment_ids: Tensor = None,  # [batch_size, target_len]
     *,
-    mask: Optional[MaskFnAttentionBias] = None,
+    mask: MaskFnOrZero,
     softmax_scale: float = 1.0,
+    is_decoding: bool = False,
     block_size: int = 128,
     interpret: bool = False,
 ):
@@ -74,6 +80,7 @@ def tpu_flash_attention(
              Shape:  [batch_size, target_len].
         mask: The mask to apply. This is more compute efficient compared to setting bias = -inf.
         softmax_scale: A scaling factor applied to the query.
+        is_decoding: Whether it is in decoding.
         block_size: The block size to use for chunking data in the kernel.
         interpret: If True, interpret the kernel using the pallas interpreter. CPU needs it.
 
@@ -113,7 +120,7 @@ def tpu_flash_attention(
             f"Source seq len {key.shape[1]} must be divisible by block size {block_size}."
         )
 
-    mask: Union[MaskFnAttentionBias | ZeroAttentionBias] = as_attention_bias(mask)
+    mask: MaskFnOrZero = as_attention_bias(mask)
 
     # Switch num_heads and seq_len axes.
     query = jnp.einsum("btnh->bnth", query)
@@ -121,9 +128,11 @@ def tpu_flash_attention(
     value = jnp.einsum("bsnh->bnsh", value)
     try:
         check_tpu_splash_attention(
-            query=query,
-            key=key,
+            target_len=query.shape[2],
+            source_len=key.shape[2],
+            head_dim=query.shape[3],
             mask=mask,
+            is_decoding=is_decoding,
             has_segment_ids=(segment_ids is not None),
             has_bias=(bias is not None),
         )
@@ -139,11 +148,12 @@ def tpu_flash_attention(
             # and 1.14x in 539.5b.
             use_fused_bwd_kernel=True,
         )
+        splash_mask = _to_splash_mask(mask, mask_shape=(query.shape[2], key.shape[2]))
         context = _tpu_splash_attention(
             query,
             key,
             value,
-            mask=mask,
+            splash_mask=splash_mask,
             segment_ids=segment_ids,
             block_sizes=block_sizes,
             interpret=interpret,
@@ -164,13 +174,16 @@ def tpu_flash_attention(
             block_k_dq=block_size,
             block_q_dq=block_size,
         )
+        causal = isinstance(mask, CausalAttentionBias)
+        if not causal and mask.has_value():
+            bias = apply_attention_logit_biases(mask.value(), bias)
         context = _legacy_tpu_flash_attention(
             query,
             key,
             value,
             bias,
             segment_ids=segment_ids,
-            mask=mask,
+            causal=causal,
             block_sizes=block_sizes,
             interpret=interpret,
         )
@@ -187,7 +200,7 @@ def tpu_flash_attention(
 @functools.partial(
     jax.jit,
     static_argnames=[
-        "mask",  # Mask objects don't actually contain jax arrays, so they are static.
+        "causal",
         "block_sizes",
         "interpret",
     ],
@@ -199,7 +212,7 @@ def _legacy_tpu_flash_attention(
     bias: Tensor = None,  # [batch_size, num_heads, target_len, source_len]
     segment_ids: Tensor = None,  # [batch_size, target_len]
     *,
-    mask: MaskFnAttentionBias,
+    causal: bool = False,
     block_sizes: Optional[LegacyBlockSizes] = None,
     interpret: bool = False,
 ) -> Tensor:  # [batch_size, num_heads, target_len, head_dim].
@@ -215,7 +228,7 @@ def _legacy_tpu_flash_attention(
         segment_ids: The id of which segment each token belongs to. Attention is not computed
              between tokens in different segments.
              Shape:  [batch_size, target_len].
-        mask: The mask to apply. This is more compute efficient compared to setting bias = -inf.
+        causal: Whether it's causal attention.
         block_sizes: An object containing values that can be used to tune the performance
             such as the block size to chunk things into.
         interpret: If True, interpret the kernel using the pallas interpreter. CPU needs it.
@@ -226,10 +239,6 @@ def _legacy_tpu_flash_attention(
     Raises:
         NotImplementedError: If a custom (non-causal, non-full) mask is specified.
     """
-    causal = isinstance(mask, CausalAttentionBias)
-    if not causal and mask.has_value():
-        bias = apply_attention_logit_biases(mask.value(), bias)
-
     context = pallas_tpu_flash_attention(
         q=query,
         k=key,
@@ -243,7 +252,6 @@ def _legacy_tpu_flash_attention(
         debug=False,
         interpret=interpret,
     )
-
     return context
 
 
@@ -253,18 +261,22 @@ class SplashAttentionUnsupportedError(NotImplementedError):
 
 def check_tpu_splash_attention(
     *,
-    query: Tensor,  # [batch_size, num_heads, source_len, head_dim]
-    key: Tensor,  # [batch_size, num_heads, target_len, head_dim]
-    mask: Union[MaskFnAttentionBias | ZeroAttentionBias],
+    target_len: int,
+    source_len: int,
+    head_dim: int,
+    mask: MaskFnOrZero,
+    is_decoding: bool = False,
     has_segment_ids: bool = False,
     has_bias: bool = False,
 ):
     """Checks if splash attention is supported on TPU for the given arguments.
 
     Args:
-        query: The query tensor, of shape [batch_size, num_heads, target_len, head_dim].
-        key: The key tensor, of shape [batch_size, num_heads, source_len, head_dim].
+        target_len: The length of the target sequence.
+        source_len: The length of the source sequence.
+        head_dim: The dimension of each head.
         mask: The mask to apply. This is more compute efficient compared to setting bias = -inf.
+        is_decoding: Whether it is in decoding.
         has_segment_ids: Whether segment_ids is None or not.
         has_bias: Whether attention involves a bias.
 
@@ -272,12 +284,8 @@ def check_tpu_splash_attention(
         SplashAttentionUnsupportedError: If splash attention is not supported for the given
             arguments.
     """
-    target_len = query.shape[2]
-    source_len = key.shape[2]
-    head_dim = query.shape[3]
-
     if has_bias:
-        return False  # SplashAttention does not support specifying a bias.
+        raise SplashAttentionUnsupportedError("SplashAttention does not support specifying a bias.")
     with jax.ensure_compile_time_eval():
         if jnp.any(
             jnp.asarray([target_len, source_len, head_dim]) % splash_attention_kernel.NUM_LANES != 0
@@ -293,19 +301,20 @@ def check_tpu_splash_attention(
         )
     if mask.has_value():
         assert isinstance(mask, MaskFnAttentionBias)
-        if target_len != source_len:
+        if not isinstance(mask, (CausalAttentionBias, SlidingWindowAttentionBias)):
+            raise SplashAttentionUnsupportedError(f"{mask=} is not supported.")
+        if is_decoding:
+            # TODO(dhwang2): support splash decoding via splash NumPy mask.
             raise SplashAttentionUnsupportedError(
                 "Query and key/value must have same length when mask is used."
             )
-        if isinstance(mask.target_positions, jax.core.Tracer):
-            raise SplashAttentionUnsupportedError(
-                "Non-static value of `target_positions` is not supported.\n"
-                "Are you decoding using SplashAttention? That's not supported."
-            )
+        else:
+            if target_len != source_len:
+                raise ValueError(f"{target_len=} and {source_len=} must be same in forward().")
 
 
 def _to_splash_mask(
-    mask: Union[MaskFnAttentionBias | ZeroAttentionBias],
+    mask: MaskFnOrZero,
     *,
     mask_shape: tuple[int, int],
     q_seq_shards: int = 1,
@@ -316,10 +325,8 @@ def _to_splash_mask(
     assert isinstance(mask, MaskFnAttentionBias)
     if isinstance(mask, CausalAttentionBias):
         return splash_attention_mask.CausalMask(shape=mask_shape, shard_count=q_seq_shards)
-    if hasattr(mask.mask, "_sliding_window_size"):
-        # TODO(dhwang2): introduce SlidingWindowAttentionBias instead of "_sliding_window_size".
-        # This is set in sliding_window_causal_mask().
-        left_size = getattr(mask.mask, "_sliding_window_size")
+    elif isinstance(mask, SlidingWindowAttentionBias):
+        left_size = mask.sliding_window_size
         return splash_attention_mask.LocalMask(
             shape=mask_shape, window_size=(left_size, 0), offset=0, shard_count=q_seq_shards
         )
@@ -337,14 +344,14 @@ def _to_splash_mask(
 
 @functools.partial(
     jax.jit,
-    static_argnames=["block_sizes", "interpret"],
+    static_argnames=["splash_mask", "block_sizes", "interpret"],
 )
 def _tpu_splash_attention(
     query: Tensor,  # [batch_size, num_heads, target_len, head_dim]
     key: Tensor,  # [batch_size, num_heads, source_len, head_dim]
     value: Tensor,  # [batch_size, num_heads, source_len, head_dim]
     *,
-    mask: Union[MaskFnAttentionBias | ZeroAttentionBias],
+    splash_mask: splash_attention_mask.Mask,
     segment_ids: Optional[Tensor] = None,  # [batch_size, target_len]
     block_sizes: Optional[splash_attention_kernel.BlockSizes] = None,
     interpret: bool = False,
@@ -378,9 +385,6 @@ def _tpu_splash_attention(
     # TODO(dhwang2): splash attention can support segment_ids. Support it when needed.
     del segment_ids
     num_heads = query.shape[1]
-    mask_shape = (query.shape[2], key.shape[2])
-    splash_mask = _to_splash_mask(mask, mask_shape=mask_shape)
-
     kernel = splash_attention_kernel.make_splash_mha(
         mask=splash_attention_mask.MultiHeadMask(masks=[splash_mask] * num_heads),
         block_sizes=block_sizes,
@@ -388,6 +392,7 @@ def _tpu_splash_attention(
         head_shards=1,
         q_seq_shards=1,
         interpret=interpret,
+        residual_checkpoint_name=f"tpu_attention.{FLASH_ATTN_RESIDUAL_NAME}",
     )
     kernel = jax.vmap(kernel)
     context = kernel(q=query, k=key, v=value)
@@ -470,18 +475,17 @@ def pallas_tpu_flash_attention(
             batch_size, num_heads, q_seq_len, kv_seq_len, d_model
         )
     return _flash_attention(
-        q, k, v, ab, segment_ids, False, causal, softmax_scale, block_sizes, debug, interpret
+        q, k, v, ab, segment_ids, causal, softmax_scale, block_sizes, debug, interpret
     )
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=range(5, 11))
+@functools.partial(jax.custom_vjp, nondiff_argnums=range(5, 10))
 def _flash_attention(
     q,
     k,
     v,
     ab,
     segment_ids,
-    save_residuals,
     causal,
     softmax_scale,
     block_sizes,
@@ -494,7 +498,7 @@ def _flash_attention(
         v,
         ab,
         segment_ids,
-        save_residuals,
+        False,
         causal,
         softmax_scale,
         block_sizes.block_b,
@@ -512,23 +516,32 @@ def _flash_attention_fwd(
     v,
     ab,
     segment_ids,
-    save_residuals,
     causal,
     softmax_scale,
     block_sizes,
     debug,
     interpret,
 ):
-    if save_residuals:
-        raise NotImplementedError("Higher-order AD not supported")
-    o, l, m = _flash_attention(
-        q, k, v, ab, segment_ids, True, causal, softmax_scale, block_sizes, debug, interpret
+    o, l, m = _flash_attention_impl(
+        q,
+        k,
+        v,
+        ab,
+        segment_ids,
+        True,
+        causal,
+        softmax_scale,
+        block_sizes.block_b,
+        block_sizes.block_q,
+        block_sizes.block_k_major,
+        block_sizes.block_k,
+        debug,
+        interpret,
     )
     return o, (q, k, v, ab, segment_ids, o, l, m)
 
 
 def _flash_attention_bwd(
-    save_residuals: bool,
     causal: bool,
     softmax_scale: float,
     block_sizes: LegacyBlockSizes,
@@ -538,8 +551,6 @@ def _flash_attention_bwd(
     do,
 ):
     """VJP rule for FlashAttention."""
-    if save_residuals:
-        raise NotImplementedError("Higher-order AD not supported")
     (q, k, v, ab, segment_ids, o, l, m) = residuals
     if not block_sizes.has_backward_blocks:
         raise ValueError(
@@ -680,7 +691,7 @@ def _flash_attention_impl(
     )
     out_shape = jax.ShapeDtypeStruct(shape=q.shape, dtype=q.dtype)
     out_shape = [out_shape]
-    out_specs = [pl.BlockSpec(o_index_map, (block_b, 1, block_q, head_dim))]
+    out_specs = [pl.BlockSpec((block_b, 1, block_q, head_dim), o_index_map)]
 
     if block_k != kv_seq_len:
         m_scratch = pltpu.VMEM((block_b, 1, block_q, MIN_BLOCK_SIZE), jnp.float32)
@@ -693,8 +704,8 @@ def _flash_attention_impl(
     if save_residuals:
         out_specs = [
             *out_specs,
-            pl.BlockSpec(lm_index_map, (block_b, 1, block_q, MIN_BLOCK_SIZE)),
-            pl.BlockSpec(lm_index_map, (block_b, 1, block_q, MIN_BLOCK_SIZE)),
+            pl.BlockSpec((block_b, 1, block_q, MIN_BLOCK_SIZE), lm_index_map),
+            pl.BlockSpec((block_b, 1, block_q, MIN_BLOCK_SIZE), lm_index_map),
         ]
         l = jax.ShapeDtypeStruct(
             (batch_size, num_heads, q_seq_len, MIN_BLOCK_SIZE), dtype=jnp.float32
@@ -708,7 +719,7 @@ def _flash_attention_impl(
         out_shape = (*out_shape, None, None)
 
     ab_block_spec = (
-        pl.BlockSpec(ab_index_map, (block_b, 1, block_q, block_k_major)) if ab is not None else None
+        pl.BlockSpec((block_b, 1, block_q, block_k_major), ab_index_map) if ab is not None else None
     )
 
     q_segment_ids_spec = kv_segment_ids_spec = None
@@ -731,9 +742,9 @@ def _flash_attention_impl(
                 next_kv_index = kv_seq_index
             return (batch_index, 0, next_kv_index)
 
-        q_segment_ids_spec = pl.BlockSpec(q_segment_ids_index_map, (block_b, block_q, NUM_LANES))
+        q_segment_ids_spec = pl.BlockSpec((block_b, block_q, NUM_LANES), q_segment_ids_index_map)
         kv_segment_ids_spec = pl.BlockSpec(
-            kv_segment_ids_index_map, (block_b, NUM_SUBLANES, block_k_major)
+            (block_b, NUM_SUBLANES, block_k_major), kv_segment_ids_index_map
         )
 
         q_segment_ids = jax.lax.broadcast_in_dim(
@@ -754,9 +765,9 @@ def _flash_attention_impl(
         )
 
     in_specs = [
-        pl.BlockSpec(q_index_map, (block_b, 1, block_q, head_dim)),
-        pl.BlockSpec(kv_index_map, (block_b, 1, block_k_major, head_dim)),
-        pl.BlockSpec(kv_index_map, (block_b, 1, block_k_major, head_dim)),
+        pl.BlockSpec((block_b, 1, block_q, head_dim), q_index_map),
+        pl.BlockSpec((block_b, 1, block_k_major, head_dim), kv_index_map),
+        pl.BlockSpec((block_b, 1, block_k_major, head_dim), kv_index_map),
         ab_block_spec,
         q_segment_ids_spec,
         kv_segment_ids_spec,
@@ -787,6 +798,9 @@ def _flash_attention_impl(
     )(q, k, v, ab, q_segment_ids, kv_segment_ids)
     if save_residuals:
         l, m = (v[..., 0] for v in aux[-2:])
+        o = jax.ad_checkpoint.checkpoint_name(o, f"tpu_attention.{FLASH_ATTN_RESIDUAL_NAME}")
+        l = jax.ad_checkpoint.checkpoint_name(l, f"tpu_attention.{FLASH_ATTN_RESIDUAL_NAME}")
+        m = jax.ad_checkpoint.checkpoint_name(m, f"tpu_attention.{FLASH_ATTN_RESIDUAL_NAME}")
         return (o, l, m)
     else:
         return o
@@ -848,7 +862,7 @@ def _flash_attention_bwd_dkv(
 
         return (batch_index, head_index, next_q_index, 0)
 
-    qo_spec = pl.BlockSpec(qo_index_map, (1, 1, block_q_major, head_dim))
+    qo_spec = pl.BlockSpec((1, 1, block_q_major, head_dim), qo_index_map)
     assert qo_spec.block_shape is not None
     assert q.ndim == len(qo_spec.block_shape)
     do_spec = qo_spec
@@ -857,7 +871,7 @@ def _flash_attention_bwd_dkv(
     def kv_index_map(batch_index, head_index, kv_seq_index, _):
         return (batch_index, head_index, kv_seq_index, 0)
 
-    kv_spec = pl.BlockSpec(kv_index_map, (1, 1, block_k_major, head_dim))
+    kv_spec = pl.BlockSpec((1, 1, block_k_major, head_dim), kv_index_map)
     assert kv_spec.block_shape is not None
     assert k.ndim == len(kv_spec.block_shape)
     assert v.ndim == len(kv_spec.block_shape)
@@ -865,12 +879,12 @@ def _flash_attention_bwd_dkv(
     def lm_index_map(batch_index, head_index, _, q_seq_index):
         return (batch_index, head_index, q_seq_index, 0)
 
-    lm_spec = pl.BlockSpec(lm_index_map, (1, 1, block_q_major, MIN_BLOCK_SIZE))
+    lm_spec = pl.BlockSpec((1, 1, block_q_major, MIN_BLOCK_SIZE), lm_index_map)
     assert lm_spec.block_shape is not None
     assert l.ndim == len(lm_spec.block_shape)
     assert m.ndim == len(lm_spec.block_shape)
 
-    di_spec = pl.BlockSpec(qo_index_map, (1, 1, block_q_major, MIN_BLOCK_SIZE))
+    di_spec = pl.BlockSpec((1, 1, block_q_major, MIN_BLOCK_SIZE), qo_index_map)
     assert di_spec.block_shape is not None
     assert di.ndim == len(di_spec.block_shape)
 
@@ -883,7 +897,7 @@ def _flash_attention_bwd_dkv(
         )
 
     dab_spec = (
-        pl.BlockSpec(ab_index_map, (1, 1, block_q_major, block_k_major)) if ab is not None else None
+        pl.BlockSpec((1, 1, block_q_major, block_k_major), ab_index_map) if ab is not None else None
     )
 
     q_segment_ids_spec = kv_segment_ids_spec = None
@@ -906,9 +920,9 @@ def _flash_attention_bwd_dkv(
             del head_index
             return (batch_index, 0, kv_seq_index)
 
-        q_segment_ids_spec = pl.BlockSpec(q_segment_ids_index_map, (1, block_q_major, NUM_LANES))
+        q_segment_ids_spec = pl.BlockSpec((1, block_q_major, NUM_LANES), q_segment_ids_index_map)
         kv_segment_ids_spec = pl.BlockSpec(
-            kv_segment_ids_index_map, (1, NUM_SUBLANES, block_k_major)
+            (1, NUM_SUBLANES, block_k_major), kv_segment_ids_index_map
         )
 
         q_segment_ids = jax.lax.broadcast_in_dim(
@@ -949,7 +963,7 @@ def _flash_attention_bwd_dkv(
     def dkv_index_map(batch_index, head_index, kv_seq_index, _):
         return (batch_index, head_index, kv_seq_index, 0)
 
-    dkv_spec = pl.BlockSpec(dkv_index_map, (1, 1, block_k_major, head_dim))
+    dkv_spec = pl.BlockSpec((1, 1, block_k_major, head_dim), dkv_index_map)
     out_specs = [dkv_spec, dkv_spec]
     scratch_shapes = [
         pltpu.VMEM((block_k_major, head_dim), jnp.float32),  # type: ignore
@@ -1037,7 +1051,7 @@ def _flash_attention_bwd_dq(
     def qo_index_map(batch_index, head_index, q_seq_index, _):
         return (batch_index, head_index, q_seq_index, 0)
 
-    qo_spec = pl.BlockSpec(qo_index_map, (1, 1, block_q_major, head_dim))
+    qo_spec = pl.BlockSpec((1, 1, block_q_major, head_dim), qo_index_map)
     do_spec = qo_spec
 
     def kv_index_map(batch_index, head_index, q_seq_index, kv_seq_index):
@@ -1053,7 +1067,7 @@ def _flash_attention_bwd_dq(
             next_kv_index = kv_seq_index
         return (batch_index, head_index, next_kv_index, 0)
 
-    kv_spec = pl.BlockSpec(kv_index_map, (1, 1, block_k_major, head_dim))
+    kv_spec = pl.BlockSpec((1, 1, block_k_major, head_dim), kv_index_map)
     assert kv_spec.block_shape is not None
     assert k.ndim == len(kv_spec.block_shape)
     assert v.ndim == len(kv_spec.block_shape)
@@ -1061,12 +1075,12 @@ def _flash_attention_bwd_dq(
     def lm_index_map(batch_index, head_index, q_seq_index, _):
         return (batch_index, head_index, q_seq_index, 0)
 
-    lm_spec = pl.BlockSpec(lm_index_map, (1, 1, block_q_major, MIN_BLOCK_SIZE))
+    lm_spec = pl.BlockSpec((1, 1, block_q_major, MIN_BLOCK_SIZE), lm_index_map)
     assert lm_spec.block_shape is not None
     assert l.ndim == len(lm_spec.block_shape)
     assert m.ndim == len(lm_spec.block_shape)
 
-    di_spec = pl.BlockSpec(qo_index_map, (1, 1, block_q_major, MIN_BLOCK_SIZE))
+    di_spec = pl.BlockSpec((1, 1, block_q_major, MIN_BLOCK_SIZE), qo_index_map)
     assert di_spec.block_shape is not None
     assert di.ndim == len(di_spec.block_shape)
 
@@ -1079,7 +1093,7 @@ def _flash_attention_bwd_dq(
         )
 
     dab_spec = (
-        pl.BlockSpec(ab_index_map, (1, 1, block_q_major, block_k_major)) if ab is not None else None
+        pl.BlockSpec((1, 1, block_q_major, block_k_major), ab_index_map) if ab is not None else None
     )
 
     q_segment_ids_spec = kv_segment_ids_spec = None
@@ -1104,9 +1118,9 @@ def _flash_attention_bwd_dq(
                 next_kv_index = kv_seq_index
             return (batch_index, 0, next_kv_index)
 
-        q_segment_ids_spec = pl.BlockSpec(q_segment_ids_index_map, (1, block_q_major, NUM_LANES))
+        q_segment_ids_spec = pl.BlockSpec((1, block_q_major, NUM_LANES), q_segment_ids_index_map)
         kv_segment_ids_spec = pl.BlockSpec(
-            kv_segment_ids_index_map, (1, NUM_SUBLANES, block_k_major)
+            (1, NUM_SUBLANES, block_k_major), kv_segment_ids_index_map
         )
 
         q_segment_ids = jax.lax.broadcast_in_dim(
@@ -1143,7 +1157,7 @@ def _flash_attention_bwd_dq(
         jax.ShapeDtypeStruct(q.shape, q.dtype),
         jax.ShapeDtypeStruct(ab.shape, ab.dtype) if ab is not None else None,
     ]
-    dq_spec = pl.BlockSpec(qo_index_map, (1, 1, block_q_major, head_dim))
+    dq_spec = pl.BlockSpec((1, 1, block_q_major, head_dim), qo_index_map)
     out_specs = [
         dq_spec,
         dab_spec,

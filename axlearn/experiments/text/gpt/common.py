@@ -22,6 +22,7 @@ from jax.sharding import PartitionSpec
 from axlearn.common import (
     base_model,
     causal_lm,
+    input_base,
     input_fake,
     input_lm,
     input_tf_data,
@@ -228,6 +229,8 @@ def model_config(
     atten_logit_cap: Optional[float] = None,
     ffn_layer_types: Optional[Sequence[Literal["dense", "sparse"]]] = None,
     expert_cfg: TransformerFeedForwardMoE = TransformerFeedForwardMoE.default_config(),
+    pad_token_id: Optional[int] = None,
+    eos_token_id: Optional[int] = None,
 ) -> causal_lm.Model.Config:
     """Returns an LM model config based on the given hyperparams.
 
@@ -259,6 +262,10 @@ def model_config(
             Enabled by setting a positive value.
         ffn_layer_types: The types of layers in the FFN. Options: [dense, sparse].
         expert_cfg: The expert config for the MoE FFN.
+        remat_offload_dst: Destination of remat checkptoing offloading.
+        pad_token_id: Int ID of the inputs to be masked for self-attention.
+        eos_token_id: Int ID of the end of sequence token id.
+
     Returns:
         A causal LM config.
     """
@@ -334,6 +341,10 @@ def model_config(
         lm_head=lm_head_cfg,
         dropout_rate=dropout_rate,
     )
+    if pad_token_id is not None:
+        decoder_cfg.set(pad_token_id=pad_token_id)
+    if eos_token_id is not None:
+        decoder_cfg.set(eos_token_id=eos_token_id)
     # Model.
     model_param_init = DefaultInitializer.default_config().set(
         init_by_param_name={
@@ -342,18 +353,18 @@ def model_config(
             )
         }
     )
-    # A few more model-level settings.
-    cfg = causal_lm.Model.default_config().set(
+    batch_axis_names = ("data", "expert", "fsdp")
+    cfg: causal_lm.Model.Config = causal_lm.Model.default_config().set(
         decoder=decoder_cfg,
         param_init=model_param_init,
-        batch_axis_names=batch_axis_names,
-        seq_axis_names=("seq",),
+        batch_axis_names=None,  # We use input dispatch to partition batches.
     )
+    if z_loss_scale:
+        cfg.metrics = causal_lm.metrics_config(z_loss_scale=z_loss_scale)
     cfg.dtype = jnp.float32
     cfg.decoder.logits_partition_spec = (batch_axis_names, "seq", "model")
     set_bias_recursively(cfg, False)
     set_norm_recursively(cfg, normalization)
-    cfg.z_loss_scale = z_loss_scale
     return cfg
 
 
@@ -607,8 +618,9 @@ def evaler_config_dict(
         evaler_input = input_tf_data.Input.default_config().set(
             is_training=False,
             source=input_source_config,
+            input_dispatcher=InputDispatcher.default_config(),
             processor=config_for_function(input_tf_data.identity),
-            batcher=config_for_function(input_tf_data.batch).set(
+            batcher=config_for_function(input_tf_data.per_feed_batch).set(
                 prefetch_buffer_size=tf.data.AUTOTUNE,
                 pad_example_fn=input_tf_data.default_pad_example_fn,
             ),
@@ -710,11 +722,21 @@ def get_trainer_config_fn(
         cfg.input = input_tf_data.Input.default_config().set(
             is_training=True,
             source=train_input_source,
+            input_dispatcher=InputDispatcher.default_config().set(
+                global_logical_batch_size=train_batch_size,
+            ),
             processor=config_for_function(input_tf_data.identity),
-            batcher=config_for_function(input_tf_data.batch).set(
-                global_batch_size=train_batch_size,
+            batcher=config_for_function(input_tf_data.per_feed_batch).set(
                 prefetch_buffer_size=tf.data.AUTOTUNE,
                 pad_example_fn=input_tf_data.default_pad_example_fn,
+            ),
+            input_partitioner=config_for_function(input_base.partition_by_path_rank).set(
+                path_rank_to_partition={
+                    # Note: the batch axes are different here than in `cfg.batch_axis_names`,
+                    # as we partition sequence dim over `seq`.
+                    (None, 1): PartitionSpec(("data", "expert", "fsdp")),
+                    (None, 2): PartitionSpec(("data", "expert", "fsdp"), "seq"),
+                }
             ),
         )
         if input_partition_type:
@@ -734,10 +756,9 @@ def get_trainer_config_fn(
         cfg.mesh_rules = mesh_rules
         cfg.evalers = {}
         for name, evaler_cfg in evalers.items():
-            evaler_cfg.input.batcher.set(global_batch_size=eval_batch_size or train_batch_size)
-            if input_partition_type:
-                evaler_cfg.set(input_partition_type=input_partition_type)
-                evaler_cfg.set(batch_axis_names=cfg.batch_axis_names)
+            evaler_cfg.input.input_dispatcher.global_logical_batch_size = (
+                eval_batch_size or train_batch_size
+            )
             evaler_cfg.set(
                 eval_policy=config_for_function(eval_every_n_steps_policy).set(
                     n=eval_every_n_steps,
@@ -754,6 +775,20 @@ def get_trainer_config_fn(
         cfg.checkpointer.keep_last_n = 3
         cfg.summary_writer.write_every_n_steps = min(eval_every_n_steps, 100)
         cfg.summary_writer.max_queue = 1000
+        if len(mesh_axis_names) != len(mesh_shape):
+            raise ValueError(
+                f"Number of mesh axis names ({mesh_axis_names}) "
+                f"must match number of mesh dims ({mesh_shape})."
+            )
+        cfg.mesh_axis_names = mesh_axis_names
+        cfg.mesh_shape = mesh_shape
+        # Set batch sharding spec to exclude the "model" axis (assumed for tensor-parallelism) and
+        # "pipeline" axis (for pipeline parallelism).
+        # TODO(markblee): Remove this and use `cfg.input.input_partitioner`.
+        cfg.batch_axis_names = tuple(
+            el for el in mesh_axis_names if el not in ("model", "pipeline")
+        )
+        cfg.mesh_rules = mesh_rules
         # Maybe load state.
         if init_state_builder:
             cfg.init_state_builder = init_state_builder

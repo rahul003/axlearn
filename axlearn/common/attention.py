@@ -78,8 +78,10 @@ from collections.abc import Sequence
 from enum import Enum, unique
 from typing import Any, Callable, NamedTuple, Optional, Protocol, Union
 
+import chex
 import einops
 import jax
+from absl import logging
 from jax import numpy as jnp
 
 from axlearn.common import ops, param_init
@@ -87,7 +89,6 @@ from axlearn.common.attention_bias import (
     NEG_INF,
     BaseAttentionBias,
     CausalAttentionBias,
-    MaskFn,
     MaskFnAttentionBias,
     SegmentIdAttentionBias,
     as_attention_bias,
@@ -103,7 +104,7 @@ from axlearn.common.base_layer import (
 )
 from axlearn.common.config import (
     REQUIRED,
-    ConfigOr,
+    ClassConfigBase,
     FunctionConfigBase,
     InstantiableConfig,
     Required,
@@ -111,6 +112,7 @@ from axlearn.common.config import (
     config_for_function,
     maybe_instantiate,
 )
+from axlearn.common.flash_attention.remat import FLASH_ATTN_RESIDUAL_NAME
 from axlearn.common.layers import (
     Dropout,
     LayerNorm,
@@ -734,18 +736,26 @@ class BaseQKVLinear(BaseLayer):
         # If `kv_state` is provided externally, we do not have to maintain key/value in cache.
         # Otherwise, initialize the cache from provided query, key, value.
         if kv_state is None:
+            if key is None:
+                batch, max_len = query.shape[:2]
+            else:
+                batch, max_len = key.shape[:2]
+                chex.assert_equal_shape((key, value))
 
-            def maybe_initialize(kv: Optional[Tensor]):
-                # [batch, source/target_len, num_kv_heads, per_head_dim].
-                if kv is None:
-                    kv = jnp.zeros(
-                        (*query.shape[:2], self.num_kv_heads, cfg.per_head_dim), dtype=dtype
-                    )
-                else:
-                    kv = jnp.reshape(kv, (*kv.shape[:2], self.num_kv_heads, cfg.per_head_dim))
-                return kv
-
-            init_state.update(key=maybe_initialize(key), value=maybe_initialize(value))
+            # NB: key and value in init_state are transposed so that source_length is in the last
+            # dimension as a TPU fusion optimization.
+            # Reference:
+            # https://github.com/google-research/t5x/blob/4d94d8bf41230d492e15e255c9888b5bfd9a5ee8/t5x/examples/t5/layers.py#L215
+            init_state.update(
+                key=jnp.zeros(
+                    shape=(batch, self.num_kv_heads, cfg.per_head_dim, max_len),
+                    dtype=dtype,
+                ),
+                value=jnp.zeros(
+                    shape=(batch, self.num_kv_heads, cfg.per_head_dim, max_len),
+                    dtype=dtype,
+                ),
+            )
 
         # If time_step is not provided, initialize an empty cache (i.e., all 0's).
         # Otherwise, treat as prefill case and invoke `extend_step`.
@@ -803,7 +813,7 @@ class BaseQKVLinear(BaseLayer):
         Args:
             cached_states: A `NestedTensor` object containing tensors which are the results of
                 previous attentions, and index used for fast decoding. Contains "key" and "value" of
-                shape [batch, num_heads, per_head_dim, target_length], and a Tensor "time_step" of
+                shape [batch, num_heads, per_head_dim, source_length], and a Tensor "time_step" of
                 shape [batch].
             query: Tensor of shape [batch, steps, target_dim] corresponding to query vector starting
                 at "time_step" indices.
@@ -836,28 +846,41 @@ class BaseQKVLinear(BaseLayer):
         # Project inputs to key, value and query. Each has shape [B, steps, N, H].
         q_proj, k_proj, v_proj = self.forward(query, **kv_kwargs, query_positions=query_positions)
         updated_state = dict(time_step=time_step + num_query_steps)
+
         if kv_state is None:
-            # Update the cache via dynamic slice. [B, S, N, H].
+            # Update the cache via one-hot broadcast and addition.
+            # NB: Cache updates can also be done via dynamic slice update. However it was observed
+            # that RLHF training got stuck in some cases.
+            # TODO(ds-hwang): Investigate the root cause.
             cached_key = cached_states["key"]
             cached_value = cached_states["value"]
 
+            source_len = cached_key.shape[-1]
+
+            # [B, T, N, H] --> [B, N, H, T].
+            k_proj = jnp.einsum("btnh->bnht", k_proj)
+            v_proj = jnp.einsum("btnh->bnht", v_proj)
+
+            # Create a dispatch matrix of shape [B, T=step, S].
+            oh_indices = jax.nn.one_hot(
+                time_step[:, None] + jnp.arange(num_query_steps), source_len, dtype=cached_key.dtype
+            )
+            # Create a mask of shape [B, 1, 1, S].
+            negated_oh_indices = (1 - oh_indices.sum(axis=1))[:, None, None, :]
+
+            k_proj = jnp.einsum("b...t,bts->b...s", k_proj, oh_indices)
+            v_proj = jnp.einsum("b...t,bts->b...s", v_proj, oh_indices)
+
             # Ensure that we accumulate using the original dtype.
-            k_proj = k_proj.astype(cached_key.dtype)
-            v_proj = v_proj.astype(cached_value.dtype)
+            cached_key = cached_key * negated_oh_indices + k_proj.astype(cached_key.dtype)
+            cached_value = cached_value * negated_oh_indices + v_proj.astype(cached_value.dtype)
 
-            # TODO(dhwang2): jax.lax.dynamic_update_slice_in_dim is generally faster than advanced
-            # indexing, but an unusual slowdown was observed, with RLHF sampling taking up to
-            # 3 hours per run. Investigate and fix it.
-            # Note: All X_idx are small, so generating them on-demand is not costly.
-            b, _, n, h = cached_key.shape
-            b_idx = jnp.arange(b)[:, None, None, None]
-            t_idx = (jnp.arange(k_proj.shape[1])[None] + time_step[:, None])[:, :, None, None]
-            n_idx = jnp.arange(n)[None, None, :, None]
-            h_idx = jnp.arange(h)[None, None, None, :]
-            k_proj = cached_key.at[b_idx, t_idx, n_idx, h_idx].set(k_proj)
-            v_proj = cached_value.at[b_idx, t_idx, n_idx, h_idx].set(v_proj)
+            updated_state.update(key=cached_key, value=cached_value)
 
-            updated_state.update(key=k_proj, value=v_proj)
+            # [B, S, N, H]
+            k_proj = jnp.einsum("bnhs->bsnh", cached_key)
+            v_proj = jnp.einsum("bnhs->bsnh", cached_value)
+
         return updated_state, self.Output(query=q_proj, key=k_proj, value=v_proj)
 
 
@@ -1217,18 +1240,45 @@ class RoFormerSinusoidalPositionalEmbedding(BaseLayer):
         dim: Required[int] = REQUIRED  # The dimensionality of the positional embedding.
         theta: float = 10000.0  # The scale of base frequency.
 
-    def forward(self, positions: Tensor) -> Tensor:
+    def default_query_positions(self, max_seq_len: int) -> Tensor:
+        """Compute default `positions` value to be inputed into forward when `positions` is
+        not provided to the corresponding QKVLinear class such as `RoFormerQKVLinear`
+        """
+        return jnp.arange(max_seq_len)[None]  # [batch_size=1, max_seq_len].
+
+    def forward(
+        self, *, positions: Optional[Tensor] = None, max_seq_len: Optional[int] = None
+    ) -> Tensor:
         """
         TODO(bwzhang): 1. verify the performance under float32.
 
         Args:
             positions: A tensor representing the token position IDs.
                 The shape is [batch_size, seq_len].
+            max_seq_len: Max length of sequence, required if positions is not provided,
+                ignored if positions is provided.
 
         Returns:
             Rotary Positional Embedding. Shape is [seq_len, dim].
+
+        Raises:
+            ValueError: If positions is None and max_seq_len is None, or they both exist
+                but do not match.
         """
         cfg = self.config
+        if positions is not None and max_seq_len is not None:
+            if max_seq_len != positions.shape[-1]:
+                raise ValueError(
+                    "Both `positions` and `max_seq_len` are provided and they "
+                    "do not match. You only need to provide one of them."
+                )
+        if positions is None:
+            if max_seq_len is None:
+                raise ValueError(
+                    "Must provide `max_seq_len` for computing default query positions if "
+                    "`positions` is None."
+                )
+            positions = self.default_query_positions(max_seq_len)
         return _rotary_sinusoidal_positional_embeddings(
             positions=positions, dim=cfg.dim, theta=cfg.theta
         )
@@ -1301,7 +1351,7 @@ class RoFormerQKVLinear(BaseQKVLinear):
     class Config(BaseQKVLinear.Config):
         """Configures RoFormerQKVLinear."""
 
-        rope_pos_emb_layer: InstantiableConfig = (
+        rope_pos_emb_layer: RoFormerSinusoidalPositionalEmbedding.Config = (
             RoFormerSinusoidalPositionalEmbedding.default_config()
         )
         input_linear: BaseQKVLinear.Config = QKVLinear.default_config()
@@ -1343,9 +1393,10 @@ class RoFormerQKVLinear(BaseQKVLinear):
         cfg = self.config
         # Query should have shape of [batch_size, seq_len, num_heads, per_head_dim].
         query, key, value = self.i_proj(query, key=key, value=value, kv_state=kv_state)
-        if query_positions is None:
-            query_positions = jnp.arange(query.shape[1])[None]
-        sinusoidal_pos_emb = self.rope_pos_emb_layer.forward(query_positions).astype(query.dtype)
+        seq_len = query.shape[1]
+        sinusoidal_pos_emb = self.rope_pos_emb_layer.forward(
+            positions=query_positions, max_seq_len=seq_len
+        ).astype(query.dtype)
         # sinusoidal_pos_emb shape should be [batch_size, seq_len, 1, dim]
         sinusoidal_pos_emb = jnp.expand_dims(sinusoidal_pos_emb, 2)
 
@@ -1599,13 +1650,13 @@ class MultiheadAttention(BaseLayer):
         atten_logit_cap: Optional[float] = None
         # A function to compute the boolean mask to apply when computing the attention
         # where True means "attend" and False means "do not attend".
-        # Set to `causal_mask` for causal masking.
+        # Set to `CausalAttentionBias.default_config()` for causal masking.
         # When used with certain flash attention implementations, more efficient
         # code paths may be used. (See the FlashAttention docstring for more details.)
         # This field may not be specified if `causal` (deprecated) is specified.
         # If `attention_logit_biases` argument is also specified, both masks are combined with AND.
-        mask: ConfigOr[Optional[MaskFn]] = None
-        # Deprecated. Use `mask=causal_mask` instead.
+        mask: Optional[ClassConfigBase[MaskFnAttentionBias]] = None
+        # Deprecated. Use `mask=CausalAttentionBias.default_config()` instead.
         # If True, applies causal masking. `key` and `value` must be None.
         # May not be specified if `mask` is already specified.
         # If `attention_logit_biases` argument is also specified, both masks are combined with AND.
@@ -1618,9 +1669,22 @@ class MultiheadAttention(BaseLayer):
         if cfg.causal and cfg.mask is not None:
             raise NotImplementedError("Cannot specify `causal` when using `mask`.")
         if cfg.causal:
-            self._mask_fn = causal_mask
+            self._mask_tpl = CausalAttentionBias.default_config()
         else:
-            self._mask_fn = maybe_instantiate(cfg.mask)
+            # For backward compatibility. mask=causal_mask is DEPRECATED.
+            if cfg.mask is causal_mask:
+                logging.warning("Use CausalAttentionBias.default_config(), instead of causal_mask.")
+                mask_tpl = CausalAttentionBias.default_config()
+            else:
+                mask_tpl = cfg.mask
+            self._mask_tpl = mask_tpl
+        if self._mask_tpl is not None:
+            is_valid_tpl = isinstance(self._mask_tpl, ClassConfigBase) and issubclass(
+                self._mask_tpl.klass, MaskFnAttentionBias
+            )
+            if not is_valid_tpl:
+                raise ValueError(f"{self._mask_tpl=} must be ClassConfigBase[MaskFnAttentionBias].")
+
         # Configure inputs to multi-headed QKV projection.
         i_proj_cfg = cfg.input_linear
         i_proj_cfg.query_dim = cfg.query_dim
@@ -1717,8 +1781,7 @@ class MultiheadAttention(BaseLayer):
         # Validate key & value combination.
         if (key is None) != (value is None):
             raise ValueError(
-                "key and value must be both None or both set, "
-                f"key:{type(key)}, value:{type(value)}"
+                f"key and value must be both None or both set, key:{type(key)}, value:{type(value)}"
             )
         if kv_state is not None:
             if key is not None or value is not None:
@@ -1760,30 +1823,23 @@ class MultiheadAttention(BaseLayer):
         self.vlog(3, "atten.k_proj=%s", k_proj.sum())
         self.vlog(3, "atten.v_proj=%s", v_proj.sum())
         attention_logit_biases = as_attention_bias(attention_logit_biases)
-        if self._mask_fn is not None:
-            target_positions = None
+        if self._mask_tpl is not None:
+            # TODO(dhwang2): KVCache refactoring will remove this query_positions and key_positions
+            # hard coding.
+            if query_positions is None:
+                query_positions = jnp.arange(q_proj.shape[1])[None]
+            key_positions = jnp.arange(k_proj.shape[1])[None]
             if mode == ForwardMode.EXTEND_STEP:
-                target_positions = cached_states["i_proj"]["time_step"]
-            if self._mask_fn is causal_mask:
-                # Needed for legacy flash attention implementations that don't have
-                # sparse mask support.
-                # E.g., the legacy tpu flash attention, all current gpu flash attention
-                # implementations.
-                attention_logit_biases += CausalAttentionBias(
-                    shape=(q_proj.shape[1], k_proj.shape[1]),
-                    target_positions=target_positions,
-                    dtype=q_proj.dtype,
-                )
-            else:
-                attention_logit_biases += MaskFnAttentionBias(
-                    self._mask_fn,
-                    shape=(q_proj.shape[1], k_proj.shape[1]),
-                    target_positions=target_positions,
-                    dtype=q_proj.dtype,
-                )
+                time_step = cached_states["i_proj"]["time_step"]
+                query_positions = query_positions + time_step[:, None]  # [batch, steps]
+            attention_logit_biases += self._mask_tpl.instantiate(
+                target_positions=query_positions, source_positions=key_positions, dtype=q_proj.dtype
+            )
         if segment_ids is not None:
+            assert mode == ForwardMode.FORWARD, "segment_ids must be None in inference."
             attention_logit_biases += SegmentIdAttentionBias(segment_ids)
         context, probs = self._compute_attention(
+            mode=mode,
             q_proj=q_proj,
             k_proj=k_proj,
             v_proj=v_proj,
@@ -1807,6 +1863,7 @@ class MultiheadAttention(BaseLayer):
     def _compute_attention(
         self,
         *,
+        mode: ForwardMode,
         q_proj: Tensor,
         k_proj: Tensor,
         v_proj: Tensor,
@@ -1815,6 +1872,8 @@ class MultiheadAttention(BaseLayer):
         """Computes attention context and probs.
 
         Args:
+            mode: Configures whether `cached_states` are consumed or emitted. See `ForwardMode` for
+                details.
             q_proj: [batch_size, target_length, num_heads, per_head_dim].
             k_proj: [batch_size, source_length, num_heads, per_head_dim].
             v_proj: [batch_size, source_length, num_heads, per_head_dim].
@@ -1824,6 +1883,7 @@ class MultiheadAttention(BaseLayer):
             The context of shape [batch_size, target_length, num_heads, per_head_dim],
             and probs of shape [batch, num_heads, target_length, source_length].
         """
+        del mode
         logits = self._compute_logits(q_proj, k_proj)
         logits = self._cap_logits(logits)
         self.vlog(3, "atten.logits=%s", logits[0, 0, 0, :])
@@ -2113,12 +2173,14 @@ class SigmoidAttention(MultiheadAttention):
     def _compute_attention(
         self,
         *,
+        mode: ForwardMode,
         q_proj: Tensor,
         k_proj: Tensor,
         v_proj: Tensor,
         attention_logit_biases: BaseAttentionBias,
     ) -> tuple[Tensor, Tensor]:
         """See `MultiheadAttention._compute_attention` for details."""
+        del mode
         cfg = self.config
         logits = self._compute_logits(q_proj, k_proj)
         logits = self._cap_logits(logits)
@@ -3555,6 +3617,7 @@ class StackedTransformerLayer(BaseStackedTransformerLayer):
         """
         all_layer_outputs = []
         all_layer_states = []
+        external_self_attention_kv_state = layer_kwargs.get("self_attention_kv_state")
 
         # True iff we are initializing an empty cache (i.e., not prefilling).
         cache_init = mode == ForwardMode.INIT_STATES and cached_states is None
@@ -3564,7 +3627,11 @@ class StackedTransformerLayer(BaseStackedTransformerLayer):
             if self._update_data is not None:
                 data = self._update_data(data, all_layer_outputs)
             # TODO(markblee): Consider folding into _update_data.
-            self._update_layer_kwargs(layer_kwargs, all_layer_outputs=all_layer_outputs)
+            self._update_layer_kwargs(
+                layer_kwargs,
+                all_layer_outputs=all_layer_outputs,
+                external_self_attention_kv_state=external_self_attention_kv_state,
+            )
 
             if mode == ForwardMode.FORWARD:
                 layer_states, layer_outputs = None, layer(data, **layer_kwargs)
@@ -3620,6 +3687,7 @@ class StackedTransformerLayer(BaseStackedTransformerLayer):
         layer_kwargs: dict[str, Any],
         *,
         all_layer_outputs: list[BaseTransformerLayer.Output],
+        external_self_attention_kv_state: Optional[KVState] = None,
     ):
         """Updates `layer_kwargs` using other args.
 
@@ -3630,6 +3698,8 @@ class StackedTransformerLayer(BaseStackedTransformerLayer):
             layer_kwargs: a dictionary of arguments that can be used by individual layers.
             all_layer_outputs: a list of BaseTransformerLayer.Output that is appended with
                 the output of each constituent layer in the stack.
+            external_self_attention_kv_state: A KVState that this function processes
+                to populate (if needed) the self_attention_kv_state within `layer_kwargs`.
         """
         pass  # Do nothing by default.
 
@@ -4003,6 +4073,8 @@ def _save_and_offload_only_these_names_regex(
 
 # Regex patterns for matching remat names
 class RematRegexSavePatterns(enum.Enum):
+    """Common regex patterns for saving tensors in attention and feedforward layers."""
+
     QKV_PROJ = r".*[kqv]_proj"
     O_PROJ = r".*o_proj"
     CONTEXT = r".*context"
@@ -4012,6 +4084,8 @@ class RematRegexSavePatterns(enum.Enum):
     # This is called native attention because the "context" remat point only exists when using
     # native attention, e.g. `MultiheadAttention` or `GroupedQueryAttention`.
     NATIVE_ATTENTION = ".*([qkvo]_proj|context)"
+    FLASH_CONTEXT = f".*{FLASH_ATTN_RESIDUAL_NAME}"
+    FLASH_ATTENTION = "|".join([FLASH_CONTEXT, QKV_PROJ, O_PROJ])
     FEED_FORWARD = "|".join([LINEAR1_X, LINEAR2_X])
 
 
