@@ -323,23 +323,14 @@ class TestConfigBuilder:
     
     def build_grid_space(self):
         # Grid space for testing
-        # batchs =            [1, 4]
-        # seqs =              [16, 128]
-        # input_dims =        [64]
-        # hidden_dims =       [128]
-        # num_experts =       [2, 8]
-        # num_groups =        [1, 4]
-        # outer_batches =     [1, 2]
-        # expert_capacities = [2, 1000]
-        # mesh_specs       =  [{}, {"fsdp":-1, "model":4}]
-        batchs =            [16]
-        seqs =              [16]
+        batchs =            [1, 4]
+        seqs =              [16, 128]
         input_dims =        [64]
         hidden_dims =       [128]
-        num_experts =       [2]
-        num_groups =        [1]
-        outer_batches =     [1]
-        expert_capacities = [2]
+        num_experts =       [2, 8]
+        num_groups =        [1, 4]
+        outer_batches =     [1, 2]
+        expert_capacities = [2, 1000]
         mesh_specs       =  [{}, {"fsdp":-1, "model":4}]  #empty spec for single-core
 
         grid_space = [] 
