@@ -73,7 +73,7 @@ from axlearn.experiments.text.gpt.common import (
 from axlearn.experiments.text.gpt.fuji import offload_attention_proj_policy
 from axlearn.experiments.trainer_config_utils import TrainerConfigFn
 
-MODEL_SIZES = ("test", "Switch-Base", "Switch-Large", "Switch-XXL", "Mistral-8x7B", "Mistral-8x7B-toy", "Mistral-8x20B")
+MODEL_SIZES = ("test", "Switch-Base", "Switch-Large", "Switch-XXL", "Mistral-8x7B", "Mistral-toy", "Mistral-8x20B")
 
 NUM_EXPERTS = {
     "test": 8,
@@ -81,7 +81,7 @@ NUM_EXPERTS = {
     "Switch-Large": 128,
     "Switch-XXL": 64,
     "Mistral-8x7B": 8,
-    "Mistral-8x7B-toy": 8,
+    "Mistral-toy": 8,
     "Mistral-8x20B": 8,
 }
 
@@ -93,7 +93,7 @@ MAX_SEQUENCE_LENGTH = {
     "Switch-Base": 8192,
     "Switch-Large": 8192,
     "Switch-XXL": 8192,
-    "Mistral-8x7B-toy": 256,
+    "Mistral-toy": 256,
     "Mistral-8x7B": 4096,
     "Mistral-8x20B": 4096,
 }
@@ -445,14 +445,14 @@ def get_trainer_kwargs(
             # TODO(kelvin-zou): not verified with real job.
             mesh_shape=mesh_shape_from_axes(fsdp=-1, expert=16, model=8),
         )
-    elif model_size in ["Mistral-8x7B", "Mistral-8x7B-toy"]:
+    elif model_size in ["Mistral-8x7B", "Mistral-toy"]:
         # Num of parameters: 47B.
         ffn_layer_types = get_ffn_layer_types()
         neuron_mesh = mesh_shape_from_axes(fsdp=-1, model=4)
         trainer_kwargs = dict(
             model_kwargs=dict(
                 num_layers=int(os.getenv("NUM_LAYERS", 4)),
-                hidden_dim=32 * 32 if model_size == "Mistral-8x7B-toy" else 32 * 128,
+                hidden_dim=32 * 32 if model_size == "Mistral-toy" else 32 * 128,
                 ffn_dim=scaled_hidden_dim(scale=3.5, round_up_to_multiples_of=128),
                 num_heads=32,
                 num_kv_heads=8,
