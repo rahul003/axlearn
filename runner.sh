@@ -80,7 +80,7 @@ export JAX_COMPILATION_CACHE_DIR="cache/"
 mkdir -p ${JAX_COMPILATION_CACHE_DIR}
 
 deactivate || true
-source ../jaxmoe/bin/activate
+source ../jaxmoe2/bin/activate
 
 echo "Listing apt dependencies"
 apt list --installed | grep neuron
