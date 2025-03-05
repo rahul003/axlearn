@@ -1,0 +1,9 @@
+jax
+absl-py
+einops
+chex
+optax
+aqtp
+portpicker
+tensorflow
+seqio
