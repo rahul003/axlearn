@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-
 set -e
 # Neuron env vars for distributed training based on SLURM
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
@@ -30,7 +29,7 @@ PROFILE_DUMP_PATH=${TEST_ARTIFACTS_PATH}/profiles
 
 export XLA_FLAGS="--xla_dump_hlo_as_text --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
 # export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_snapshots"
-# export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_as_proto"
+export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_as_proto"
 
 # PJRT Flags 
 export NEURON_FSDP_NUM_LAYER_EARLY_AG_SHIFT=1
@@ -78,11 +77,11 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --auto-cast=none"
 
 # use to add debug logging at module level in xla
 # export TF_CPP_MIN_LOG_LEVEL=0
-# export TF_CPP_VMODULE="gather_scatter_handler=5"
+# export TF_CPP_VMODULE="gather_simplifier=5"
 
 # JAX Cache
-export JAX_COMPILATION_CACHE_DIR="cache/"
-mkdir -p ${JAX_COMPILATION_CACHE_DIR}
+# export JAX_COMPILATION_CACHE_DIR="cache/"
+# mkdir -p ${JAX_COMPILATION_CACHE_DIR}
 
 deactivate || true
 source ../jaxmoe/bin/activate
@@ -94,6 +93,7 @@ pip list | grep neuron
 echo "Done listing dependencies"
 printenv | grep NEURON
 printenv | grep XLA
+printenv | grep AXLEARN
 which python
 
 # TC MALLOC HACK
@@ -117,10 +117,12 @@ mkdir -p ${OUTPUT_DIR}
 DATA_DIR="gs://axlearn-public/tensorflow_datasets"
 # fuji-7B-v2-flash
 
-jax_backend=${3:-"neuron"}
-if [ "$jax_backend" == "cpu" ]; then
+if [ "$AXLEARN_JAX_BACKEND" == "cpu" ]; then
 	export XLA_FLAGS="${XLA_FLAGS} --xla_force_host_platform_device_count=64 "
 	export JAX_PLATFORMS="cpu"
+	jax_backend="cpu"
+else
+	jax_backend="neuron"
 fi
 
 upload_profile() {
@@ -171,10 +173,10 @@ else
 	# 0 adds dense MLP layers
 	# 1 adds all sparse MLP layers
 	# 2 adds alternating sparse and dense layers
-	export MIXTRAL_MOE=$1
-	export NUM_LAYERS=$2
+	# export MIXTRAL_MOE=$1
+	# export NUM_LAYERS=$2
 	python -m axlearn.common.launch_trainer_main \
-		--module=text.gpt.c4_trainer --config=envy-Mistral-toy \
+	--module=text.gpt.c4_trainer --config=envy-Mistral-${AXLEARN_MODEL_NAME} \
 		--trainer_dir=$OUTPUT_DIR --data_dir=$DATA_DIR \
 		--jax_backend=$jax_backend --mesh_selector=neuron-trn2.48xlarge-64 \
 		--distributed_coordinator=$MASTER_ADDR:$JAX_COORDINATOR_PORT --num_processes=$num_nodes \
