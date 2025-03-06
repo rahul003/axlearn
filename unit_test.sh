@@ -58,8 +58,8 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --auto-cast=none"
 echo "setup env vars"
 if [ "$1" = "unit" ]; then
     echo "Running Unit Test"
-    python3 -m pytest axlearn/common/mixture_of_experts_neuron_unit_test.py
+    pytest axlearn/common/mixture_of_experts_neuron_unit_test.py
 else
     echo "Running Integ Test"
-    python3 -m pytest axlearn/common/mixture_of_experts_neuron_test.py
+    pytest axlearn/common/mixture_of_experts_neuron_test.py
 fi
