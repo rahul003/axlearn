@@ -95,10 +95,9 @@ MAX_SEQUENCE_LENGTH = {
     "Switch-Large": 8192,
     "Switch-XXL": 8192,
     "Mistral-toy": 256,
-    "Mistral-8x7B": 4096,
+    "Mistral-8x7B": 2048,
     "Mistral-8x20B": 4096,
 }
-
 
 _BASE_MODEL_HIDDEN_DIM = 768
 
@@ -122,7 +121,7 @@ MOE_DIM_TO_MESH_AXIS_MAP = {
 }
 
 def get_ffn_layer_types():
-    ffn_type = os.getenv("MIXTRAL_MOE", "1")
+    ffn_type = os.getenv("AXLEARN_MIXTRAL_MOE", "1")
     if ffn_type == "0":
         ffn_layer_types = ["dense"]
     elif ffn_type == "1":
@@ -456,14 +455,15 @@ def get_trainer_kwargs(
     elif model_size in ["Mistral-8x7B", "Mistral-toy"]:
         # Num of parameters: 47B.
         ffn_layer_types = get_ffn_layer_types()
-        neuron_mesh = mesh_shape_from_axes(fsdp=-1, model=4)
+        tp_degree=int(os.getenv("AXLEARN_TP_DEGREE", 4))
+        neuron_mesh = mesh_shape_from_axes(fsdp=-1, model=tp_degree)
         trainer_kwargs = dict(
             model_kwargs=dict(
-                num_layers=int(os.getenv("NUM_LAYERS", 4)),
+                num_layers=int(os.getenv("AXLEARN_NUM_LAYERS", 4)),
                 hidden_dim=32 * 32 if model_size == "Mistral-toy" else 32 * 128,
                 ffn_dim=scaled_hidden_dim(scale=3.5, round_up_to_multiples_of=128),
                 num_heads=32,
-                num_kv_heads=8,
+                num_kv_heads=max(8, tp_degree),
                 num_experts=NUM_EXPERTS[model_size],
                 train_capacity_factor=2.0,
                 num_groups=1,
@@ -471,8 +471,8 @@ def get_trainer_kwargs(
                 outer_batch_size=get_outer_batch_from_mesh(MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, neuron_mesh),
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
-            max_sequence_length=max_sequence_length,
-            train_batch_size=128, # 8M tokens.
+            max_sequence_length=int(os.getenv("AXLEARN_MAX_SEQ_LEN", max_sequence_length)),
+            train_batch_size=int(os.getenv("AXLEARN_TRAIN_BATCH_SIZE", 128)),
             max_step=250_000,
             mesh_shape=mesh_shape_from_axes(fsdp=-1, model=8),
             mesh_rules=(
@@ -505,14 +505,14 @@ def get_trainer_kwargs(
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
-                            # RematSpecModifier.default_config().set(
-                            #     remat_policies={
-                            #         "model.decoder.transformer.layer": RematSpec(
-                            #             prevent_cse=True,
-                            #             policy=jax_remat_policies.nothing_saveable,
-                            #         ),
-                            #     }
-                            # ),
+                            RematSpecModifier.default_config().set(
+                                remat_policies={
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=True,
+                                        policy=jax_remat_policies.nothing_saveable,
+                                    ),
+                                } if os.getenv('AXLEARN_REMAT_LAYER', 'true') == 'true' else {}
+                            ),
                         ],
                     ),
                 ),
