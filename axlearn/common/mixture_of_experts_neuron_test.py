@@ -93,15 +93,10 @@ class TestImplCorrectnessInteg(TestCase):
         test_grads = jax.tree_map(jax.device_get, test_grads)
         golden_grads = jax.tree_map(jax.device_get, golden_grads)
         
-<<<<<<< HEAD
         self.assertNestedAllClose(test_loss, golden_loss,
                                   atol=cfg.test.tol["atol"], rtol=cfg.test.tol["rtol"])
         self.assertNestedAllClose(test_grads, golden_grads,
                                   atol=cfg.test.tol["atol"], rtol=cfg.test.tol["rtol"])
-=======
-        self.assertNestedAllClose(test_loss, golden_loss)
-        self.assertNestedAllClose(test_grads, golden_grads)
->>>>>>> origin/aws-moe
 
 if __name__ == "__main__":
     absltest.main()
