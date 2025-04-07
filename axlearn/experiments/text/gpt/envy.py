@@ -185,13 +185,18 @@ def _generate_trn2_custom_configs(
                         "model",
                         ("expert", "fsdp", "seq"),
                     ),
-                    "input_partition_spec": (("data", "fsdp"), None),
-                    "output_partition_spec": (("data", "fsdp"), None, None),
+                    "input_partition_spec": (("data", "expert", "fsdp"), None),
+                    # "output_partition_spec": (("data", "fsdp"), None, None),
+                    "output_partition_spec": (("data", "expert", "fsdp", "seq"), None, None),
                     "embedding_partition_spec": ("model", None),
                 },
+                # "model.decoder.transformer.layer.self_attention.norm": {
+                #     "input_partition_spec": (("data", "expert", "fsdp", "seq"), "model", None),
+                #     "output_partition_spec": (("data", "expert", "fsdp", "seq"), None, None),
+                # },
                 "model.decoder.output_norm": {
-                    "input_partition_spec": (("data", "fsdp"), "model", None),
-                    "output_partition_spec": (("data", "fsdp"), None, None),
+                    "input_partition_spec": (("data", "expert", "fsdp"), "model", None),
+                    "output_partition_spec": (("data", "expert", "fsdp"), None, None),
                 },
 
             },
@@ -212,13 +217,16 @@ def _generate_trn2_custom_configs(
                 partition_specs={
                     # Sequence parallel shardings for norms.
                     "model.decoder.transformer.layer.self_attention.norm": {
-                        "input_partition_spec": (("data", "fsdp"), "model", None),
-                        "output_partition_spec": (("data", "fsdp"), None, None),
+                        "input_partition_spec": (("data", "expert", "fsdp"), "model", None),
+                        "output_partition_spec": (("data", "expert", "fsdp"), None, None),
                     },
                     "model.decoder.transformer.layer.feed_forward.norm": {
-                        "input_partition_spec": (("data", "fsdp"), "model", None),
-                        "output_partition_spec": (("data", "fsdp"), None, None),
+                        "input_partition_spec": (("data", "expert", "fsdp"), "model", None),
+                        "output_partition_spec": (("data", "expert","fsdp"), None, None),
                     },
+                    # "model.decoder.transformer.layer.self_attention.attention.output_linear": {
+                    #     "output_partition_spec": (("data", "expert", "fsdp", "seq"), "model", None),
+                    # },
                 },
             )
         )
@@ -522,7 +530,9 @@ def get_trainer_kwargs(
         # Num of parameters: 150B.
         ffn_layer_types = get_ffn_layer_types()
         tp_degree=int(os.getenv("AXLEARN_TP_DEGREE", 4))
-        neuron_mesh = mesh_shape_from_axes(fsdp=-1, model=tp_degree)
+        ep_degree=int(os.getenv("AXLEARN_EP_DEGREE", 1))
+        fsdp_degree=int(os.getenv("AXLEARN_FSDP_DEGRE", -1))
+        neuron_mesh = mesh_shape_from_axes(expert=ep_degree, fsdp=fsdp_degree, model=tp_degree)
         trainer_kwargs = dict(
             model_kwargs=dict(
                 # hidden size of 64*128 has 11B params per layer, with 3.5 factor, used to create compiler ticket 
@@ -537,15 +547,15 @@ def get_trainer_kwargs(
                 num_kv_heads=tp_degree,
                 num_experts=NUM_EXPERTS[model_size],
                 train_capacity_factor=2.0,
-                num_groups=1,
+                num_groups=int(os.getenv("NUM_GROUPS", 8)),
                 ffn_layer_types=ffn_layer_types,
                 ffn_sparse_top_k=4,
                 outer_batch_size=get_outer_batch_from_mesh(MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, neuron_mesh),
             ),
-            learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
+            learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=1_000),
             max_sequence_length=int(os.getenv("AXLEARN_MAX_SEQ_LEN", max_sequence_length)),
             train_batch_size=int(os.getenv("AXLEARN_TRAIN_BATCH_SIZE", 128)),
-            max_step=250_000,
+            max_step=2_000,
             mesh_shape=mesh_shape_from_axes(fsdp=-1, model=8),
             mesh_rules=(
                 (

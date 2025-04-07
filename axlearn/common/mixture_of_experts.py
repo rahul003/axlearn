@@ -72,7 +72,7 @@ def down_proj(x, wo_weight):
 @partial(jax.jit, static_argnums=(0,))
 def combine_outputs(tok, permuted_output, token_permutation_idx, expert_index, expert_affinities_masked, dest_output):
     # Expected shapes:
-    # permuted_output: (O, G, E, M)
+    # permuted_output: (O, G, E*C, M)
     # token_permutation_idx: (O, G, S, K)
     # expert_index: (O, G, S, K)
     # expert_affinities_masked: (O, G, S, E)
@@ -102,8 +102,9 @@ def combine_outputs(tok, permuted_output, token_permutation_idx, expert_index, e
 
     # Sum across the top-k dimension
     combined_output = jnp.sum(weighted_output_k, axis=3)  # Shape: (O, G, S, M)
+    dest_output = dest_output.at[0].set(combined_output)  # Shape: (1, O, G, S, M)
 
-    return combined_output
+    return dest_output
 
 def _router_z_loss(logits: Tensor) -> Tensor:
     """Loss that encourages router logits to remain small and improves stability.
@@ -1190,7 +1191,9 @@ class TransformerFeedForwardMoE(BaseLayer):
         cfg = self.config
         with jax.named_scope("feed_forward_layer"):
             if cfg.structure == "prenorm":
+                # inputs = with_sharding_constraint(inputs, PartitionSpec(("data", "expert", "fsdp", "seq"), "model", None))
                 x = self.norm(inputs)
+                # x = with_sharding_constraint(x, PartitionSpec(("data", "expert", "fsdp", "seq"), None, None))
                 with jax.named_scope("dispatch_and_combine"):
                     x = self._dispatch_and_combine(x)
                 x = self.dropout2(x)
@@ -1250,7 +1253,9 @@ class TransformerFeedForwardMoE(BaseLayer):
                 f" = {num_tokens} must be divisible by num_groups({num_groups})."
             )
         group_len = num_tokens // num_groups
+        x = with_sharding_constraint(x, PartitionSpec(None, None, None))
         x = x.reshape([outer_batch, num_groups, group_len, cfg.input_dim])
+        x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["ogsM"])
 
         # O may be lower than fsdp axis
         # TODO(huilgolr): what to do here
@@ -1258,6 +1263,8 @@ class TransformerFeedForwardMoE(BaseLayer):
         with jax.named_scope("router"):
             logits = jnp.einsum("ogsm,me->ogse", x, self.parameters["gate_weight"])
 
+        # x = x.reshape([outer_batch, num_groups, group_len, cfg.input_dim])
+        # logits = logits.reshape([outer_batch, num_groups, group_len, -1])
         # Perform gating based on logits. Casting to float32 precision is usually needed for
         # stable performance.
         with jax.named_scope("gating"):
@@ -1281,6 +1288,7 @@ class TransformerFeedForwardMoE(BaseLayer):
                 idx_o = jnp.arange(O)[:, None, None, None]  # (O, 1, 1, 1)
                 idx_g = jnp.arange(G)[None, :, None, None]  # (1, G, 1, 1)
                 expert_aligned_hidden_states = x[idx_o, idx_g, token_assignments] # (O, G, E, C, M)
+                expert_aligned_hidden_states = with_sharding_constraint(expert_aligned_hidden_states, PartitionSpec(("data", "fsdp"), "expert", None, None, None))
                 expert_aligned_hidden_states = jnp.einsum("ogecm->oegcm", expert_aligned_hidden_states)
 
                 expert_aligned_hidden_states = with_sharding_constraint(expert_aligned_hidden_states, cfg.dim_to_mesh_axis_map["oegcM"])
@@ -1340,13 +1348,13 @@ class TransformerFeedForwardMoE(BaseLayer):
                     )
                     output = combine_outputs_sm(
                         min_k, permuted_output, token_permutation_idx, expert_index, expert_affinities_masked, output
-                    )
+                    ) #(O,G,S,M)
                     # In jax0.4.33, this op is hardcoded to fp32
                     # TODO: verify that this becomes bf16 when jax is upgraded, 
                     # and that the AR becomes RS once the cast op in between goes away.
                     # it may not go away because of a reshape in between this and the slice, need to check.
                     # TODO: does this need to be in fp32 for high TP
-                    output = jnp.sum(output, axis=0, dtype=permuted_output.dtype)
+                    output = jnp.sum(output, axis=0, dtype=permuted_output.dtype) # Why axis=0?? 
                 else:
                     output = jnp.zeros((O, G, group_len, cfg.input_dim), dtype=input_dtype)
                     min_k = min(self.config.gating.top_k, self.config.num_experts)
@@ -1365,7 +1373,13 @@ class TransformerFeedForwardMoE(BaseLayer):
                         expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1) # Result shape: (O, G, S, 1)
 
                         output += output_k * expert_affinities_k
-                return output.reshape(token_shape + (cfg.input_dim,))
+                # output = with_sharding_constraint(output, cfg.dim_to_mesh_axis_map["ogsM"])
+                output = with_sharding_constraint(output, PartitionSpec(None, None, None, None))
+                output = output.reshape(token_shape + (cfg.input_dim,))
+                output = with_sharding_constraint(output, PartitionSpec(("data","expert","fsdp"), None, None))
+                # output = jnp.sum(output, axis=0, dtype=permuted_output.dtype)
+                return output
+                # return output
         else:
             combine_tensor = gating.combine_tensor.astype(input_dtype)
             dispatch_tensor = gating.dispatch_tensor.astype(input_dtype)
