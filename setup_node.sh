@@ -23,13 +23,13 @@ SECONDS=0
 sudo apt-get update - > /dev/null
 
 # Needed for TC_MALLOC fix
-# sudo apt-get -f install -y
-# sudo apt-get install -y google-perftools
+sudo apt-get -f install -y
+sudo apt-get install -y google-perftools
 
 # Binaries to use:
 ###
 
-ENV_DROP_DIR=${1:-../mar-artifacts}
+ENV_DROP_DIR=${1:-../apr-artifacts}
 
 RUNTIME=$ENV_DROP_DIR/aws-neuronx-runtime-lib-*.deb
 COLLECTIVES=$ENV_DROP_DIR/aws-neuronx-collectives-*.deb

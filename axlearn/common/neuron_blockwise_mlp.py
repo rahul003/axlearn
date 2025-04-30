@@ -11,17 +11,18 @@ import jax_neuronx  # pylint: disable=unused-import
 import neuronxcc.nki.language as nl
 from jax import custom_vjp
 
-# from neuronxcc.nki._private_kernels.blockwise_mm import (
-from axlearn.common.blockwise_mm import (
+from neuronxcc.nki._private_kernels.blockwise_mm import (
+#from axlearn.common.blockwise_mm import (
         # blockwise_mm as blockwise_mm_nki,
         blockwise_mm_selective_cp as blockwise_mm_nki,
         # blockwise_mm_baseline_shard_hidden as blockwise_mm_nki,
-        check_blockwise_mm_kernel_compatibility,
+        #check_blockwise_mm_kernel_compatibility,
     )
 from neuronxcc.nki._private_kernels.blockwise_mm_bwd import (
+#from axlearn.common.blockwise_mm_bwd import (
     # blockwise_mm_bwd as blockwise_mm_bwd_nki,
     blockwise_mm_bwd_selective_cp as blockwise_mm_bwd_nki,
-    check_blockwise_mm_bwd_kernel_compatibility,
+    #check_blockwise_mm_bwd_kernel_compatibility,
 )
 from neuronxcc.nki.compiler.backends.neuron.dimensions import VNC
 import neuronxcc.nki as nki
@@ -46,7 +47,7 @@ def can_use_blockwise_matmul_nki(
     if blockwise_mm_nki is None:
         print("Failed to load Blockwise NKI kernel.")
         return False
-
+    '''
     try:
         check_blockwise_mm_kernel_compatibility(
             hidden_size=hidden_size,
@@ -56,7 +57,7 @@ def can_use_blockwise_matmul_nki(
     except AssertionError as e:
         print(f"Blockwise kernel not compatible with model config. Reason: {str(e)}")
         return False
-
+    '''
     return True
 
 @partial(custom_vjp, nondiff_argnums=(5,))
@@ -94,7 +95,7 @@ def _blockwise_mm_fwd(
         block_to_expert = jnp.squeeze(block_to_expert, axis=(0,1,))
     
     # (N, 1)
-    block_to_expert = jnp.expand_dims(block_to_expert, axis=1)
+    #block_to_expert = jnp.expand_dims(block_to_expert, axis=1)
 
     # # add +1 for padding
     with jax.named_scope("add padding"):
@@ -129,12 +130,14 @@ def _blockwise_mm_fwd(
         block_to_expert,
         block_size
     )
+    #breakpoint()
     with jax.named_scope("make NKI call"):
         out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
             hidden_states,
             expert_affinities_masked,
             gate_up_weight,
             down_proj_weight,
+            #block_size,
             token_position_to_id,
             block_to_expert,
             block_size=block_size,
@@ -143,7 +146,8 @@ def _blockwise_mm_fwd(
     # return out[:-1, :], (hidden_states, expert_affinities_masked, gate_up_weight, 
     #             down_proj_weight, down_activations, gate_up_activations_T, 
     #             token_position_to_id, block_to_expert)
-
+    #breakpoint()
+    jax.debug.print("Output of fwd: {x}", x=out)
     return out[None, None, None, :-1, :], (hidden_states, expert_affinities_masked, gate_up_weight, 
                 down_proj_weight, down_activations, gate_up_activations_T, 
                 token_position_to_id, block_to_expert)
@@ -164,9 +168,9 @@ def _blockwise_mm_bwd(
     padding_h = jnp.zeros((1, hidden_states.shape[1]), dtype=hidden_states.dtype)
     grad_output = jnp.concat([grad_output, padding_h], axis=0)
     
-    jax.debug.print("grad_output: {x}", x=grad_output)
-    jax.debug.print("hidden_states: {x}", x=hidden_states)
-
+    # jax.debug.print("grad_output: {x}", x=grad_output)
+    # jax.debug.print("hidden_states: {x}", x=hidden_states)
+    #breakpoint()
     # Compute gradients
     hidden_states_grad, affinities_grad, gate_up_proj_weight_grad, down_weight_grad = _blockwise_mm_bwd_nki_call[VNC(2)](
         hidden_states,
