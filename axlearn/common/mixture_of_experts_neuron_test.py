@@ -10,47 +10,119 @@
 # Copyright 2022 The Pax Authors.
 # Licensed under the Apache License, Version 2.0 (the "License").
 """Integration Test for mixture_of_experts.py"""
-import pytest
-from absl.testing import absltest, parameterized
+from functools import partial
+
 import jax
+from absl.testing import absltest, parameterized
 
+from axlearn.common.module import functional as F
 from axlearn.common.test_utils import TestCase
+from axlearn.common.utils_neuron import TestConfig
+from axlearn.common.utils_neuron import get_training_configs
+import os
 
-from axlearn.common.utils_neuron import ModuleTester, TestConfig, TestConfigBuilder, get_training_configs
+is_unit = os.getenv('IS_UNIT', 'false').lower() == 'true'
+is_blockwise = os.getenv('IS_BLOCKWISE', 'false').lower() == 'true'
+#breakpoint()
+test_configs = get_training_configs(is_unit,is_blockwise)
 
-test_configs = get_training_configs()
+from jax_neuronx.experimental import debug_callback
 
+
+def save_fn(x):
+    # convert to np tensor
+    # np.save
+    print(x)
 
 # pylint: disable=no-self-use,protected-access
-class TestImplCorrectnessInteg(TestCase, ModuleTester):
-    def test_fwd_correctness_blockwise(self):
-        builder = TestConfigBuilder()
-        builder.reset()
-        builder.with_dimensions(batch_size=16, seq_len=4096, input_dim=6144,)
-        builder.with_expert_settings(
-            hidden_dim=15*1024, outer_batch=16,
-            num_groups=1, num_experts=16,
-            expert_capacity=None, 
-            train_capacity_factor=2,
-            block_size=512,
-            use_blockwise_kernel=True)
-        builder.with_mesh_settings({"fsdp":-1, "model":4})
-        # gating_config = builder.build_gating_layer_config(test_device="neuron")
-        # gating_config.conv_output = None
-        # self._test_fwd_internal(gating_config, assert_outputs=False)
-        moe_config = builder.build_moe_layer_config(test_device="neuron")
-        print(moe_config.test.module)
-        self._test_fwd_internal(moe_config, assert_outputs=True)
+class TestImplCorrectnessInteg(TestCase):
+
+    def _fwd_call(self, layer, state, inputs):
+        return F(
+                layer,
+                is_training=True,
+                prng_key=jax.random.PRNGKey(123),
+                state=state,
+                inputs=inputs,
+        )
 
     @parameterized.named_parameters(test_configs)
-    @pytest.mark.skip(reason="skip")
     def test_fwd_correctness(self, cfg: TestConfig):
-        self._test_fwd_internal(cfg)
+        #breakpoint()
+        cfg.instantiate()
+
+        @debug_callback
+        @partial(jax.jit, static_argnums=0) 
+        def test_fwd_call(test_layer, test_state, test_inputs):
+            #breakpoint()
+            test_output, _ = self._fwd_call(test_layer, test_state, test_inputs)
+            # jax.debug.print("hidden_states: {x}", x=hidden_states)
+            # debug_callback(my_debug_fn, test_output)
+            #breakpoint()
+            return test_output
+
+        @partial(jax.jit, static_argnums=0)
+        def golden_fwd_call(golden_layer, golden_state, golden_inputs):
+            golden_output, _ =  self._fwd_call(golden_layer, golden_state, golden_inputs)
+            return golden_output
+        with cfg.mesh_test:
+            test_output = test_fwd_call(cfg.test_layer, cfg.test_state, cfg.test_inputs)
+        with cfg.mesh_golden:
+            golden_output = golden_fwd_call(cfg.golden_layer, cfg.golden_state, cfg.golden_inputs)
+
+        if cfg.conv_output != None:
+            test_output = cfg.conv_output(test_output)
+        
+        # Transfer results to CPU before comparison
+        self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output),
+                                  atol=cfg.test.tol["atol"], rtol=cfg.test.tol["rtol"])
 
     @parameterized.named_parameters(test_configs)
-    @pytest.mark.skip(reason="skip")
-    def test_bwd_correctness(self, cfg: TestConfig):
-        self._test_bwd_internal(cfg)
+    def test_fwd_bwd_correctness(self, cfg: TestConfig):
+        cfg.instantiate()
+
+        @partial(jax.jit, static_argnums=0)
+        def test_bwd_call(test_layer, test_state, test_inputs):
+            def loss_fn(state):
+                output, aux = self._fwd_call(test_layer, state, test_inputs)
+                return cfg.loss_fn(output), output  # Return both loss and output
+
+            (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+            return loss, grads, output
+
+        @partial(jax.jit, static_argnums=0)
+        def golden_bwd_call(golden_layer, golden_state, golden_inputs):
+            def loss_fn(state):
+                output, aux = self._fwd_call(golden_layer, state, golden_inputs)
+                return cfg.loss_fn(output), output  # Return both loss and output
+
+            (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(golden_state)
+            return loss, grads, output
+
+        with cfg.mesh_test:
+            test_loss, test_grads, test_output = test_bwd_call(cfg.test_layer, cfg.test_state, cfg.test_inputs)
+        with cfg.mesh_golden:
+            golden_loss, golden_grads, golden_output = golden_bwd_call(cfg.golden_layer, cfg.golden_state, cfg.golden_inputs)
+
+        #Transfer results to CPU before comparison
+        test_loss = jax.tree_map(jax.device_get, test_loss)
+        golden_loss = jax.tree_map(jax.device_get, golden_loss)
+        test_grads = jax.tree_map(jax.device_get, test_grads)
+        golden_grads = jax.tree_map(jax.device_get, golden_grads)
+        test_output = jax.tree_map(jax.device_get, test_output)
+        golden_output = jax.tree_map(jax.device_get, golden_output)
+        
+        # Compare losses
+        self.assertNestedAllClose(test_loss, golden_loss,
+                                atol=cfg.test.tol["atol"], rtol=cfg.test.tol["rtol"])
+        
+        # Compare gradients
+        self.assertNestedAllClose(test_grads, golden_grads,
+                                atol=cfg.test.tol["atol"], rtol=cfg.test.tol["rtol"])
+        
+        # Compare outputs
+        self.assertNestedAllClose(test_output, golden_output,
+                                atol=cfg.test.tol["atol"], rtol=cfg.test.tol["rtol"])
 
 if __name__ == "__main__":
     absltest.main()

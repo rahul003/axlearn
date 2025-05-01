@@ -7,8 +7,7 @@ rm -rf "$TEST_ARTIFACTS_PATH"
 mkdir -p "$TEST_ARTIFACTS_PATH"
 NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
 HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
-# export XLA_FLAGS="--xla_force_host_platform_device_count=64 "
-export XLA_FLAGS="--xla_dump_hlo_as_text --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
+export XLA_FLAGS="--xla_cpu_use_thunk_runtime=false --xla_force_host_platform_device_count=64 --xla_dump_hlo_as_text --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
 # export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_snapshots"
 
 # PJRT Flags 
@@ -17,7 +16,7 @@ export NEURON_FSDP_NUM_LAYER_LATE_RS_SHIFT=2
 export NEURON_ENABLE_INT_MATMUL_DOWNCAST=1
 export NEURON_FSDP=0
 export NEURON_FSDP_NUM_LAYER_COALESCE=-1
-export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=0
+export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1 # changed from 0
 export NEURON_DISABLE_BOUNDARY_MARKER=1
 
 # Neuron runtime flags
@@ -57,15 +56,21 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --auto-cast=none"
 # # JAX Cache
 # export JAX_COMPILATION_CACHE_DIR="/shared/aahila/compiler/cache/"
 # mkdir -p ${JAX_COMPILATION_CACHE_DIR}
-source ../jaxmoe/bin/activate
 
 echo "setup env vars"
+export TEST_SUITE="presubmit" # set to presubmit/12B/50B/150B
 if [ "$1" = "unit" ]; then
     echo "Running Unit Test"
     export JAX_PLATFORMS=cpu
-    # much faster to run with CPU backend
-    pytest -v axlearn/common/mixture_of_experts_neuron_unit_test.py
+    export IS_UNIT="true"
+    pytest axlearn/common/mixture_of_experts_neuron_test.py -k "test_fwd_correctness"
+elif [ "$1" = "blockwise" ]; then
+    echo "Running Integ Test with blockwise kernel"
+    export IS_UNIT="false"
+    export IS_BLOCKWISE="true"
+    pytest axlearn/common/mixture_of_experts_neuron_test.py -s -k "test_fwd_correctness"
 else
     echo "Running Integ Test"
-    pytest axlearn/common/mixture_of_experts_neuron_test.py
+    export IS_UNIT="false"
+    pytest axlearn/common/mixture_of_experts_neuron_test.py -k "test_fwd_correctness"
 fi

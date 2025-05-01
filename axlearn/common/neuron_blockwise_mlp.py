@@ -11,8 +11,8 @@ import jax_neuronx  # pylint: disable=unused-import
 import neuronxcc.nki.language as nl
 from jax import custom_vjp
 
-# from neuronxcc.nki._private_kernels.blockwise_mm import (
-from axlearn.common.blockwise_mm import (
+from neuronxcc.nki._private_kernels.blockwise_mm import (
+# from axlearn.common.blockwise_mm import (
         # blockwise_mm as blockwise_mm_nki,
         blockwise_mm_selective_cp as blockwise_mm_nki,
         # blockwise_mm_baseline_shard_hidden as blockwise_mm_nki,
@@ -94,7 +94,7 @@ def _blockwise_mm_fwd(
         block_to_expert = jnp.squeeze(block_to_expert, axis=(0,1,))
     
     # (N, 1)
-    block_to_expert = jnp.expand_dims(block_to_expert, axis=1)
+    #block_to_expert = jnp.expand_dims(block_to_expert, axis=1)
 
     # # add +1 for padding
     with jax.named_scope("add padding"):
@@ -130,6 +130,7 @@ def _blockwise_mm_fwd(
         block_size
     )
     with jax.named_scope("make NKI call"):
+        #breakpoint()
         out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
             hidden_states,
             expert_affinities_masked,
@@ -164,9 +165,9 @@ def _blockwise_mm_bwd(
     padding_h = jnp.zeros((1, hidden_states.shape[1]), dtype=hidden_states.dtype)
     grad_output = jnp.concat([grad_output, padding_h], axis=0)
     
-    jax.debug.print("grad_output: {x}", x=grad_output)
-    jax.debug.print("hidden_states: {x}", x=hidden_states)
-
+    #jax.debug.print("grad_output: {x}", x=grad_output)
+    #jax.debug.print("hidden_states: {x}", x=hidden_states)
+    breakpoint()
     # Compute gradients
     hidden_states_grad, affinities_grad, gate_up_proj_weight_grad, down_weight_grad = _blockwise_mm_bwd_nki_call[VNC(2)](
         hidden_states,
