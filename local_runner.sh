@@ -173,6 +173,12 @@ else
 	exit 1
 fi
 
+export AXLEARN_NUM_LAYERS=4
+export AXLEARN_REMAT_LAYER=true
+export AXLEARN_MODEL_NAME="envy-Mistral-16x10B"
+export AXLEARN_TP_DEGREE=16
+export AXLEARN_TRAIN_BATCH_SIZE=16
+
 OUTPUT_DIR="${TEST_ARTIFACTS_PATH}/axlearn_out"
 mkdir -p ${OUTPUT_DIR}
 DATA_DIR="gs://axlearn-public/tensorflow_datasets"

@@ -1207,7 +1207,7 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
 
     def forward(self, logits):
         cfg = self.config
-        O, G, S, E = logits.shape
+        O, G, S, E = logits.shape #S,B,H
         if logits.dtype != jnp.float32:
             logits = logits.astype(jnp.float32)
         logits = _cap_logits(logits, cfg.gating_logit_cap)
@@ -1662,10 +1662,11 @@ class TransformerFeedForwardMoE(BaseLayer):
                 check_rep=False
             )
 
-            #jax.debug.print("hidden_states: {x}", x=hidden_states)
-            #jax.debug.print("expert_affinities_masked: {x}", x=expert_affinities_masked)
-            #jax.debug.print("token_position_to_id: {x}", x=token_position_to_id)
-            #jax.debug.print("block_to_expert: {x}", x=block_to_expert)
+            jax.debug.print("hidden_states: {x}", x=hidden_states)
+            jax.debug.print("expert_affinities_masked: {x}", x=expert_affinities_masked)
+            jax.debug.print("token_position_to_id: {x}", x=token_position_to_id)
+            jax.debug.print("block_to_expert: {x}", x=block_to_expert)
+
 
             # Define the expected shape & dtype of output.
             '''
@@ -1692,7 +1693,7 @@ class TransformerFeedForwardMoE(BaseLayer):
 
             with jax.named_scope("all_reduce"):
                 outputs = jnp.sum(outputs, axis=1, dtype=outputs.dtype)
-            jax.debug.print("outputs: {x}", x=outputs)
+            #jax.debug.print("outputs: {x}", x=outputs)
             # jax.debug.callback(save_to_npz, outputs)
             return outputs
         else:

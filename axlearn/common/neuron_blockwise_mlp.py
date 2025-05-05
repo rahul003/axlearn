@@ -129,6 +129,14 @@ def _blockwise_mm_fwd(
         block_to_expert,
         block_size
     )
+
+    #jax.debug.print("hidden_states: {x}", x=hidden_states)
+    #jax.debug.print("expert_affinities_masked: {x}", x=expert_affinities_masked)
+    #jax.debug.print("gate_up_weight: {x}", x=gate_up_weight)
+    #jax.debug.print("down_proj_weight: {x}", x=down_proj_weight)
+    #jax.debug.print("token_position_to_id: {x}", x=token_position_to_id)
+    #jax.debug.print("block_to_expert: {x}", x=block_to_expert)
+    #jax.debug.print("block_size: {x}", x=block_size)
     with jax.named_scope("make NKI call"):
         #breakpoint()
         out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
@@ -167,7 +175,7 @@ def _blockwise_mm_bwd(
     
     #jax.debug.print("grad_output: {x}", x=grad_output)
     #jax.debug.print("hidden_states: {x}", x=hidden_states)
-    breakpoint()
+    #breakpoint()
     # Compute gradients
     hidden_states_grad, affinities_grad, gate_up_proj_weight_grad, down_weight_grad = _blockwise_mm_bwd_nki_call[VNC(2)](
         hidden_states,

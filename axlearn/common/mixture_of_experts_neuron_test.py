@@ -51,7 +51,8 @@ class TestImplCorrectnessInteg(TestCase):
         #breakpoint()
         cfg.instantiate()
 
-        @debug_callback
+        #@debug_callback(static_argnums=[0])
+        #@partial(debug_callback, static_argnums=[0])
         @partial(jax.jit, static_argnums=0) 
         def test_fwd_call(test_layer, test_state, test_inputs):
             #breakpoint()
