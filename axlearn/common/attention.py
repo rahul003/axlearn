@@ -1871,7 +1871,7 @@ class MultiheadAttention(BaseLayer):
 
         # [batch, target_length, output_dim].
         o_proj = self.o_proj(context)
-        o_proj = with_sharding_constraint(o_proj, PartitionSpec(("data", "expert", "fsdp", "seq"), "model", None))
+        o_proj = with_sharding_constraint(o_proj, PartitionSpec(("data", "expert", "fsdp"), "model", None))
         outputs = self._remat_name(o_proj, "o_proj")
         self._add_tensor_stats("o_proj_outputs", outputs)
         return_aux = return_aux or set()

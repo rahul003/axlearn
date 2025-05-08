@@ -62,12 +62,33 @@ from axlearn.common.utils import (
     tree_paths,
     with_sharding_constraint,
 )
+from axlearn.common.test_utils import assert_allclose
 
 _USING_SHARDMAP_FFN=int(os.getenv('USE_SHARDMAP_FFN', 1))
 
 @jax.jit
 def down_proj(x, wo_weight):
+    # res = jnp.einsum("oegch,ehm->oegcm", x, wo_weight)
+    # return x
     return jnp.einsum("oegch,ehm->oegcm", x, wo_weight)
+
+@partial(jax.jit, static_argnums=(1,))
+def reshape_bsh(x, shape):
+    x = x.reshape(shape)
+    return x
+
+# def compare_shards(before, after):
+#     diff = jnp.abs(after - before)
+#     print(f"Device: {jax.local_devices()[0]}")
+#     print(f"Local shard diff max: {jnp.max(diff)}")
+#     print(f"Local shard diff mean: {jnp.mean(diff)}")
+#     jax.debug.print("Local shard diff mean: {}", jnp.mean(diff))
+#     # assert_allclose(before, after)
+#     before = jnp.asarray(before).astype(jnp.float32)
+#     after = jnp.asarray(after).astype(jnp.float32)
+#     diff = jnp.abs(before - after)
+#     max_diff = jnp.max(diff)
+#     jax.debug.print("Local shard diff max: {}", max_diff)
 
 @partial(jax.jit, static_argnums=(0,))
 def combine_outputs(tok, permuted_output, token_permutation_idx, expert_index, expert_affinities_masked, dest_output):
@@ -1114,6 +1135,7 @@ class TransformerFeedForwardMoE(BaseLayer):
             "me": PartitionSpec(None, None),
             "emh": PartitionSpec("expert", None, "model"),
             "ehm": PartitionSpec("expert", "model", None),
+            "ehM": PartitionSpec("expert", "model", None),
             "ogsm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, "model"),
             "ogsM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
             "ogse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
@@ -1125,6 +1147,7 @@ class TransformerFeedForwardMoE(BaseLayer):
             "ogecm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, "expert", None, "model"),
             "ogecM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, "expert", None, None),
             "oegch": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
+            "hoesm": PartitionSpec("model", MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
         }
         return cfg
 
@@ -1192,15 +1215,16 @@ class TransformerFeedForwardMoE(BaseLayer):
         with jax.named_scope("feed_forward_layer"):
             if cfg.structure == "prenorm":
                 # inputs = with_sharding_constraint(inputs, PartitionSpec(("data", "expert", "fsdp", "seq"), "model", None))
-                x = self.norm(inputs)
+                # x = self.norm(inputs)
                 # x = with_sharding_constraint(x, PartitionSpec(("data", "expert", "fsdp", "seq"), None, None))
+                x = inputs
                 with jax.named_scope("dispatch_and_combine"):
                     x = self._dispatch_and_combine(x)
-                x = self.dropout2(x)
-                x = self.stochastic_depth(x)
-                if cfg.residual_weight != 1:
-                    x *= cfg.residual_weight
-                x += inputs
+                # x = self.dropout2(x)
+                # x = self.stochastic_depth(x)
+                # if cfg.residual_weight != 1:
+                #     x *= cfg.residual_weight
+                # x += inputs
             elif cfg.structure == "postnorm":
                 with jax.named_scope("dispatch_and_combine"):
                     x = self._dispatch_and_combine(inputs)
@@ -1253,10 +1277,18 @@ class TransformerFeedForwardMoE(BaseLayer):
                 f" = {num_tokens} must be divisible by num_groups({num_groups})."
             )
         group_len = num_tokens // num_groups
-        x = with_sharding_constraint(x, PartitionSpec(None, None, None))
-        x = x.reshape([outer_batch, num_groups, group_len, cfg.input_dim])
-        x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["ogsM"])
-
+        # x = with_sharding_constraint(x, PartitionSpec(None, None, None))
+        # x = x.reshape([outer_batch, num_groups, group_len, cfg.input_dim])
+        # x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["ogsM"])
+        mesh = thread_resources.env.physical_mesh
+        # x_before = x.copy()
+        shape_to_reshape = (outer_batch//mesh.shape["fsdp"], num_groups//mesh.shape["expert"], group_len, cfg.input_dim)
+        x_sm = shard_map(reshape_bsh, mesh=thread_resources.env.physical_mesh, 
+                      in_specs=(PartitionSpec(("data","expert","fsdp"), None, None), None),
+                      out_specs=cfg.dim_to_mesh_axis_map["ogsM"],
+                      check_rep=False)
+        x = x_sm(x, shape_to_reshape)
+        
         # O may be lower than fsdp axis
         # TODO(huilgolr): what to do here
 
@@ -1300,7 +1332,8 @@ class TransformerFeedForwardMoE(BaseLayer):
                 if cfg.structure in ["prenorm", "hybridnorm", "nonorm"]:
                     x = self.dropout1(x)
                 if not _USING_SHARDMAP_FFN:
-                    x = jnp.einsum("oegch,ehm->oegcm", x, self.parameters["wo_weight"])
+                    # x = jnp.einsum("oegch,ehm->oegcm", x, self.parameters["wo_weight"])
+                    x = x
                 else:
                     down_proj_sm = shard_map(
                         down_proj, 
@@ -1312,6 +1345,9 @@ class TransformerFeedForwardMoE(BaseLayer):
                         out_specs=cfg.dim_to_mesh_axis_map["oegcM"],
                         check_rep=False
                     )
+                    e, h, m = self.parameters["wo_weight"].shape 
+                    identity = jnp.eye(h,m, dtype=self.parameters["wo_weight"].dtype)[None, :, :].repeat(e, axis=0)
+                    self.parameters["wo_weight"] = self.parameters["wo_weight"].at[:].set(identity)
                     x = down_proj_sm(x, self.parameters["wo_weight"])
                     x = self._remat_name(x, f"linear2")
 
@@ -1376,13 +1412,20 @@ class TransformerFeedForwardMoE(BaseLayer):
                         expert_affinities_k = jnp.take_along_axis(expert_affinities_masked, kth_expert_index, axis=-1) # Result shape: (O, G, S, 1)
 
                         output += output_k * expert_affinities_k
-                # output = with_sharding_constraint(output, cfg.dim_to_mesh_axis_map["ogsM"])
-                output = with_sharding_constraint(output, PartitionSpec(None, None, None, None))
-                output = output.reshape(token_shape + (cfg.input_dim,))
-                output = with_sharding_constraint(output, PartitionSpec(("data","expert","fsdp"), None, None))
-                # output = jnp.sum(output, axis=0, dtype=permuted_output.dtype)
+                # output = output.reshape(token_shape + (cfg.input_dim,))
+                # output = with_sharding_constraint(output, PartitionSpec(("data","expert","fsdp"), None, None))
+                mesh = thread_resources.env.physical_mesh
+                shape_to_reshape =(token_shape[0]//(mesh.shape["fsdp"]*mesh.shape["expert"]), token_shape[1], cfg.input_dim)
+                output_sm = shard_map(reshape_bsh, mesh=thread_resources.env.physical_mesh, 
+                            in_specs=(cfg.dim_to_mesh_axis_map["ogsM"],None),
+                            out_specs=PartitionSpec(("data","expert","fsdp"), None, None),
+                            check_rep=False)
+                output = output_sm(output, shape_to_reshape)
+                # x_after = output.copy() 
+                # jax.debug.callback(compare_shards, x_before, x_after, partitioned=True)
+                # compare_shards(x_before, x_after)
+                # jax.debug.print("Printing output", output)
                 return output
-                # return output
         else:
             combine_tensor = gating.combine_tensor.astype(input_dtype)
             dispatch_tensor = gating.dispatch_tensor.astype(input_dtype)
@@ -1410,9 +1453,13 @@ class TransformerFeedForwardMoE(BaseLayer):
         if isinstance(cfg.activation, tuple):
             activations = []
             for i, activation in enumerate(cfg.activation):
+                e, m, h = self.parameters[f"wi_{i}_weight"].shape 
+                weight_dtype = self.parameters[f"wi_{i}_weight"].dtype
+                self.parameters[f"wi_{i}_weight"] = jnp.eye(m,h, dtype=weight_dtype)[None, :, :].repeat(e, axis=0)
                 x_i = jnp.einsum("oegcm,emh->oegch", x, self.parameters[f"wi_{i}_weight"])
+                # x_i = x
                 x_i = with_sharding_constraint(x_i, cfg.dim_to_mesh_axis_map["oegch"])
-                x_i = get_activation_fn(activation)(x_i)
+                # x_i = get_activation_fn(activation)(x_i)
                 x = self._remat_name(x, f"linear1_{i}")
                 activations.append(x_i)
             assert len(activations) == 2, cfg.activation
