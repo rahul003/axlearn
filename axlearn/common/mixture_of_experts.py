@@ -67,9 +67,10 @@ from axlearn.common.utils import (
     with_sharding_constraint,
 )
 
-def save_to_npz(data):
-    np.savez("hidden_states_dump.npz",x=np.array(data))
-    return data
+def save_to_npz(x, name):
+    print("inside npz function")
+    np.savez("{}.npz".format(name),x=np.array(x))
+    return x
 
 _USING_SHARDMAP_FFN=int(os.getenv('USE_SHARDMAP_FFN', 1))
 
@@ -1661,12 +1662,17 @@ class TransformerFeedForwardMoE(BaseLayer):
                 out_specs=PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "model", "expert", None, None),
                 check_rep=False
             )
-
+            '''
             jax.debug.print("hidden_states: {x}", x=hidden_states)
             jax.debug.print("expert_affinities_masked: {x}", x=expert_affinities_masked)
             jax.debug.print("token_position_to_id: {x}", x=token_position_to_id)
             jax.debug.print("block_to_expert: {x}", x=block_to_expert)
 
+            jax.debug.callback(save_to_npz, x=hidden_states, name="hidden_states")
+            jax.debug.callback(save_to_npz, x=expert_affinities_masked, name="expert_affinities_masked")
+            jax.debug.callback(save_to_npz, x=token_position_to_id, name="token_position_to_id")
+            jax.debug.callback(save_to_npz, x=block_to_expert,name="block_to_expert")
+            '''
 
             # Define the expected shape & dtype of output.
             '''

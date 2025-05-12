@@ -111,9 +111,13 @@ if [ "$AXLEARN_PROFILE_MODE" = "capture_postrun" ] || [ "$AXLEARN_PROFILE_MODE" 
 	if [ "$AXLEARN_PROFILE_MODE" = "capture_postrun" ]; then
 		# runs a step and captures profile immediately after
 		export AXLEARN_MAX_STEP=1
+		echo "Needs to be debugged, doesn't work as training doesn't stop"
+		exit 1
 	elif [ "$AXLEARN_PROFILE_MODE" = "tracerun" ]; then
 		export NEURON_RT_INSPECT_OUTPUT_DIR="${RT_PROFILE_DUMP_PATH}"
 		export NEURON_RT_INSPECT_DEVICE_PROFILE=1
+		echo "No longer supported"
+		exit 1
 		# export NEURON_RT_ENABLE_DGE_NOTIFICATIONS=1
 		# export NEURON_RT_PROFILE_BUF_DMA_MB=256
 	else
