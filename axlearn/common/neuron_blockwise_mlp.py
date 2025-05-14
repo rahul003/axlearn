@@ -161,11 +161,11 @@ def _blockwise_mm_bwd(
         skip_dma=SkipMode(True, False),
     )
     
-    sliced_tensor = hidden_states_grad[:-1,:]
+    sliced_tensor = hidden_states_grad[:,:]
     hidden_states_grad = sliced_tensor.reshape(1, 1, -1, H)
     
     affinities_grad = jnp.reshape(affinities_grad, (-1, E))
-    affinities_grad = affinities_grad[:-1, :].reshape(1, 1, -1, E)
+    affinities_grad = affinities_grad[:, :].reshape(1, 1, -1, E)
 
     gate_proj_weight_grad = gate_up_proj_weight_grad[:, :, 0, :]  # Shape: (E, H, I)
     up_proj_weight_grad = gate_up_proj_weight_grad[:, :, 1, :]
