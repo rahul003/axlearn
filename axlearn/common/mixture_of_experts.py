@@ -13,6 +13,7 @@
 
 Reference: https://arxiv.org/abs/2405.15052.
 """
+
 import re
 import os
 import math
@@ -30,6 +31,8 @@ from jax._src.mesh import thread_resources
 import numpy as np
 from absl import logging
 from jax.experimental.pjit import pjit
+import jax.lax as lax
+from axlearn.common.attention import NormPosition
 from axlearn.common.base_layer import BaseLayer, ParameterSpec
 from axlearn.common.config import (
     REQUIRED,
@@ -49,8 +52,9 @@ from axlearn.common.layers import (
 )
 from axlearn.common.neuron_blockwise_mlp import can_use_blockwise_matmul_nki, blockwise_mm
 from axlearn.common.metrics import WeightedScalar
-from axlearn.common.module import Module
+from axlearn.common.module import Module, child_context
 from axlearn.common.param_init import FanAxes, constant_initializer
+from axlearn.common.quantized_dot_general.layers import DenseGeneralBaseLayer
 from axlearn.common.utils import (
     HybridMeshShape,
     MeshShape,
@@ -1204,7 +1208,6 @@ class TopKGatingGather(TopKGating):
             router_z_loss=router_z_loss,
         )
 
-
 class TopKGatingGatherBlockwise(TopKGatingGather):
     @config_class
     class Config(TopKGating.Config):
@@ -1378,7 +1381,7 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
         )
 
 
-class TransformerFeedForwardMoE(BaseLayer):
+class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
     """A Transformer feed-forward layer with mixture of experts.
 
     This is a drop-in replacement of the `TransformerFeedForwardLayer` class.
@@ -1388,7 +1391,7 @@ class TransformerFeedForwardMoE(BaseLayer):
     """
 
     @config_class
-    class Config(BaseLayer.Config):
+    class Config(DenseGeneralBaseLayer.Config):
         """Configures TransformerFeedForwardMoE."""
 
         input_dim: Required[int] = REQUIRED  # Input feature dim.
@@ -1397,15 +1400,19 @@ class TransformerFeedForwardMoE(BaseLayer):
         # (outer_batch, inner_batch, seq_len, dim). This is useful for 3D mesh. Reference:
         # https://github.com/tensorflow/mesh/blob/fbf7b1e547e8b8cb134e81e1cd350c312c0b5a16/mesh_tensorflow/transformer/moe.py#L294-L336
         outer_batch: int = 1
-        norm: BaseNormalizationLayer.Config = LayerNorm.default_config()
+        # The normalization layer config.
+        norm: Union[
+            BaseNormalizationLayer.Config, dict[NormPosition, BaseNormalizationLayer.Config]
+        ] = LayerNorm.default_config()
         activation: Union[str, tuple[str, str]] = "nn.relu"
         dropout: InstantiableConfig = Dropout.default_config()
         stochastic_depth: InstantiableConfig = StochasticDepth.default_config()
-        # The inner structure of the layer: "prenorm", "postnorm", "hybridnorm", "nonorm".
+        # The inner structure of the layer: "prenorm", "postnorm", "hybridnorm", "nonorm", "v2".
         # * prenorm: y = x + feedforward(norm(x))
         # * postnorm: y = norm(x + feedforward(x))
-        # * hybridnorm: y = postnorm(x + feedforward(prenorm(x)))
+        # * hybridnorm: y = x + postnorm(feedforward(prenorm(x)))
         # * nonorm: y = feedforward(x)   # no residual, which is usually applied externally.
+        # v2: see comments NormPosition for details.
         #
         # References:
         # prenorm/postnorm: https://arxiv.org/abs/2002.04745.
@@ -1499,17 +1506,28 @@ class TransformerFeedForwardMoE(BaseLayer):
         self._add_child("gating", cfg.gating.set(num_experts=cfg.num_experts))
         self._add_child("stochastic_depth", cfg.stochastic_depth)
         # Add norm layers for different structures.
-        if cfg.structure in ["prenorm", "postnorm"]:
-            self._add_child("norm", cfg.norm.set(input_dim=cfg.input_dim))
-        elif cfg.structure == "hybridnorm":
-            self._add_child("prenorm", cfg.norm.set(input_dim=cfg.input_dim))
-            self._add_child("postnorm", cfg.norm.set(input_dim=cfg.input_dim))
-        elif cfg.structure == "nonorm":
-            pass
+
+        if cfg.structure == "v2":
+            if not isinstance(cfg.norm, dict):
+                raise ValueError(f"When structure=v2, cfg.norm must be a dict: {cfg.norm}")
+            for position, norm in cfg.norm.items():
+                self._add_child(position.value, norm.set(input_dim=cfg.input_dim))
         else:
-            raise NotImplementedError(cfg.structure)
+            if not isinstance(cfg.norm, InstantiableConfig):
+                raise ValueError("When structure != v2, cfg.norm must be a config.")
+            if cfg.structure in ["prenorm", "postnorm"]:
+                self._add_child("norm", cfg.norm.set(input_dim=cfg.input_dim))
+            elif cfg.structure == "hybridnorm":
+                self._add_child("prenorm", cfg.norm.set(input_dim=cfg.input_dim))
+                self._add_child("postnorm", cfg.norm.set(input_dim=cfg.input_dim))
+            elif cfg.structure == "nonorm":
+                pass
+            else:
+                raise NotImplementedError(cfg.structure)
+
         # Add dropout layers for different structures.
-        if cfg.structure in ["prenorm", "hybridnorm", "nonorm"]:
+        # Always apply two dropouts in v2 structure.
+        if cfg.structure in ["prenorm", "hybridnorm", "nonorm", "v2"]:
             self._add_child("dropout1", cfg.dropout)
             self._add_child("dropout2", cfg.dropout)
         elif cfg.structure in ["postnorm"]:
@@ -1519,44 +1537,51 @@ class TransformerFeedForwardMoE(BaseLayer):
 
     def forward(self, inputs: Tensor) -> Tensor:
         cfg = self.config
-        with jax.named_scope("feed_forward_layer"):
-            if cfg.structure == "prenorm":
-                x = self.norm(inputs)
-                with jax.named_scope("dispatch_and_combine"):
-                    x = self._dispatch_and_combine(x)
-                x = self.dropout2(x)
-                x = self.stochastic_depth(x)
-                if cfg.residual_weight != 1:
-                    x *= cfg.residual_weight
-                x += inputs
-            elif cfg.structure == "postnorm":
-                with jax.named_scope("dispatch_and_combine"):
-                    x = self._dispatch_and_combine(inputs)
-                x = self.dropout(x)
-                x = self.stochastic_depth(x)
-                if cfg.residual_weight != 1:
-                    x *= cfg.residual_weight
-                x = self.norm(x + inputs)
-            elif cfg.structure == "hybridnorm":
-                x = self.prenorm(inputs)
-                with jax.named_scope("dispatch_and_combine"):
-                    x = self._dispatch_and_combine(x)
-                x = self.postnorm(x)
-                x = self.dropout2(x)
-                x = self.stochastic_depth(x)
-                if cfg.residual_weight != 1:
-                    x *= cfg.residual_weight
-                x += inputs
-            elif cfg.structure == "nonorm":
-                x = self._dispatch_and_combine(inputs)
-                x = self.dropout2(x)
-                x = self.stochastic_depth(x)
-                # We still apply `residual_weight`, since there is usually a residual link outside of
-                # this layer.
-                if cfg.residual_weight != 1:
-                    x *= cfg.residual_weight
-            else:
-                raise NotImplementedError(cfg.structure)
+        if cfg.structure == "prenorm":
+            # (batch, seq_len, input_dim)
+            x = self.norm(inputs)
+            x = self._dispatch_and_combine(x)
+            x = self.dropout2(x)
+            x = self.stochastic_depth(x)
+            if cfg.residual_weight != 1:
+                x *= cfg.residual_weight
+            x += inputs
+        elif cfg.structure == "postnorm":
+            x = self._dispatch_and_combine(inputs)
+            x = self.dropout(x)
+            x = self.stochastic_depth(x)
+            if cfg.residual_weight != 1:
+                x *= cfg.residual_weight
+            x = self.norm(x + inputs)
+        elif cfg.structure == "hybridnorm":
+            x = self.prenorm(inputs)
+            x = self._dispatch_and_combine(x)
+            x = self.postnorm(x)
+            x = self.dropout2(x)
+            x = self.stochastic_depth(x)
+            if cfg.residual_weight != 1:
+                x *= cfg.residual_weight
+            x += inputs
+        elif cfg.structure == "nonorm":
+            x = self._dispatch_and_combine(inputs)
+            x = self.dropout2(x)
+            x = self.stochastic_depth(x)
+            # We still apply `residual_weight`, since there is usually a residual link outside of
+            # this layer.
+            if cfg.residual_weight != 1:
+                x *= cfg.residual_weight
+        elif cfg.structure == "v2":
+            x = self.in_norm(inputs) if NormPosition.IN_NORM in cfg.norm else inputs
+            x = self._dispatch_and_combine(x)
+            x = self.res_norm(x) if NormPosition.RES_NORM in cfg.norm else x
+            x = self.dropout2(x)
+            x = self.stochastic_depth(x)
+            if cfg.residual_weight != 1:
+                x *= cfg.residual_weight
+            x += inputs
+            x = self.out_norm(x) if NormPosition.OUT_NORM in cfg.norm else x
+        else:
+            raise NotImplementedError(cfg.structure)
         return x
 
     def _dispatch_and_combine_with_gather_gating(self, cfg, group_len, gating, x):
@@ -1775,9 +1800,11 @@ class TransformerFeedForwardMoE(BaseLayer):
             x = self._wi_activation(x)
             if cfg.structure in ["prenorm", "hybridnorm", "nonorm"]:
                 x = self.dropout1(x)
-            x = jnp.einsum("oegch,ehm->oegcm", x, self.parameters["wo_weight"])
+            with child_context("wo_einsum", module=self):
+                x = self.einsum_maybe_quantized(
+                    "oegch,ehm->oegcm", activation=x, kernel=self.parameters["wo_weight"]
+                )
             x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["oegcm"])
-
             x = jnp.einsum("oegcm->ogecm", x)
             x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["ogecm"])
             x = jnp.einsum("ogecm,ogsec->ogsm", x, combine_tensor)
@@ -1793,7 +1820,10 @@ class TransformerFeedForwardMoE(BaseLayer):
         if isinstance(cfg.activation, tuple):
             activations = []
             for i, activation in enumerate(cfg.activation):
-                x_i = jnp.einsum("oegcm,emh->oegch", x, self.parameters[f"wi_{i}_weight"])
+                with child_context(f"wi_{i}_einsum", module=self):
+                    x_i = self.einsum_maybe_quantized(
+                        "oegcm,emh->oegch", activation=x, kernel=self.parameters[f"wi_{i}_weight"]
+                    )
                 x_i = with_sharding_constraint(x_i, cfg.dim_to_mesh_axis_map["oegch"])
                 x_i = self._remat_name(x_i, f"linear1_{i}")
                 x_i = get_activation_fn(activation)(x_i)
@@ -1801,7 +1831,10 @@ class TransformerFeedForwardMoE(BaseLayer):
             assert len(activations) == 2, cfg.activation
             return activations[0] * activations[1]
         else:
-            x = jnp.einsum("oegcm,emh->oegch", x, self.parameters["wi_weight"])
+            with child_context("wi_einsum", module=self):
+                x = self.einsum_maybe_quantized(
+                    "oegcm,emh->oegch", activation=x, kernel=self.parameters["wi_weight"]
+                )
             x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["oegch"])
             return get_activation_fn(cfg.activation)(x)
 

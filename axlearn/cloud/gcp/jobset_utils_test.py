@@ -22,6 +22,7 @@ from axlearn.cloud.common.bastion import (
 )
 from axlearn.cloud.common.bundler import Bundler
 from axlearn.cloud.common.types import JobMetadata
+from axlearn.cloud.common.utils import define_flags, from_flags
 from axlearn.cloud.gcp import bundler, jobset_utils
 from axlearn.cloud.gcp.bundler import ArtifactRegistryBundler, CloudBuildBundler
 from axlearn.cloud.gcp.jobset_utils import (
@@ -30,6 +31,8 @@ from axlearn.cloud.gcp.jobset_utils import (
     _MEMORY_REQUEST_PERCENTAGE,
     _METADATA_GOOGLE_INTERNAL_IP,
     BASTION_JOB_VERSION_LABEL,
+    BaseReplicatedJob,
+    CompositeReplicatedJob,
     GCSFuseMount,
     HostMount,
     _LoadBalancer,
@@ -42,6 +45,7 @@ from axlearn.cloud.gcp.system_characteristics import (
 from axlearn.cloud.gcp.test_utils import mock_gcp_settings
 from axlearn.cloud.gcp.tpu import get_default_env
 from axlearn.common.compiler_options import infer_tpu_type
+from axlearn.common.config import REQUIRED, Required, config_class
 from axlearn.common.test_utils import TestCase
 
 
@@ -102,14 +106,29 @@ class TPUReplicatedJobTest(TestCase):
             self.assertIn("key1", cfg.env_vars)
             self.assertEqual(cfg.env_vars["key1"], "value1")
 
+    def test_validate_jobset_name(self):
+        with (
+            self.assertRaisesRegex(ValueError, "invalid"),
+            self._job_config(bundler_cls=ArtifactRegistryBundler) as (cfg, _),
+        ):
+            cfg.set(name="invalid_underscore_name", command="", output_dir="")
+            cfg.instantiate(bundler=mock.Mock())
+
     @parameterized.product(
         [
-            dict(env={}, reservation=None, reservation_project=None, expect_reserved=False),
+            dict(
+                env={},
+                reservation=None,
+                reservation_project=None,
+                expect_reserved=False,
+                expect_spot_selector=True,
+            ),
             dict(
                 env={"BASTION_TIER": "0"},
                 reservation=None,
                 reservation_project=None,
                 expect_reserved=False,
+                expect_spot_selector=True,
             ),
             dict(
                 env={
@@ -120,6 +139,7 @@ class TPUReplicatedJobTest(TestCase):
                 reservation="test-reservation",
                 reservation_project=None,
                 expect_reserved=True,
+                expect_spot_selector=False,
             ),
             dict(
                 env={
@@ -130,18 +150,28 @@ class TPUReplicatedJobTest(TestCase):
                 reservation="test-reservation",
                 reservation_project="test-reservation-project",
                 expect_reserved=True,
+                expect_spot_selector=False,
             ),
             dict(
                 env={"BASTION_TIER": "1", BASTION_JOB_VERSION_ENV_VAR: "2"},
                 reservation="test-reservation",
                 reservation_project=None,
                 expect_reserved=False,
+                expect_spot_selector=True,
             ),
             dict(
                 env={_BASTION_SERIALIZED_JOBSPEC_ENV_VAR: _create_serialized_job_spec(5, "user-2")},
                 reservation="test-reservation",
                 reservation_project=None,
                 expect_reserved=False,
+                expect_spot_selector=True,
+            ),
+            dict(
+                env={"BASTION_TIER": "disabled"},
+                reservation=None,
+                reservation_project=None,
+                expect_reserved=False,
+                expect_spot_selector=False,
             ),
         ],
         bundler_cls=[ArtifactRegistryBundler, CloudBuildBundler],
@@ -155,16 +185,13 @@ class TPUReplicatedJobTest(TestCase):
             None,
         ],
         priority_class=[None, "such-high-priority"],
-        additional_node_networks=[
-            None,
-            "network-1:subnet-1",
-            "network-1:subnet-1,network-2:subnet-2",
-        ],
+        additional_node_networks=[None, "network-1:subnet-1,network-2:subnet-2"],
     )
     def test_build_pod(
         self,
         bundler_cls: type[Bundler],
         expect_reserved: bool,
+        expect_spot_selector: bool,
         enable_ici_resiliency: bool,
         env: dict,
         reservation: Optional[str] = None,
@@ -178,7 +205,7 @@ class TPUReplicatedJobTest(TestCase):
         additional_node_networks: Optional[str] = None,
     ):
         with (
-            mock.patch.dict("os.environ", env),
+            mock.patch("os.environ", env),
             self._job_config(
                 bundler_cls,
                 host_mount_spec=host_mount_spec,
@@ -231,15 +258,20 @@ class TPUReplicatedJobTest(TestCase):
                 self.assertEqual([], pod_spec.get("tolerations", []))
                 self.assertEqual("reserved", labels.get("bastion-tier", None))
             else:
-                self.assertEqual("true", node_selector.get("cloud.google.com/gke-spot", None))
+                if expect_spot_selector:
+                    self.assertEqual("true", node_selector.get("cloud.google.com/gke-spot", None))
+                    self.assertEqual("spot", labels.get("bastion-tier", None))
+                    tolerations = {
+                        kv["key"]: (kv["value"], kv["effect"])
+                        for kv in pod_spec.get("tolerations", [])
+                    }
+                    self.assertEqual(
+                        ("true", "NoSchedule"), tolerations.get("cloud.google.com/gke-spot", None)
+                    )
+                else:
+                    self.assertNotIn("cloud.google.com/gke-spot", node_selector)
+                    self.assertNotIn("provisioner-nodepool-id", node_selector)
                 self.assertNotIn("cloud.google.com/reservation-name", node_selector)
-                tolerations = {
-                    kv["key"]: (kv["value"], kv["effect"]) for kv in pod_spec.get("tolerations", [])
-                }
-                self.assertEqual(
-                    ("true", "NoSchedule"), tolerations.get("cloud.google.com/gke-spot", None)
-                )
-                self.assertEqual("spot", labels.get("bastion-tier", None))
 
             self.assertEqual(len(pod_spec["containers"]), 1)
 
@@ -426,7 +458,7 @@ class TPUReplicatedJobTest(TestCase):
                 name="test",
                 command="test_command",
                 output_dir="FAKE",
-                replicated_job_name="replicatedJob",
+                job_name="replicatedJob",
             ).instantiate(bundler=bundler_cfg.instantiate())
 
             job_spec = replicated_job()[0]["template"]
@@ -473,7 +505,50 @@ class TPUReplicatedJobTest(TestCase):
         self.assertEqual(lb2.port, 443)
 
 
-class A3ReplicatedJobTest(TestCase):
+class CompositeReplicatedJobTest(TestCase):
+    def test_composite_replicated_job(self):
+        # pylint: disable=missing-class-docstring
+
+        class DummyReplicatedJob(BaseReplicatedJob):
+            @config_class
+            class Config(BaseReplicatedJob.Config):
+                command: Required[str] = REQUIRED
+
+            @classmethod
+            def define_flags(cls, fv):
+                super().define_flags(fv)
+                flags.DEFINE_string("command", None, "Command", flag_values=fv)
+
+            def __call__(self):
+                cfg: DummyReplicatedJob.Config = self.config  # pytype: disable=invalid-annotation
+                return [{"name": cfg.name, "command": cfg.command}]
+
+        cfg: CompositeReplicatedJob.Config = CompositeReplicatedJob.default_config().set(
+            inner={
+                "a": DummyReplicatedJob.default_config(),
+                "b": DummyReplicatedJob.default_config(),
+            }
+        )
+        fv = flags.FlagValues()
+        define_flags(cfg, fv)
+        for child in ("a", "b"):
+            setattr(fv, f"{child}.name", child)
+            setattr(fv, f"{child}.command", f"{child}_command")
+        from_flags(cfg, fv)
+
+        for child in ("a", "b"):
+            # pylint: disable=unsubscriptable-object
+            self.assertEqual(cfg.inner[child].name, child)
+            self.assertEqual(cfg.inner[child].command, f"{child}_command")
+
+        composite = cfg.instantiate(bundler=mock.Mock())
+        self.assertNestedEqual(
+            [{"name": "a", "command": "a_command"}, {"name": "b", "command": "b_command"}],
+            composite(),
+        )
+
+
+class A3HighReplicatedJobTest(TestCase):
     @contextlib.contextmanager
     def _job_config(
         self,
@@ -483,11 +558,13 @@ class A3ReplicatedJobTest(TestCase):
     ):
         with mock_gcp_settings([jobset_utils.__name__, bundler.__name__]):
             fv = flags.FlagValues()
-            jobset_utils.A3ReplicatedJob.define_flags(fv)
+            jobset_utils.A3HighReplicatedJob.define_flags(fv)
             fv.set_default("instance_type", "gpu-a3-highgpu-8g-256")
             fv.set_default("num_replicas", num_replicas)
             fv.mark_as_parsed()
-            cfg: jobset_utils.A3ReplicatedJob.Config = jobset_utils.A3ReplicatedJob.from_flags(fv)
+            cfg: jobset_utils.A3HighReplicatedJob.Config = (
+                jobset_utils.A3HighReplicatedJob.from_flags(fv)
+            )
             cfg.project = jobset_utils.gcp_settings("project", required=True, fv=fv)
             cfg.command = "test-command"
             cfg.env_vars = env_vars if env_vars is not None else {}
@@ -509,16 +586,21 @@ class A3ReplicatedJobTest(TestCase):
             cfg,
             bundler_cfg,
         ):
-            gke_job: jobset_utils.A3ReplicatedJob = cfg.set(name="test").instantiate(
+            gke_job: jobset_utils.A3HighReplicatedJob = cfg.set(name="test").instantiate(
                 bundler=bundler_cfg.instantiate()
             )
             # pylint: disable-next=protected-access
             pod = gke_job._build_pod()
             pod_spec = pod["spec"]
 
-            self.assertEqual(len(pod_spec["containers"]), 2)
+            self.assertEqual(len(pod_spec["containers"]), 1)
+            self.assertEqual(len(pod_spec["initContainers"]), 2)
             containers = {container["name"]: container for container in pod_spec["containers"]}
-            self.assertIn("tcpx-daemon", containers)
+            init_containers = {
+                init_container["name"]: init_container
+                for init_container in pod_spec["initContainers"]
+            }
+            self.assertIn("tcpx-daemon", init_containers)
             main_container = containers["test"]
             main_container_env = main_container["env"]
             main_container_env_vars = {env["name"]: env for env in main_container_env}
