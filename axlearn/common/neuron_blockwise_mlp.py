@@ -131,7 +131,7 @@ def _blockwise_mm_bwd(
      token_position_to_id, block_to_expert) = res
 
     T,H = hidden_states.shape
-    E, _, _, _ = gate_up_proj_weight.shape
+    E, _, _, _ = gate_up_weight.shape
 
     grad_output =  jnp.squeeze(grad_output, axis=(0,1,2))
     padding_h = jnp.zeros((1, hidden_states.shape[1]), dtype=hidden_states.dtype)
