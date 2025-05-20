@@ -193,8 +193,7 @@ class TestCaseConfig():
             with jax.default_device(devices[0]):
                 module_config.layer = module_config.cfg.instantiate(parent=None) 
                 param_specs = module_config.layer.create_parameter_specs_recursively() 
-                param_partition_specs = jax.tree.map(lambda spec: spec.sharding, param_specs) 
-                
+                param_partition_specs = jax.tree.map(lambda spec: spec.sharding, param_specs)
                 if state_to_copy:
                     module_config.state = {}
                     for key, value in state_to_copy.items():
@@ -209,7 +208,7 @@ class TestCaseConfig():
                     module_config.state = init_fn(jax.random.PRNGKey(123))
                 module_config.state = cast_floats(module_config.state, to_dtype=module_config.dtype)
                 # TODO: Currently bf16 seeing expert index mismatch with f32. Setting routing to f32.
-                if 'state_weight' in module_config.state:
+                if 'gate_weight' in module_config.state:
                     module_config.state['gate_weight'] = module_config.state['gate_weight'].astype(jnp.float32)
     
     def random_inputs_with_mesh(self): 
@@ -225,7 +224,6 @@ class TestCaseConfig():
             O = self.test.outer_batch
             S = (self.test.invoker_cfg["batch_size"] * self.test.invoker_cfg["seq_len"])//(O * G)
             self.test.input_shape = (O, G, S, E)
-
             if self.golden:
                 _, G, _, E = self.golden.input_shape
                 O = self.golden.outer_batch
@@ -268,35 +266,35 @@ class GridSpaceBuilder:
                 batch=1, seq=8, dtype=jnp.float32, 
                 block_size=4
             ),
-            create_test_config(
+            self.create_test_config(
                 input_dim=3, hidden_dim=6, 
                 n_experts=4, top_k=2, n_groups=1, capacity_factor=2,
                 mesh_spec={}, 
                 batch=1, seq=8, dtype=jnp.float32, 
                 block_size=4
             ),
-            create_test_config(
+            self.create_test_config(
                 input_dim=256, hidden_dim=512,
                 n_experts=16, top_k=2, n_groups=1, capacity_factor=2,
                 mesh_spec={}, 
                 batch=1, seq=2048, dtype=jnp.float32, 
                 block_size=256
             ),
-            create_test_config(
+            self.create_test_config(
                 input_dim=3, hidden_dim=6, n_experts=4, 
                 top_k=1, n_groups=1, capacity_factor=2, 
                 mesh_spec={}, 
                 batch=4, seq=8, dtype=jnp.float32, 
                 block_size=4
             ),
-            create_test_config(
+            self.create_test_config(
                 input_dim=3, hidden_dim=6, n_experts=4, 
                 top_k=2, n_groups=1, capacity_factor=2, 
                 mesh_spec={}, 
                 batch=4, seq=8, dtype=jnp.float32, 
                 block_size=4
             ),
-            create_test_config(
+            self.create_test_config(
                 input_dim=3, hidden_dim=6, n_experts=4, 
                 top_k=1, n_groups=1, capacity_factor=2, 
                 mesh_spec={}, 
