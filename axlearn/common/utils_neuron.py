@@ -41,8 +41,8 @@ TEST_TOLS_FP32 = {
 }
 # BF16 test tolerances
 TEST_TOLS_BF16 = {
-    "atol": 5e-2,
-    "rtol": 1e-2,
+    "atol": 5e-3,
+    "rtol": 1e-3,
 }
 
 def get_mesh_dims_from_spec(mesh_spec):
@@ -477,11 +477,11 @@ def get_gating_config(gating_cls, num_experts, top_k, train_capacity_factor, exp
     cfg.train_capacity_factor = train_capacity_factor
     cfg.expert_capacity = expert_capacity
     cfg.num_experts = num_experts
-    if block_size is not None and isinstance(cfg, TopKGatingGatherBlockwise):
+    if block_size is not None and isinstance(cfg, TopKGatingGatherBlockwise.Config):
         cfg.block_size = block_size
     return cfg
 
-def create_test_config(test, golden, test_device, golden_device, input_dim, hidden_dim, n_experts, top_k, n_groups, capacity_factor, mesh_spec, batch, seq, dtype, block_size=4, layer='moe'):
+def create_test_config(test, golden, test_device, golden_device, input_dim, hidden_dim, n_experts, top_k, n_groups, capacity_factor, mesh_spec, batch, seq, dtype, block_size=512, layer='moe'):
     """
     Ensure any new param added here also shows up in the name to prevent multiple tests from having same name.
     You will see an exception calling that out if it happens.

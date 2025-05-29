@@ -20,7 +20,7 @@ import jax.numpy as jnp
 from jax_neuronx.experimental import debug_callback
 
 from absl.testing import absltest, parameterized
-from axlearn.common.mixture_of_experts import TopKGatingGather, TopKGating, TopKGatingGatherBlockwise
+from axlearn.common.mixture_of_experts import TopKGatingGather, TopKGating, TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2
 from axlearn.common.module import functional as F
 from axlearn.common.test_utils import TestCase
 from axlearn.common.utils_neuron import TestCaseConfig, create_test_config, get_training_configs
@@ -62,7 +62,8 @@ class LayerTestCase(TestCase):
 
             if cfg.conv_output != None:
                 test_output = cfg.conv_output(test_output)
-
+            # print('test_output', jax.device_get(test_output))
+            # print('golden_output', jax.device_get(golden_output))
             # Transfer results to CPU before comparison
             self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output),
                                     atol=cfg.test.atol, rtol=cfg.test.rtol)
@@ -107,13 +108,14 @@ class LayerTestCase(TestCase):
                     golden_loss = jax.tree_map(jax.device_get, golden_loss)
                     golden_grads = jax.tree_map(jax.device_get, golden_grads)
                     golden_output = jax.tree_map(jax.device_get, golden_output)
-                
+
+            # print('test_loss', test_loss, 'golden_loss', golden_loss)
             # Compare losses
             self.assertNestedAllClose(test_loss, golden_loss, atol=cfg.test.atol, rtol=cfg.test.rtol)
-            
+            # print('test_grads', test_grads, 'golden_grads', golden_grads)
             # Compare gradients
             self.assertNestedAllClose(test_grads, golden_grads, atol=cfg.test.atol, rtol=cfg.test.rtol)
-            
+            # print('test_output', test_output, 'golden_output', golden_output)
             # Compare outputs
             self.assertNestedAllClose(test_output, golden_output, atol=cfg.test.atol, rtol=cfg.test.rtol)
 
@@ -149,34 +151,13 @@ class GatingTestCase(TestCase):
 
         if cfg.conv_output != None:
             test_output = cfg.conv_output(test_output)
-        
         # Transfer results to CPU before comparison
         self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output),
                                   atol=cfg.test.atol, rtol=cfg.test.rtol)
 
-    def helper_blockwise_gating(self, cfg):
-        cfg.instantiate()
-        cfg.print_summary()
-        assert cfg.golden is None, "This test doesn't use golden "
-        @partial(jax.jit, static_argnums=0)
-        def test_fwd_call(test_layer, test_state, test_inputs):
-            return self._fwd_call(test_layer, test_state, test_inputs)
-        with cfg.test.mesh:
-            test_output = test_fwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
-        
-
-        test_output = jax.device_get(test_output)
-        outputs = test_output[0]
-        
-        token_position_to_id, expert_affinities_masked = outputs.combine_tensor
-        _,_, S, _ = expert_affinities_masked.shape
-
-        num_blocks = S * cfg.test.cfg.train_capacity_factor / cfg.test.cfg.block_size
-        num_blocks_per_expert = num_blocks / cfg.test.cfg.num_experts
-        
+    def validate_block_to_expert(self, block_to_expert, cfg, num_blocks_per_expert):
         # Validating block_to_expert tensor
         # (O, G, N)
-        block_to_expert = outputs.dispatch_tensor
         O, G, N = block_to_expert.shape
         assert N == num_blocks
         for o in range(O):
@@ -191,18 +172,17 @@ class GatingTestCase(TestCase):
                 for expert_id, num_blocks in num_blocks_for_expert.items():
                     assert num_blocks == num_blocks_per_expert, f"Expert {expert_id} has {num_blocks} blocks, expected {num_blocks_per_expert}"
 
+    def validate_token_position_to_id(self, O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id):
         # Validating token_position_to_id (O, G, N*B)
-        token_position_to_id = token_position_to_id.reshape(O, G, N, cfg.test.cfg.block_size)
+        token_position_to_id = token_position_to_id.reshape(O, G, N, block_size)
         in_range = np.where(((token_position_to_id >=0) & (token_position_to_id<=S)), True, False)
         all_in_range = jnp.all(in_range)
-        # print(in_range)
-        print('allinrange', all_in_range)
         for o in range(O):
             for g in range(G):
                 for n in range(N):
                     bid = n
                     expert_id = block_to_expert[o, g, n]
-                    for b in range(cfg.test.cfg.block_size):
+                    for b in range(block_size):
                         # current block's id:
                         token_id_in_seq = token_position_to_id[o, g, n, b]
                         if token_id_in_seq == S:
@@ -214,9 +194,82 @@ class GatingTestCase(TestCase):
                             assert expert_affinities_masked[o, g, token_id_in_seq, expert_id] > 0
                         # must be in range [0, S]
         assert all_in_range, f"token_position_to_id out of range: {token_position_to_id}, {in_range}"
+
+    def validate_expert_affinties(self, expert_affinities_masked, cfg):
         # assert that max of top k in each row of expert_affinities_masked
         # O, G, S, E
         assert np.all(np.count_nonzero(expert_affinities_masked, axis=3) <= cfg.test.cfg.top_k)
+
+    def helper_blockwise_gating(self, cfg):
+        cfg.instantiate()
+        cfg.print_summary()
+        assert cfg.golden is None, "This test doesn't use golden "
+        @partial(jax.jit, static_argnums=0)
+        def test_fwd_call(test_layer, test_state, test_inputs):
+            return self._fwd_call(test_layer, test_state, test_inputs)
+        with cfg.test.mesh:
+            test_output = test_fwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+
+        test_output = jax.device_get(test_output)
+        outputs = test_output[0]
+        token_position_to_id, expert_affinities_masked = outputs.combine_tensor
+        _,_, S, E = expert_affinities_masked.shape
+        expert_capacity = int(S * cfg.test.cfg.train_capacity_factor / E)
+        if isinstance(cfg.test.cfg, TopKGatingGatherBlockwise.Config):
+            block_size = cfg.test.cfg.block_size
+        else:
+            block_size = expert_capacity
+        num_blocks = math.ceil(expert_capacity / block_size) * E
+        num_blocks_per_expert = num_blocks / E
+
+        block_to_expert = outputs.dispatch_tensor
+        O, G, N = block_to_expert.shape
+        self.validate_block_to_expert(block_to_expert, cfg, num_blocks_per_expert)
+        self.validate_token_position_to_id(O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
+        self.validate_expert_affinties(expert_affinities_masked, cfg)
+
+    def helper_blockwise_gating_v2(self, cfg):
+        cfg.instantiate()
+        cfg.print_summary()
+        @partial(jax.jit, static_argnums=0)
+        def test_fwd_call(test_layer, test_state, test_inputs):
+            return self._fwd_call(test_layer, test_state, test_inputs)
+        with cfg.test.mesh:
+            test_output = test_fwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+        with cfg.golden.mesh:
+            golden_output = test_fwd_call(cfg.golden.layer, cfg.golden.state, cfg.golden.inputs)
+        test_output = jax.device_get(test_output)
+        golden_output = jax.device_get(golden_output)
+        outputs = test_output[0]
+        golden_outputs = golden_output[0]
+
+        token_position_to_id, expert_affinities_masked = outputs.combine_tensor
+        g_token_position_to_id, g_expert_affinities_masked = golden_outputs.combine_tensor
+        block_to_expert = outputs.dispatch_tensor
+
+        self.assertNestedAllClose(
+            expert_affinities_masked,
+            g_expert_affinities_masked,
+            atol=cfg.test.atol, rtol=cfg.test.rtol)
+        self.assertNestedAllClose(
+            token_position_to_id,
+            g_token_position_to_id,
+            atol=cfg.test.atol, rtol=cfg.test.rtol)
+
+        _,_, S, E = expert_affinities_masked.shape
+        expert_capacity = int(S * cfg.test.cfg.train_capacity_factor / E)
+
+        if isinstance(cfg.test.cfg, TopKGatingGatherBlockwise.Config):
+            block_size = cfg.test.cfg.block_size
+        else:
+            block_size = expert_capacity
+        num_blocks = math.ceil(expert_capacity / block_size) * E
+        num_blocks_per_expert = num_blocks / E
+
+        O, G, N = block_to_expert.shape
+        self.validate_block_to_expert(block_to_expert, cfg, num_blocks_per_expert)
+        self.validate_token_position_to_id(O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
+        self.validate_expert_affinties(expert_affinities_masked, cfg)
 
 class TestGatingOnCpu(GatingTestCase):
     def __init__(self, *args, **kwargs):
@@ -227,9 +280,14 @@ class TestGatingOnCpu(GatingTestCase):
     def test_fwd_gather_vs_einsum(self, cfg):
         self.helper_fwd(cfg)
 
-    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, layer='gating', test=TopKGatingGatherBlockwise, golden=None, test_device="neuron"))
-    def test_fwd_blockwisegather_vs_einsum(self, cfg):
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, layer='gating', test=TopKGatingGatherBlockwise, golden=None, test_device="cpu"))
+    def test_fwd_blockwisegather(self, cfg):
         self.helper_blockwise_gating(cfg)
+
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, layer='gating', test=TopKGatingGatherBlockwiseV2, golden=TopKGatingGatherBlockwise, test_device="cpu", golden_device="cpu"))
+    def test_fwd_blockwisev2(self, cfg):
+        self.helper_blockwise_gating_v2(cfg)
+
     
 # pylint: disable=no-self-use,protected-access
 class TestLayerOnCpu(LayerTestCase):
@@ -242,12 +300,21 @@ class TestLayerOnCpu(LayerTestCase):
     def test_fwd_blockwisegather_vs_gather(self, cfg: TestCaseConfig):
         self.helper_fwd(cfg)
 
+    @unittest.skip("test fwd skipped as fwd is part of fwd+bwd test")
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="cpu", golden_device="cpu"))
+    def test_fwd_blockwisev2_vs_einsum(self, cfg: TestCaseConfig):
+        self.helper_fwd(cfg)
+
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGather, golden=TopKGating, test_device="cpu", golden_device="cpu"))
     def test_fwdbwd_gather_vs_einsum(self, cfg: TestCaseConfig):
         self.helper_bwd(cfg)
 
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="cpu", golden_device="cpu"))
     def test_fwdbwd_blockwisegather_vs_einsum(self, cfg: TestCaseConfig):
+        self.helper_bwd(cfg)
+
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="cpu", golden_device="cpu"))
+    def test_fwdbwd_blockwisev2_vs_einsum(self, cfg: TestCaseConfig):
         self.helper_bwd(cfg)
 
 class TestLayerOnTrn(LayerTestCase):
@@ -257,16 +324,24 @@ class TestLayerOnTrn(LayerTestCase):
     
     @unittest.skip("test fwd skipped as fwd is part of fwd+bwd test")
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
-    def test_fwd_blockwisegather_vs_gather(self, cfg):
+    def test_fwd_blockwisegather_vs_einsum(self, cfg):
         self.helper_fwd(cfg)
     
-    @unittest.skip("skip gather")
+    @unittest.skip("test fwd skipped as fwd is part of fwd+bwd test")
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+    def test_fwd_blockwisegatherv2_vs_einsum(self, cfg):
+        self.helper_fwd(cfg)
+    
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGather, golden=TopKGating, test_device="neuron", golden_device="cpu"))
     def test_fwdbwd_gather_vs_einsum(self, cfg: TestCaseConfig):
         self.helper_bwd(cfg)
 
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
     def test_fwdbwd_blockwisegather_vs_einsum(self, cfg: TestCaseConfig):
+        self.helper_bwd(cfg)
+
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+    def test_fwdbwd_blockwisev2_vs_einsum(self, cfg: TestCaseConfig):
         self.helper_bwd(cfg)
 
 class TestDev150bUnit(LayerTestCase):
@@ -288,11 +363,15 @@ class TestDev150bUnit(LayerTestCase):
             seq=8192,
             dtype=jnp.bfloat16,
         )[1]
-    
+
     def test_fwd_blockwise_vs_einsum(self):
         jax.config.update('jax_platform_name', 'cpu')
         self.helper_fwd(self.create_cfg(test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="cpu", golden_device="cpu"))
     
+    def test_fwd_blockwisev2_vs_einsum(self):
+        jax.config.update('jax_platform_name', 'cpu')
+        self.helper_fwd(self.create_cfg(test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="cpu", golden_device="cpu"))
+
     @unittest.skip("skip gather")
     def test_fwd_gather_vs_einsum(self):
         jax.config.update('jax_platform_name', 'cpu')
@@ -301,6 +380,10 @@ class TestDev150bUnit(LayerTestCase):
     def test_fwdbwd_blockwise_vs_einsum(self):
         jax.config.update('jax_platform_name', 'cpu')
         self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="cpu", golden_device="cpu"))
+
+    def test_fwdbwd_blockwisev2_vs_einsum(self):
+        jax.config.update('jax_platform_name', 'cpu')
+        self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="cpu", golden_device="cpu"))
     
     @unittest.skip("skip gather")
     def test_fwdbwd_gather_vs_einsum(self):
@@ -312,6 +395,10 @@ class TestDev150bInteg(TestDev150bUnit):
         jax.config.update('jax_platform_name', 'neuron')
         self.helper_fwd(self.create_cfg(test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
     
+    def test_fwd_blockwisev2_vs_einsum(self):
+        jax.config.update('jax_platform_name', 'neuron')
+        self.helper_fwd(self.create_cfg(test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+    
     @unittest.skip("skip gather")
     def test_fwd_gather_vs_einsum(self):
         jax.config.update('jax_platform_name', 'neuron')
@@ -320,6 +407,10 @@ class TestDev150bInteg(TestDev150bUnit):
     def test_fwdbwd_blockwise_vs_einsum(self):
         jax.config.update('jax_platform_name', 'neuron')
         self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+
+    def test_fwdbwd_blockwisev2_vs_einsum(self):
+        jax.config.update('jax_platform_name', 'neuron')
+        self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
     
     @unittest.skip("skip gather")
     def test_fwdbwd_gather_vs_einsum(self):
@@ -354,6 +445,14 @@ class TestDev150bGating(GatingTestCase):
         jax.config.update('jax_platform_name', 'neuron')
         self.helper_blockwise_gating(self.create_cfg(test=TopKGatingGatherBlockwise, golden=None, test_device="neuron", layer="gating"))
     
+    def test_unit_fwd_blockwisev2(self):
+        jax.config.update('jax_platform_name', 'cpu')
+        self.helper_blockwise_gating(self.create_cfg(test=TopKGatingGatherBlockwiseV2, golden=None, test_device="cpu", layer="gating"))
+
+    def test_integ_fwd_blockwisev2(self):
+        jax.config.update('jax_platform_name', 'neuron')
+        self.helper_blockwise_gating(self.create_cfg(test=TopKGatingGatherBlockwiseV2, golden=None, test_device="neuron", layer="gating"))
+
     @unittest.skip("skip gather")
     def test_unit_fwd_gather(self):
         jax.config.update('jax_platform_name', 'cpu')
