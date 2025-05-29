@@ -231,11 +231,10 @@ def blockwise_mm_per_group_native(hidden_states, expert_affinities_masked, gate_
         down_activation = jnp.einsum("ch,hm->cm", gate_up_activation, down_proj_weights[expert_idx])
         scale = down_activation * local_expert_affinities
         output_jax = output_jax.at[local_token_position_to_id].add(scale.astype(output_jax.dtype))
-        return output_jax, gate_up_activations_T, down_activations
+        return output_jax
 
     init_carry = output_jax
-    output_jax, gate_up_activations_T, down_activations = lax.fori_loop(
-        0, N, body_fun, init_carry)
+    output_jax = lax.fori_loop(0, N, body_fun, init_carry)
     return output_jax[None, None, None, :-1, :]
 
 
