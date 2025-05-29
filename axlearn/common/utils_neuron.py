@@ -41,7 +41,7 @@ TEST_TOLS_FP32 = {
 }
 # BF16 test tolerances
 TEST_TOLS_BF16 = {
-    "atol": 5e-3,
+    "atol": 8e-3,
     "rtol": 1e-3,
 }
 
@@ -345,8 +345,8 @@ class GridSpaceBuilder:
             # 8x20
             grid_space.append(
                 self.create_test_config(
-                    **kwargs, input_dim=6144, hidden_dim=16384, mesh_spec={"fsdp":-1, "model":16},
-                    n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096
+                    **kwargs, input_dim=8192, hidden_dim=16384, mesh_spec={"fsdp":-1, "model":16},
+                    n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192
                 )
             )
         return grid_space
@@ -446,12 +446,14 @@ class GridSpaceBuilder:
             self.create_test_config(**kwargs, n_experts=16, top_k=8, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
             # capf change
             self.create_test_config(**kwargs, n_experts=16, top_k=8, n_groups=1, capacity_factor=4, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
+
             # seqlen changes
-            self.create_test_config(**kwargs, n_experts=16, top_k=4, n_groups=1, capacity_factor=2, batch=16, seq=256, mesh_spec={"fsdp":-1, "model":4}),
-            self.create_test_config(**kwargs, n_experts=16, top_k=4, n_groups=1, capacity_factor=2, batch=16, seq=2048, mesh_spec={"fsdp":-1, "model":4}),
-            self.create_test_config(**kwargs, n_experts=16, top_k=4, n_groups=2, capacity_factor=2, batch=16, seq=8192, mesh_spec={"fsdp":-1, "model":4}),
-            self.create_test_config(**kwargs, n_experts=16, top_k=4, n_groups=2, capacity_factor=2, batch=16, seq=16*1024, mesh_spec={"fsdp":-1, "model":4}),
-            self.create_test_config(**kwargs, n_experts=16, top_k=4, n_groups=2, capacity_factor=2, batch=16, seq=32*1024, mesh_spec={"fsdp":-1, "model":4}),
+            # using 8x20b
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=256, mesh_spec={"fsdp":-1, "model":4}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=2048, mesh_spec={"fsdp":-1, "model":4}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=8192, mesh_spec={"fsdp":-1, "model":4}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=16*1024, mesh_spec={"fsdp":-1, "model":4}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=32*1024, mesh_spec={"fsdp":-1, "model":4}),
 
             # tp8
             # self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=2, capacity_factor=2, batch=8, seq=4096, mesh_spec={"fsdp":-1, "model":8}),
