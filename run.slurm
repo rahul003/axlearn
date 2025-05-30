@@ -16,7 +16,7 @@ export VENV_NAME=jaxmoe
 # Set to use repeated, make sure to use /fsx/huilgolr/may-artifacts/repeated/libneuronxla-2.2.20250521+7e624b6.dev-py3-none-linux_x86_64
 # export AXLEARN_REPEATED=1
 
-# When not using repeated, latest pjrt is /fsx/huilgolr/may-artifacts/stacked/libneuronxla-2.2.20250522+e95a622.dev-py3-none-linux_x86_64.whl
+# When not using repeated, latest pjrt is /fsx/csavsrin/artifacts_kernel_csavsrin/test_remat/libneuronxla-2.2.20250530+c4f06ac.dev-py3-none-linux_x86_64.whl
 
 # Setting below two flags profiles on 3rd step and exits
 # export AXLEARN_PROFILE_MODE="tracerun"
