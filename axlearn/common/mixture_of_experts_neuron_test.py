@@ -155,7 +155,7 @@ class GatingTestCase(TestCase):
         self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output),
                                   atol=cfg.test.atol, rtol=cfg.test.rtol)
 
-    def validate_block_to_expert(self, block_to_expert, cfg, num_blocks_per_expert):
+    def validate_block_to_expert(self, block_to_expert, cfg, num_blocks, num_blocks_per_expert):
         # Validating block_to_expert tensor
         # (O, G, N)
         O, G, N = block_to_expert.shape
@@ -224,7 +224,7 @@ class GatingTestCase(TestCase):
 
         block_to_expert = outputs.dispatch_tensor
         O, G, N = block_to_expert.shape
-        self.validate_block_to_expert(block_to_expert, cfg, num_blocks_per_expert)
+        self.validate_block_to_expert(block_to_expert, cfg, num_blocks, num_blocks_per_expert)
         self.validate_token_position_to_id(O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
         self.validate_expert_affinties(expert_affinities_masked, cfg)
 
@@ -267,7 +267,7 @@ class GatingTestCase(TestCase):
         num_blocks_per_expert = num_blocks / E
 
         O, G, N = block_to_expert.shape
-        self.validate_block_to_expert(block_to_expert, cfg, num_blocks_per_expert)
+        self.validate_block_to_expert(block_to_expert, cfg, num_blocks, num_blocks_per_expert)
         self.validate_token_position_to_id(O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
         self.validate_expert_affinties(expert_affinities_masked, cfg)
 
@@ -361,12 +361,12 @@ class TestDev150bUnit(LayerTestCase):
             golden=golden,
             test_device=self.test_device,
             golden_device=self.golden_device,
-            input_dim=6144,
-            hidden_dim=15360,
-            n_experts=16,
+            input_dim=8192,
+            hidden_dim=16384,
+            n_experts=8,
             n_groups=1,
-            top_k=4,
-            capacity_factor=4,
+            top_k=2,
+            capacity_factor=2,
             mesh_spec={"fsdp": -1, "model": 16},
             batch=8,
             seq=8192,
@@ -404,7 +404,6 @@ class TestDev150bInteg(TestDev150bUnit):
     def test_fwd_blockwise_vs_einsum(self):
         self.helper_fwd(self.create_cfg(test=TopKGatingGatherBlockwise))
 
-    @unittest.skip("skip for now, needs kernel changes")
     def test_fwd_blockwisev2_vs_einsum(self):
         self.helper_fwd(self.create_cfg(test=TopKGatingGatherBlockwiseV2))
     
@@ -415,7 +414,6 @@ class TestDev150bInteg(TestDev150bUnit):
     def test_fwdbwd_blockwise_vs_einsum(self):
         self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwise))
 
-    @unittest.skip("skip for now, needs kernel changes")
     def test_fwdbwd_blockwisev2_vs_einsum(self):
         self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwiseV2))
     
@@ -431,12 +429,12 @@ class TestDev150bGating(GatingTestCase):
             golden=golden,
             golden_device=golden_device,
             test_device=test_device,
-            input_dim=6144,
-            hidden_dim=15360,
-            n_experts=16,
+            input_dim=8192,
+            hidden_dim=16384,
+            n_experts=8,
             n_groups=1,
-            top_k=4,
-            capacity_factor=4,
+            top_k=2,
+            capacity_factor=2,
             mesh_spec={"fsdp": -1, "model": 16},
             batch=8,
             seq=8192,

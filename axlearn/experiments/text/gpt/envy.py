@@ -50,7 +50,7 @@ from axlearn.common.attention import (
 from axlearn.common.base_layer import RematSpec
 from axlearn.common.embedding import TransformerTextEmbeddings
 from axlearn.common.layers import RMSNorm
-from axlearn.common.mixture_of_experts import TransformerFeedForwardMoE, get_outer_batch_from_mesh, TopKGatingGather, TopKGatingGatherBlockwise
+from axlearn.common.mixture_of_experts import TransformerFeedForwardMoE, get_outer_batch_from_mesh, TopKGatingGather, TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2
 from axlearn.common.trainer import SpmdTrainer
 from axlearn.common.trainer_config_modifier import (
     ChainConfigModifier,
@@ -772,7 +772,7 @@ def model_config(
             MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, mesh_shape
         )
 
-    gating_type = TopKGatingGatherBlockwise if int(os.getenv('AXLEARN_USE_BLOCKWISE', 1)) == 1 else TopKGatingGather
+    gating_type = TopKGatingGatherBlockwiseV2 if int(os.getenv('AXLEARN_USE_BLOCKWISE', 1)) == 1 else TopKGatingGather
     expert_config = TransformerFeedForwardMoE.default_config().set(
         outer_batch=outer_batch_size,
         num_experts=num_experts,
