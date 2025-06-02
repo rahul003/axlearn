@@ -67,6 +67,10 @@ from axlearn.experiments.text.gpt.common import model_config as common_model_con
 from axlearn.experiments.text.gpt.common import scaled_hidden_dim
 from axlearn.experiments.trainer_config_utils import TrainerConfigFn, V6eFlashConfigModifier
 
+import re
+import os
+from absl import logging
+
 MODEL_SIZES = ("test", "1B", "3B", "7B", "8B", "70B")
 
 
@@ -106,12 +110,16 @@ ROPE_THETA = {
 TOTAL_TOKENS = {
     Version.V1: {
         "test": 1 * (1024**4),  # 1T tokens
+        "1B": 1 * (1024**4),  # 1T tokens
         "7B": 1 * (1024**4),  # 1T tokens
         "70B": int(1.4 * (1024**4)),  # 1.4T tokens
     },
     Version.V2: {
         "test": 2 * (1024**4),  # 2T tokens
+        "1B": 2 * (1024**4),  # 2T tokens
+        "3B": 2 * (1024**4),  # 2T tokens
         "7B": 2 * (1024**4),  # 2T tokens
+        "8B": 2 * (1024**4),  # 2T tokens
         "70B": 2 * (1024**4),  # 2T tokens
     },
     Version.V3: {
@@ -119,6 +127,7 @@ TOTAL_TOKENS = {
         "1B": 15 * (1024**4),  # 15T tokens
         "3B": 15 * (1024**4),  # 15T tokens
         "7B": 15 * (1024**4),  # 15T tokens
+        "8B": 15 * (1024**4),  # 15T tokens
         "70B": 15 * (1024**4),  # 15T tokens
     },
     Version.V3_TIKTOKEN: {
@@ -139,6 +148,61 @@ TOKENS_PER_BATCH = {
     Version.V3_TIKTOKEN: 16 * (1024**2),
 }
 
+ 
+def contains_70B(string):
+    pattern = r'70B'
+    if re.search(pattern, string):
+        return True
+    else:
+        return False
+
+def check_env_vars():
+    required_vars = ["PIPELINE", "DATA", "EXPERT", "FSDP", "SEQ", "MODEL", "N_LAYERS", "TRAIN_GBS",
+        "OPTIMIZER_LR_EXP", "OPTIMIZER_LR_BASE", "OPTIMIZER_WD", "SAVE_EVERY_N_STEPS", "EVAL_EVERY_N_STEPS"]
+    missing_vars = [var for var in required_vars if os.getenv(var) is None]
+    if missing_vars:
+        raise EnvironmentError(f"The following environment variables are expected but not found: {', '.join(missing_vars)}")
+
+def get_mesh_shape_from_axes():
+    PIPELINE = int(os.getenv("PIPELINE", 1))
+    DATA = int(os.getenv("DATA", 1))
+    EXPERT = int(os.getenv("EXPERT", 1))
+    FSDP = int(os.getenv("FSDP", 1))
+    SEQ = int(os.getenv("SEQ", 1))
+    MODEL = int(os.getenv("MODEL", 1))
+    return mesh_shape_from_axes(pipeline=PIPELINE, data=DATA, expert=EXPERT, fsdp=FSDP, seq=SEQ, model=MODEL)
+
+def callback_modify_trainer_kwargs_env_vars(trainer_kwargs):
+    """
+    Update trainer_kwargs based on environment variables.
+
+    Args:
+        trainer_kwargs (dict): Trainer configuration to modify.
+
+    Returns:
+        dict: Updated trainer_kwargs.
+    """
+
+    if N_LAYERS := os.getenv("N_LAYERS"):
+        trainer_kwargs["model_kwargs"]["num_layers"] = int(N_LAYERS)
+    if TRAIN_GBS := os.getenv("TRAIN_GBS"):
+        trainer_kwargs["train_batch_size"] = int(TRAIN_GBS)
+    if EVAL_GBS := os.getenv("EVAL_GBS"):
+        trainer_kwargs["eval_batch_size"] = int(EVAL_GBS)
+
+    if all(os.getenv(var) for var in ["OPTIMIZER_LR_BASE", "OPTIMIZER_LR_EXP"]):
+        lr_exp = int(os.getenv("OPTIMIZER_LR_EXP"))
+        opt_lr = float(os.getenv("OPTIMIZER_LR_BASE")) * (10 ** lr_exp)
+        trainer_kwargs["learner_kwargs"]["peak_lr"] = opt_lr
+    if OPTIMIZER_WD := os.getenv("OPTIMIZER_WD"):
+        trainer_kwargs["learner_kwargs"]["weight_decay"] = float(OPTIMIZER_WD)
+
+    if SAVE_EVERY_N_STEPS := os.getenv("SAVE_EVERY_N_STEPS"):
+        trainer_kwargs["save_every_n_steps"] = int(SAVE_EVERY_N_STEPS)
+    if EVAL_EVERY_N_STEPS := os.getenv("EVAL_EVERY_N_STEPS"):
+        trainer_kwargs["eval_every_n_steps"] = int(EVAL_EVERY_N_STEPS)
+
+    return trainer_kwargs
 
 class _Trn2CustomConfig(NamedTuple):
     """Config modifications required to run Fuji models on TRN2."""
@@ -272,6 +336,7 @@ def get_trainer_kwargs(
     )
     # dict() is more readable here.
     # pylint: disable=use-dict-literal
+    check_env_vars()
     if model_size == "test":
         trainer_kwargs = dict(
             model_kwargs=dict(
@@ -292,7 +357,7 @@ def get_trainer_kwargs(
             max_step=3000,
             eval_every_n_steps=1500,
             save_every_n_steps=500,
-            mesh_shape=mesh_shape_from_axes(data=-1),
+            mesh_shape=get_mesh_shape_from_axes(),
         )
     elif model_size == "1B":
         trainer_kwargs = dict(
@@ -310,7 +375,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=get_mesh_shape_from_axes(),
             mesh_rules=(
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",
@@ -319,10 +384,13 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=get_mesh_shape_from_axes(),
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
+                            *(GradientAccumulationModifier.default_config().set(
+                                grad_acc_steps=int(GRAD_ACCUM),
+                            ) for GRAD_ACCUM in [os.getenv("GRAD_ACCUM")] if GRAD_ACCUM),
                         ],
                     ),
                 ),
@@ -344,7 +412,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=get_mesh_shape_from_axes(),
             mesh_rules=(
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",
@@ -353,13 +421,13 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=get_mesh_shape_from_axes(),
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
-                            GradientAccumulationModifier.default_config().set(
-                                grad_acc_steps=4,
-                            ),
+                            *(GradientAccumulationModifier.default_config().set(
+                                grad_acc_steps=int(GRAD_ACCUM),
+                            ) for GRAD_ACCUM in [os.getenv("GRAD_ACCUM")] if GRAD_ACCUM),
                         ],
                     ),
                 ),
@@ -380,7 +448,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=get_mesh_shape_from_axes(),
             mesh_rules=(
                 # Step time:
                 # v1 on tpu-v4-1024 (512 chips):            3.03s
@@ -528,10 +596,13 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=get_mesh_shape_from_axes(),
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
+                            *(GradientAccumulationModifier.default_config().set(
+                                grad_acc_steps=int(GRAD_ACCUM),
+                            ) for GRAD_ACCUM in [os.getenv("GRAD_ACCUM")] if GRAD_ACCUM),
                         ],
                     ),
                 ),
@@ -553,7 +624,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=get_mesh_shape_from_axes(),
             mesh_rules=(
                 ("tpu-v4-(1024|2048)", mesh_shape_from_axes(data=-1, fsdp=16)),
                 (
@@ -623,10 +694,13 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=get_mesh_shape_from_axes(),
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
+                            *(GradientAccumulationModifier.default_config().set(
+                                grad_acc_steps=int(GRAD_ACCUM),
+                            ) for GRAD_ACCUM in [os.getenv("GRAD_ACCUM")] if GRAD_ACCUM),
                         ],
                     ),
                 ),
@@ -650,7 +724,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(fsdp=-1),
+            mesh_shape=get_mesh_shape_from_axes(),
             mesh_rules=(
                 # TPU V5e maximum per device batch is 1.
                 # with all activation offloading, HBM usage: 14.6GB/chip.
@@ -780,7 +854,7 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=get_mesh_shape_from_axes(),
                             ),
                             RematSpecModifier.default_config().set(
                                 remat_policies={
@@ -805,6 +879,9 @@ def get_trainer_kwargs(
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
+                            *(GradientAccumulationModifier.default_config().set(
+                                grad_acc_steps=int(GRAD_ACCUM),
+                            ) for GRAD_ACCUM in [os.getenv("GRAD_ACCUM")] if GRAD_ACCUM),
                         ],
                     ),
                 ),
@@ -812,6 +889,7 @@ def get_trainer_kwargs(
         )
     else:
         raise NotImplementedError(f"Unknown model size {model_size}.")
+    callback_modify_trainer_kwargs_env_vars(trainer_kwargs)
     model_kwargs = trainer_kwargs.pop("model_kwargs")
     model_kwargs.setdefault("vocab_size", vocab_size)
     if version == Version.V3_TIKTOKEN:  # tiktoken tokenizer
