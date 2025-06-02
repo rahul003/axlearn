@@ -11,9 +11,9 @@ import re
 import tempfile
 from collections import OrderedDict, defaultdict
 from collections.abc import Iterator, Sequence
-from functools import partial
+from functools import partial, wraps
 from tempfile import mkdtemp
-from typing import Any, Optional, Protocol, TypeVar, Union
+from typing import Any, NamedTuple, Optional, Protocol, TypeVar, Union
 from unittest.mock import patch
 
 import jax
@@ -70,6 +70,9 @@ _PYTEST_OPT_REGISTERED = {}
 def assert_allclose(actual, desired, atol=1e-6, rtol=1e-3, err_msg=""):
     actual = jnp.asarray(actual).astype(np.float32)
     desired = jnp.asarray(desired).astype(np.float32)
+    # temp workaround for seg-fault
+    actual = np.asarray(actual)
+    desired = np.asarray(desired) 
     # Checks if 'actual' and 'desired' are within (atol + rtol * abs(desired)).
     diff: np.ndarray = np.abs(actual - desired)
     if diff.size > 0:
@@ -133,6 +136,11 @@ def clean_hlo(hlo: str) -> str:
 class ParameterConversionFn(Protocol):
     def __call__(self, src: Any, *, dst_layer: BaseLayer) -> NestedTensor:
         """Converts parameters from `src` to parameters for `dst_layer`."""
+
+
+class Tolerance(NamedTuple):
+    rtol: float = 0.001
+    atol: float = 0.001
 
 
 class TestCase(parameterized.TestCase):
@@ -248,6 +256,45 @@ class TestCase(parameterized.TestCase):
             np.testing.assert_array_equal(a_value, b_value, err_msg=k)
             if hasattr(a_value, "dtype"):
                 self.assertEqual(a_value.dtype, b_value.dtype)
+
+    def assertAllCloseWithOutliers(self, actual, desired, *, tolerance_map: dict[float, Tolerance]):
+        """Like np.testing.assert_allclose, but allows outlier percentiles to be specified.
+
+        `tolerance_map` is mapping of percentile values (between 0 and 1) to `Tolerance` objects.
+        Each entry defines the acceptable tolerance for a certain percentile of elements in the
+        difference `abs(actual - desired)`. The specified tolerance should be met within the given
+        percentile of total elements in `actual` or `desired`.
+
+        Example:
+        ```python
+        self.assertAllCloseWithOutliers(x, y, tolerance_map={
+            1.0: Tolerance(atol=0.2),
+            0.95: Tolerance(atol=0.05),
+        })
+        ```
+        This example asserts 100% elements of `abs(x - y)` should be within atol=0.2, and 95%
+        elements of `abs(x - y)` should be within atol=0.05.
+        """
+        assert len(tolerance_map) > 0
+        self.assertEqual(actual.shape, desired.shape)
+        self.assertEqual(actual.dtype, desired.dtype)
+        actual = actual.astype(np.float32)
+        desired = desired.astype(np.float32)
+        diff = np.abs(actual - desired)
+        for percentile, tol in tolerance_map.items():
+            percentile = 1 - percentile
+            tolerance = tol.atol + tol.rtol * np.abs(desired)
+            expected_num_ele = round(diff.size * percentile)
+            actual_num_ele = np.count_nonzero(diff > tolerance)
+            actual_percent = actual_num_ele / diff.size
+            self.assertLessEqual(
+                actual_num_ele,
+                expected_num_ele,
+                msg=f"Expected the number of elements over {tol} to be less than {percentile:.3%}"
+                f" of total elements (or {expected_num_ele}), but got {actual_percent:.3%} "
+                f"(or {actual_num_ele}). These differences are {diff[diff > tolerance]}. "
+                f"Max difference = {diff.max()}",
+            )
 
 
 # TODO(markblee): Move this to axlearn/experiments/test_utils.py, where it's used.
@@ -425,14 +472,14 @@ def _complete_param_init_spec_tree(
 
     # Complete the param_init_specs to match the params treedef.
     # Replace with Nones so that jax doesn't treat them as leaves.
-    params_with_nones = jax.tree_map(
+    params_with_nones = jax.tree.map(
         partial(replace_keys, mapping={k: None for k in delegates}), params, is_leaf=is_leaf
     )
     _, treedef = jax.tree_util.tree_flatten(params_with_nones)
     inits_with_nones = jax.tree_util.tree_unflatten(treedef, param_init_specs)
 
     # Replace the Nones with a delegate.
-    return jax.tree_map(partial(replace_keys, mapping=delegates), inits_with_nones, is_leaf=is_leaf)
+    return jax.tree.map(partial(replace_keys, mapping=delegates), inits_with_nones, is_leaf=is_leaf)
 
 
 def read_param_init_specs_recursively(
@@ -901,3 +948,23 @@ def initialize_parameters_with_prebuilt(
         prebuilt,
         initialized,
     )
+
+
+# Starting from Jax 0.5.0, jax_threefry_partitionable is enabled by default.
+# https://docs.jax.dev/en/latest/changelog.html#jax-0-5-0-jan-17-2025
+# This is a breaking change and some unit tests which expect specific values
+# need to either change the expected numerical values, or toggle off this feature.
+# We add a knob to turn off this for easy backward compatibility,
+# and expect to update the unit tests by owners soon.
+def set_threefry_partitionable(on: bool = False):
+    """Helper decorator to enable/disable threefry_partitionable."""
+
+    def decorator_set(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            with jax.threefry_partitionable(on):
+                return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator_set

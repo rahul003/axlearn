@@ -29,6 +29,7 @@ from axlearn.common.config import (
     config_for_function,
 )
 from axlearn.common.convolution import Conv2D
+from axlearn.common.input_base import Input
 from axlearn.common.input_fake import FakeLmInput
 from axlearn.common.layers import Linear
 from axlearn.common.module import Module
@@ -51,7 +52,6 @@ from axlearn.common.state_builder import (
     MergeStateConverter,
     MergeStateSelection,
     ModelStateScopeConverter,
-    OrbaxCheckpointer,
     OrbaxStateBuilder,
     PosEmbeddingConverter,
     RestoreAndConvertBuilder,
@@ -563,11 +563,11 @@ def _mock_state(trainer_cfg, seed: int = 0) -> Builder.State:
     return state
 
 
-class _FakeMultimodalImageInput(Module):
+class _FakeMultimodalImageInput(Input):
     """A fake multimodal image input."""
 
     @config_class
-    class Config(Module.Config):
+    class Config(Input.Config):
         """Configures _FakeMultimodalImageInput."""
 
         is_training: Required[bool] = REQUIRED
@@ -974,7 +974,7 @@ class HuggingFacePreTrainedBuilderTest(TestCase):
             ref_repeat = torch.nn.Linear(in_features=2, out_features=3, bias=True)
             ref_repeat_params = torch_to_axlearn(ref_repeat)
             # Tile the params across repeat dim.
-            ref_repeat_params = jax.tree_map(
+            ref_repeat_params = jax.tree.map(
                 lambda x: jnp.tile(x, [repeat_cfg.num_layers] + [1] * x.ndim), ref_repeat_params
             )
 
@@ -1429,6 +1429,9 @@ class OrbaxStateBuilderTest(TestCase):
         mesh_shape = (1, 1)
         if not is_supported_mesh_shape(mesh_shape):
             return
+
+        # pylint: disable-next=import-outside-toplevel
+        from axlearn.common.checkpointer_orbax import OrbaxCheckpointer
 
         with tempfile.TemporaryDirectory() as root_dir, _mesh(mesh_shape):
             state = _make_state(float_dtype=jnp.float32)

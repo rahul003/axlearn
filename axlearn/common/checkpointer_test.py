@@ -31,6 +31,7 @@ from jax import numpy as jnp
 from jax.experimental import mesh_utils
 from jax.experimental.array_serialization import serialization as array_serialization
 
+from axlearn.common import array_serialization as axlearn_serialization
 from axlearn.common import file_system as fs
 from axlearn.common import serialization, test_utils, utils
 from axlearn.common.array_serialization import BoundedDataShardedAsyncCheckpointManager
@@ -40,6 +41,7 @@ from axlearn.common.checkpointer import (
     Checkpointer,
     CheckpointValidationType,
     EvalMetric,
+    PythonSavable,
     TensorStoreStateStorage,
     async_save_tf_savables,
     check_state_structure,
@@ -483,6 +485,63 @@ class CheckpointerTest(test_utils.TestCase):
             self.assertEqual(next(restored_state["input_iter"]), 3)
             ckpt.stop()
 
+    def test_python_savable(self):
+        mesh_shape = (1, 1)
+        if not test_utils.is_supported_mesh_shape(mesh_shape):
+            return
+
+        class _DummySavable:
+            """A dummy class implementing PythonSavable."""
+
+            def __init__(self, max_step: int):
+                self._max_step = max_step
+                self._state = dict(step=0, values=b"123")
+
+            def get_state(self):
+                return self._state
+
+            def set_state(self, state):
+                self._state = state
+
+            def __iter__(self):
+                for i in range(self._state["step"], self._max_step):
+                    self._state["step"] += 1
+                    yield i
+
+        with _mesh(mesh_shape):
+            cfg = _checkpointer_config(Checkpointer)
+            ckpt: Checkpointer = cfg.instantiate(parent=None)
+
+            x = _DummySavable(max_step=3)
+            # Check that runtime_checks is enabled.
+            self.assertIsInstance(x, PythonSavable)
+
+            # Iterate once and save.
+            self.assertEqual(next(iter(x)), 0)
+            state0 = dict(x=x)
+
+            self.assertEqual([], os.listdir(cfg.dir))
+            ckpt.save(step=1, state=state0)
+            ckpt.wait_until_finished()
+
+            # Check that input iterators are saved under a per-worker path.
+            # E.g., /path/to/<step>/[state/]python_0/x.
+            state_dir = ckpt.ckpt_dir(1)
+            if "state" in os.listdir(state_dir):
+                state_dir = os.path.join(state_dir, "state")
+            self.assertIn("python_0", os.listdir(state_dir))
+            self.assertIn("x", os.listdir(os.path.join(state_dir, "python_0")))
+
+            # Construct a new savable object to restore.
+            state1 = dict(x=_DummySavable(max_step=3))
+            step, restored_state = ckpt.restore(step=None, state=state1)
+            self.assertEqual(1, step)
+            restored_x: _DummySavable = restored_state["x"]
+            # The restored_state contains the iter pointing to the next value.
+            self.assertEqual(list(range(1, 3)), list(iter(restored_x)))
+            self.assertEqual(b"123", restored_x.get_state()["values"])
+            ckpt.stop()
+
     @parameterized.parameters([Checkpointer, OrbaxCheckpointer])
     def test_grain(self, checkpointer_cls):
         if not _GRAIN_INSTALLED:
@@ -504,11 +563,11 @@ class CheckpointerTest(test_utils.TestCase):
             ckpt.wait_until_finished()
 
             # Check that input iterators are saved under a per-worker path.
-            # E.g., /path/to/<step>/[state/]grain_0/input_iter.index.
+            # E.g., /path/to/<step>/[state/]python_0/input_iter.index.
             state_dir = ckpt.ckpt_dir(100)
             if "state" in os.listdir(state_dir):
                 state_dir = os.path.join(state_dir, "state")
-            self.assertIn("grain_0", os.listdir(state_dir))
+            self.assertIn("python_0", os.listdir(state_dir))
 
             state0_specs = dict(
                 x=utils.TensorSpec(shape=[3, 2], dtype=jnp.float32),
@@ -773,7 +832,6 @@ class CheckpointerTest(test_utils.TestCase):
         run_thread.start()
         run_thread.join()
         self.assertFalse(ckpt._gc_stopping.is_set())
-
         ckpt.stop()  # Stop it explicitly, otherwise test will run forever.
 
         def run_in_context():
@@ -1102,16 +1160,23 @@ class TensorStoreStateStorageTest(test_utils.TestCase):
         with self.assertRaisesRegex(RuntimeError, "cannot schedule new futures after shutdown"):
             storage._executor.submit(worker)
 
-    @parameterized.parameters(jnp.float32, jnp.bfloat16, jnp.int32, jnp.int16)
-    def test_save_and_restore_from_dir(self, restore_floats_as: jnp.dtype):
+    @parameterized.product(
+        restore_floats_as=[jnp.float32, jnp.bfloat16, jnp.int32, jnp.int16],
+        premaped_buffer_size=[1024 * 1024 * 1024, 1],
+    )
+    def test_save_and_restore_from_dir(
+        self, restore_floats_as: jnp.dtype, premaped_buffer_size: int
+    ):
         mesh_shape = (1, 1)
         if not test_utils.is_supported_mesh_shape(mesh_shape):
             return
 
         def make_state(float_dtype):
-            return dict(x=jnp.zeros([], dtype=jnp.int32), y=jnp.ones([2], dtype=float_dtype))
+            return dict(x=jnp.zeros([1024], dtype=jnp.int32), y=jnp.ones([2], dtype=float_dtype))
 
-        with _mesh(mesh_shape):
+        with _mesh(mesh_shape), mock.patch.object(
+            axlearn_serialization, "_get_premapped_buffer_size", lambda: premaped_buffer_size
+        ):
             state = make_state(float_dtype=jnp.float32)
             storage = TensorStoreStateStorage.default_config().instantiate()
             with tempfile.TemporaryDirectory() as root_dir:

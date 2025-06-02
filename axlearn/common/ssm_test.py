@@ -30,6 +30,7 @@ from jax.sharding import Mesh, PartitionSpec
 from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
 
+from axlearn.common.attention import KVCache
 from axlearn.common.attention_bias import make_causal_biases
 from axlearn.common.config import InstantiableConfig
 from axlearn.common.module import functional as F
@@ -48,7 +49,7 @@ from axlearn.common.ssm import (
     StackedSSMLayer,
 )
 from axlearn.common.ssm_kernels.ssd_kernels import ssd
-from axlearn.common.test_utils import TestCase, assert_allclose
+from axlearn.common.test_utils import TestCase, assert_allclose, set_threefry_partitionable
 from axlearn.common.utils import Nested, Tensor, TensorSpec, cast_floats
 
 try:
@@ -715,6 +716,7 @@ class MambaBlockTest(TestCase):
         block_klass=(MambaBlock, JambaMambaBlock),
         dtype=(jnp.float32, jnp.bfloat16),
     )
+    @set_threefry_partitionable(False)  # TODO(swiseman): update for threefry_partitionable True
     def test_prefill(self, block_klass: MambaBlock, dtype: jnp.dtype):
         model_dim = 8
         state_dim = 16
@@ -930,7 +932,9 @@ class StackedMixedSSMTransformerTest(TestCase):
         cfg.ssm_layer.mamba_layer.set(dtype=dtype, cache_dtype=None)
         cfg.layer.feed_forward.hidden_dim = hidden_dim
         cfg.layer.self_attention.attention.num_heads = num_heads
-        cfg.layer.self_attention.attention.input_linear.set(dtype=dtype, cache_dtype=None)
+        cfg.layer.self_attention.attention.set(
+            kv_cache=KVCache.default_config().set(cache_dtype=dtype)
+        )
         _test_extend_step(cfg, model_dim=model_dim, dtype=dtype)
 
     @parameterized.parameters(jnp.float32, jnp.bfloat16)
@@ -953,7 +957,9 @@ class StackedMixedSSMTransformerTest(TestCase):
         cfg.ssm_layer.mamba_layer.set(dtype=dtype, cache_dtype=None)
         cfg.layer.feed_forward.hidden_dim = hidden_dim
         cfg.layer.self_attention.attention.num_heads = num_heads
-        cfg.layer.self_attention.attention.input_linear.set(dtype=dtype, cache_dtype=None)
+        cfg.layer.self_attention.attention.set(
+            kv_cache=KVCache.default_config().set(cache_dtype=dtype)
+        )
         _test_prefill_states(cfg, model_dim=model_dim, dtype=dtype)
 
 

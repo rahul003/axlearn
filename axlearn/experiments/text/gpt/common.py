@@ -9,10 +9,10 @@ functions are used to build the args for `get_get_trainer_config_fn`, including 
 
 See c4_trainer.py for how they are used.
 """
-
+import os
 import math
 from collections.abc import Sequence
-from typing import Optional, Protocol, Union
+from typing import Literal, Optional, Protocol, Union
 
 import jax.numpy as jnp
 import tensorflow as tf
@@ -32,6 +32,7 @@ from axlearn.common import (
 )
 from axlearn.common.attention import (
     AttentionLogitBiasLayer,
+    BaseKVCache,
     BaseQKVLinear,
     MultiheadAttention,
     RepeatedTransformerLayer,
@@ -56,6 +57,7 @@ from axlearn.common.evaler import every_n_steps_policy as eval_every_n_steps_pol
 from axlearn.common.flash_attention.layer import FlashAttention
 from axlearn.common.input_dispatch import InputDispatcher
 from axlearn.common.layers import BaseNormalizationLayer, set_bias_recursively, set_norm_recursively
+from axlearn.common.mixture_of_experts import TransformerFeedForwardMoE
 from axlearn.common.optimizer_base import PartitionedGradientTransformation
 from axlearn.common.param_init import PARAM_REGEXP_WEIGHT, DefaultInitializer, WeightInitializer
 from axlearn.common.summary_writer import BaseWriter
@@ -220,6 +222,7 @@ def model_config(
     layer_cfg: TransformerLayer.Config = TransformerLayer.default_config(),
     attention_cfg: Optional[MultiheadAttention.Config] = None,
     attention_qkv_linear: Optional[BaseQKVLinear.Config] = None,
+    attention_kv_cache: Optional[BaseKVCache.Config] = None,
     attention_mask: Optional[AttentionLogitBiasLayer.Config] = None,
     z_loss_scale: float = 0.0,
     ffn_structure: str = "prenorm",
@@ -227,6 +230,8 @@ def model_config(
     atten_logit_cap: Optional[float] = None,
     pad_token_id: Optional[int] = None,
     eos_token_id: Optional[int] = None,
+    ffn_layer_types: Optional[Sequence[Literal["dense", "sparse"]]] = None,
+    expert_cfg: TransformerFeedForwardMoE = TransformerFeedForwardMoE.default_config(),
 ) -> causal_lm.Model.Config:
     """Returns an LM model config based on the given hyperparams.
 
@@ -247,26 +252,29 @@ def model_config(
         layer_cfg: The transformer layer config.
         attention_cfg: The attention config.
         attention_qkv_linear: The attention QKV linear layer.
+        attention_kv_cache: The attention KV Cache layer.
         attention_mask: The AttentionLogitBiasLayer config.
         z_loss_scale: The scalar weight for the z-loss to encourages the cross-entropy loss
             normalizer to be well-behaved.
         ffn_structure: The inner structure of the feedforward layer.
-            Options: [prenorm, postnorm, hybridnorm].
+            Options: See `SupportedNormStructure`.
         atten_structure: The inner structure of the attention layer.
-            Options: [prenorm, postnorm, hybridnorm].
+            Options: See `SupportedNormStructure`.
         atten_logit_cap: Cap the absolute values of logits by tanh.
             Enabled by setting a positive value.
         remat_offload_dst: Destination of remat checkptoing offloading.
         pad_token_id: Int ID of the inputs to be masked for self-attention.
         eos_token_id: Int ID of the end of sequence token id.
-
+        ffn_layer_types: The types of layers in the FFN. Options: [dense, sparse].
+        expert_cfg: The expert config for the MoE FFN.
     Returns:
         A causal LM config.
     """
     # Feed-forward.
-    layer_cfg.feed_forward.activation = activation_fn
-    layer_cfg.feed_forward.hidden_dim = ffn_dim
-    layer_cfg.feed_forward.structure = ffn_structure
+    # layer_cfg.feed_forward.activation = activation_fn
+    # layer_cfg.feed_forward.hidden_dim = ffn_dim
+    # layer_cfg.feed_forward.structure = ffn_structure
+    # First configure the base layer_cfg.
     # Attention.
     if attention_cfg is not None:
         layer_cfg.self_attention.attention = attention_cfg
@@ -274,12 +282,66 @@ def model_config(
     layer_cfg.self_attention.attention.num_heads = num_heads
     if attention_qkv_linear is not None:
         layer_cfg.self_attention.attention.input_linear = attention_qkv_linear
+    if attention_kv_cache is not None:
+        layer_cfg.self_attention.attention.kv_cache = attention_kv_cache
     layer_cfg.self_attention.structure = atten_structure
     layer_cfg.self_attention.attention.atten_logit_cap = atten_logit_cap
-    if issubclass(stack_cfg.klass, (RepeatedTransformerLayer, StackedTransformerLayer)):
-        update_model_remat_config(stack_cfg=stack_cfg, layer_cfg=layer_cfg)
+    # if os.getenv('AXLEARN_REMAT_LAYER', 'true') == 'true':
+    #     if issubclass(stack_cfg.klass, (RepeatedTransformerLayer, StackedTransformerLayer)):
+    #         update_model_remat_config(stack_cfg=stack_cfg, layer_cfg=layer_cfg)
     # Stack.
-    transformer_cfg = stack_cfg.set(num_layers=num_layers, layer=layer_cfg)
+    # transformer_cfg = stack_cfg.set(num_layers=num_layers, layer=layer_cfg)
+    # Shard some FFN and attention weights over multiple axes.
+    batch_axis_names = ("data", "expert", "fsdp")
+    set_double_shard_weights_config(
+        layer_cfg,
+        batch_axis_names=batch_axis_names,
+        fsdp_axis_names=("expert", "fsdp", "seq"),
+        tp_axis_names="model",
+        seq_axis_names="seq",
+    )
+    def config_dense(cfg: TransformerLayer.Config) -> TransformerLayer.Config:
+        cfg = layer_cfg.clone()
+        cfg.feed_forward.activation = activation_fn
+        cfg.feed_forward.hidden_dim = ffn_dim
+        cfg.feed_forward.structure = ffn_structure
+        return cfg
+
+    def config_sparse(cfg: TransformerLayer.Config) -> TransformerLayer.Config:
+        cfg = layer_cfg.clone()
+        cfg.feed_forward = expert_cfg
+        cfg.feed_forward.activation = activation_fn
+        cfg.feed_forward.hidden_dim = ffn_dim
+        cfg.feed_forward.structure = ffn_structure
+        return cfg
+
+    fn = {
+        "dense": config_dense,
+        "sparse": config_sparse,
+    }
+    if ffn_layer_types is None:
+        lm_layer_cfg = config_dense(layer_cfg)
+    else:
+        lm_layer_cfg = [fn[layer_type](layer_cfg) for layer_type in ffn_layer_types]
+
+    # Single layer repeated num_layers times.
+    if not isinstance(lm_layer_cfg, Sequence):
+        transformer_cfg = stack_cfg.set(num_layers=num_layers, layer=lm_layer_cfg)
+    elif len(lm_layer_cfg) == 1:
+        # No need to stack together a single layer.
+        transformer_cfg = stack_cfg.set(num_layers=num_layers, layer=lm_layer_cfg[0])
+    else:
+        num_layers_cfgs = len(lm_layer_cfg)
+        # Stack together the layers.
+        transformer_cfg = stack_cfg.set(
+            num_layers=num_layers // num_layers_cfgs,
+            layer=StackedTransformerLayer.default_config().set(
+                num_layers=num_layers_cfgs, layer=list(lm_layer_cfg)
+            ),
+        )
+
+
+
     decoder_cfg = Decoder.default_config().set(
         transformer=transformer_cfg,
         attention_mask=attention_mask,
@@ -310,14 +372,6 @@ def model_config(
     if z_loss_scale:
         cfg.metrics = causal_lm.metrics_config(z_loss_scale=z_loss_scale)
     cfg.dtype = jnp.float32
-    # Shard some FFN and attention weights over multiple axes.
-    set_double_shard_weights_config(
-        cfg.decoder.transformer.layer,
-        batch_axis_names=batch_axis_names,
-        fsdp_axis_names=("expert", "fsdp", "seq"),
-        tp_axis_names="model",
-        seq_axis_names="seq",
-    )
     cfg.decoder.logits_partition_spec = (batch_axis_names, "seq", "model")
     set_bias_recursively(cfg, False)
     set_norm_recursively(cfg, normalization)

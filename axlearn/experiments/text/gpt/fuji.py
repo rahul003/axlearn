@@ -9,7 +9,7 @@ The fuji models are set up to imitate LLaMA models:
 * LLaMA 2: https://arxiv.org/abs/2307.09288
 * LLaMA 3: https://github.com/meta-llama/llama3
 """
-
+import os
 import enum
 import functools
 import itertools
@@ -24,6 +24,7 @@ from axlearn.common.attention import (
     FusedQKVLinear,
     GroupedQKVLinear,
     GroupedQueryAttention,
+    KVCache,
     MultiheadAttention,
     RematRegexSavePatterns,
     RepeatedTransformerLayer,
@@ -34,6 +35,8 @@ from axlearn.common.base_layer import RematSpec
 from axlearn.common.config import config_for_function
 from axlearn.common.decoder import LmHead
 from axlearn.common.embedding import TransformerTextEmbeddings
+from axlearn.common.flash_attention.layer import FlashBlockSizeModifier
+from axlearn.common.flash_attention.remat import save_or_offload_flash_attention_policy
 from axlearn.common.layers import RMSNorm
 from axlearn.common.trainer import SpmdTrainer
 from axlearn.common.trainer_config_modifier import (
@@ -45,6 +48,7 @@ from axlearn.common.trainer_config_modifier import (
     RematSpecModifier,
 )
 from axlearn.common.utils import (
+    combine_remat_policies,
     extended_checkpoint_policies,
     save_and_offload_only_these_names_regex,
 )
@@ -61,6 +65,9 @@ from axlearn.experiments.text.gpt.common import (
 from axlearn.experiments.text.gpt.common import model_config as common_model_config
 from axlearn.experiments.text.gpt.common import scaled_hidden_dim
 from axlearn.experiments.trainer_config_utils import TrainerConfigFn, V6eFlashConfigModifier
+
+# Import the FP8ConfigModifier below if using FP8 training. See config for A3 / A4 instances below
+# from axlearn.common.trainer_config_modifier import FP8ConfigModifier
 
 MODEL_SIZES = ("test", "1B", "3B", "7B", "8B", "70B")
 
@@ -292,10 +299,10 @@ def get_trainer_kwargs(
     elif model_size == "1B":
         trainer_kwargs = dict(
             model_kwargs=dict(
-                num_layers=16,
+                num_layers=int(os.getenv("AXLEARN_NUM_LAYERS", 16)),
                 hidden_dim=2048,
                 num_heads=32,
-                num_kv_heads=num_kv_heads,
+                num_kv_heads=max(num_kv_heads, int(os.getenv("AXLEARN_TP_DEGREE", 4))),
                 ffn_dim=8192,
                 rope_theta=rope_theta,
                 shared_lm_head=True,
@@ -314,7 +321,7 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=int(os.getenv("AXLEARN_TP_DEGREE", 4)))
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
@@ -348,10 +355,13 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=int(os.getenv("AXLEARN_TP_DEGREE", 4)))
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
+                            GradientAccumulationModifier.default_config().set(
+                                grad_acc_steps=4,
+                            ),
                         ],
                     ),
                 ),
@@ -394,7 +404,7 @@ def get_trainer_kwargs(
                             RematSpecModifier.default_config().set(
                                 remat_policies={
                                     "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True,
+                                        prevent_cse=False,
                                         policy=offload_dots_saveable_policy,
                                     ),
                                 }
@@ -413,7 +423,7 @@ def get_trainer_kwargs(
                             RematSpecModifier.default_config().set(
                                 remat_policies={
                                     "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True,
+                                        prevent_cse=False,
                                         policy=offload_dots_saveable_policy,
                                     ),
                                 }
@@ -432,7 +442,7 @@ def get_trainer_kwargs(
                             RematSpecModifier.default_config().set(
                                 remat_policies={
                                     "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True, policy=jax_remat_policies.dots_saveable
+                                        prevent_cse=False, policy=jax_remat_policies.dots_saveable
                                     ),
                                 }
                             ),
@@ -449,7 +459,7 @@ def get_trainer_kwargs(
                             RematSpecModifier.default_config().set(
                                 remat_policies={
                                     "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True,
+                                        prevent_cse=False,
                                         policy=offload_attention_proj_policy,
                                     ),
                                 }
@@ -458,8 +468,28 @@ def get_trainer_kwargs(
                         ],
                     ),
                 ),
-                # tpu-v5p.
-                ("tpu-v5p-.*", mesh_shape_from_axes(data=-1, fsdp=8)),
+                (
+                    "tpu-v5p-.*",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                # fsdp=8 is also ok, only 2% slower step time.
+                                mesh_shape=mesh_shape_from_axes(data=-1, fsdp=64)
+                            ),
+                            RematSpecModifier.default_config().set(
+                                remat_policies={
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=False,
+                                        policy=config_for_function(combine_remat_policies).set(
+                                            policy_1=save_or_offload_flash_attention_policy(),
+                                            policy_2=jax_remat_policies.dots_saveable,
+                                        ),
+                                    ),
+                                }
+                            ),
+                        ],
+                    ),
+                ),
                 # H100/A100 80G.
                 # Maximum per-node batch size = 64, hence need >= 32 nodes.
                 # Without sequence sharding, the maximum number of devices <= batch_size,
@@ -467,8 +497,40 @@ def get_trainer_kwargs(
                 # v2 on gpu-p5.48xlarge-256, step time: 1.78s/step, MFU 39%.
                 # TODO(kelvin-zou): need to match 1.5s/step perf on TransformerEngine.
                 (
-                    "gpu-(p5.48xlarge|p4de.24xlarge|a3-highgpu-8g|a3-megagpu-8g)-(256|512|1024)",
+                    "gpu-(p5.48xlarge|p4de.24xlarge)-(256|512|1024)",
                     mesh_shape_from_axes(data=-1, fsdp=8),
+                ),
+                # Enable support for FP8 training on H100/200 instance types
+                (
+                    "gpu-(a3-highgpu-8g|a3-megagpu-8g|a3-ultragpu-8g)-(256|512|1024)",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8)
+                            ),
+                            # Uncomment the FP8ConfigModifier block to use FP8 training.
+                            # FP8ConfigModifier.default_config().set(
+                            #    fp8_amax_history_length=128
+                            # )
+                        ],
+                    ),
+                ),
+                # Ensure the gpu_block_size is updated for Blackwell (B200 / A4)
+                (
+                    "gpu-(a4-highgpu-8g)-(256|512|1024)",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8)
+                            ),
+                            # Modify the GPU block-size for B200 platform (Pallas kernels)
+                            FlashBlockSizeModifier.default_config().set(gpu_block_size=64),
+                            # Uncomment the FP8ConfigModifier block to use FP8 training.
+                            # FP8ConfigModifier.default_config().set(
+                            #    fp8_amax_history_length=128
+                            # ),
+                        ],
+                    ),
                 ),
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",
@@ -477,7 +539,7 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=int(os.getenv("AXLEARN_TP_DEGREE", 4)))
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
@@ -515,7 +577,7 @@ def get_trainer_kwargs(
                             RematSpecModifier.default_config().set(
                                 remat_policies={
                                     "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True,
+                                        prevent_cse=False,
                                         policy=offload_dots_saveable_policy,
                                     ),
                                 }
@@ -534,7 +596,7 @@ def get_trainer_kwargs(
                             RematSpecModifier.default_config().set(
                                 remat_policies={
                                     "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True,
+                                        prevent_cse=False,
                                         policy=offload_dots_saveable_policy,
                                     ),
                                 }
@@ -552,7 +614,7 @@ def get_trainer_kwargs(
                             RematSpecModifier.default_config().set(
                                 remat_policies={
                                     "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True, policy=jax_remat_policies.dots_saveable
+                                        prevent_cse=False, policy=jax_remat_policies.dots_saveable
                                     ),
                                 }
                             ),
@@ -571,7 +633,7 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=int(os.getenv("AXLEARN_TP_DEGREE", 4)))
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
@@ -614,8 +676,38 @@ def get_trainer_kwargs(
                             RematSpecModifier.default_config().set(
                                 remat_policies={
                                     "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True,
+                                        prevent_cse=False,
                                         policy=offload_dots_saveable_policy,
+                                    ),
+                                }
+                            ),
+                        ],
+                    ),
+                ),
+                (
+                    "tpu-v5p-.*",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(fsdp=-1)
+                            ),
+                            RematSpecModifier.default_config().set(
+                                remat_policies={
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=False,
+                                        policy=config_for_function(
+                                            save_and_offload_only_these_names_regex
+                                        ).set(
+                                            names_which_can_be_saved="|".join(
+                                                [
+                                                    RematRegexSavePatterns.FLASH_ATTENTION.value,
+                                                    ".*linear1_0",
+                                                ]
+                                            ),
+                                            names_which_can_be_offloaded=None,
+                                            offload_src="device",
+                                            offload_dst="pinned_host",
+                                        ),
                                     ),
                                 }
                             ),
@@ -633,7 +725,7 @@ def get_trainer_kwargs(
                             RematSpecModifier.default_config().set(
                                 remat_policies={
                                     "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True,
+                                        prevent_cse=False,
                                         policy=offload_attention_proj_policy,
                                     ),
                                 }
@@ -653,7 +745,7 @@ def get_trainer_kwargs(
                             RematSpecModifier.default_config().set(
                                 remat_policies={
                                     "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True,
+                                        prevent_cse=False,
                                         policy=offload_attention_proj_policy,
                                     ),
                                 }
@@ -668,6 +760,36 @@ def get_trainer_kwargs(
                 (
                     "gpu-(p5.48xlarge|p4de.24xlarge)-(512|1024)",
                     mesh_shape_from_axes(data=-1, fsdp=128),
+                ),
+                (
+                    "gpu-(a3-highgpu-8g|a3-megagpu-8g|a3-ultragpu-8g)-(256|512|1024)",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(data=-1, fsdp=64)
+                            ),
+                            # Uncomment the FP8ConfigModifier block to use FP8 training.
+                            # FP8ConfigModifier.default_config().set(
+                            #    fp8_amax_history_length=128
+                            # )
+                        ],
+                    ),
+                ),
+                (
+                    "gpu-(a4-highgpu-8g)-(256|512|1024)",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(data=-1, fsdp=16)
+                            ),
+                            # Modify the GPU block-size for B200 platform (Pallas kernels)
+                            FlashBlockSizeModifier.default_config().set(gpu_block_size=64),
+                            # Uncomment the FP8ConfigModifier block to use FP8 training.
+                            # FP8ConfigModifier.default_config().set(
+                            #    fp8_amax_history_length=128
+                            # )
+                        ],
+                    ),
                 ),
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",
@@ -770,14 +892,13 @@ def model_config(
     else:
         atten_cfg = MultiheadAttention.default_config()
         atten_input_linear = FusedQKVLinear.default_config()
-    atten_input_linear.cache_dtype = STEP_DTYPE
     # RoPE embeddings: https://arxiv.org/abs/2104.09864.
     atten_qkv_linear = RoFormerQKVLinear.default_config().set(
-        cache_dtype=STEP_DTYPE,
         input_linear=atten_input_linear,
         rotary_value=False,
     )
     atten_qkv_linear.rope_pos_emb_layer.theta = rope_theta
+    attention_kv_cache = KVCache.default_config().set(cache_dtype=STEP_DTYPE)
 
     cfg = common_model_config(
         num_layers=num_layers,
@@ -793,6 +914,7 @@ def model_config(
         lm_head_cfg=LmHead.default_config() if not shared_lm_head else None,
         attention_cfg=flash_attention_config() if flash_attention else atten_cfg,
         attention_qkv_linear=atten_qkv_linear,
+        attention_kv_cache=attention_kv_cache,
         pad_token_id=pad_token_id,
         eos_token_id=eos_token_id,
     )
