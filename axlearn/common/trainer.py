@@ -587,6 +587,8 @@ class SpmdTrainer(Module):
                     next(self.input.batches(self._input_iter))
 
                 input_iterator = self.input.batches(self._input_iter)
+                MAX_STEP_BREAK = os.getenv("AXLEARN_MAX_STEP", None)
+                MAX_STEP_BREAK = int(MAX_STEP_BREAK) if MAX_STEP_BREAK else None
                 while True:
                     self._maybe_record_event(measurement.Event.START_DATA_LOADING)
                     try:
@@ -630,6 +632,8 @@ class SpmdTrainer(Module):
                         # event.
                         self._maybe_record_event(measurement.Event.END_DATA_LOADING)
                         break
+                if MAX_STEP_BREAK and self.step >= MAX_STEP_BREAK:
+                    break
                 if self.step < cfg.max_step:
                     self._step_log("Reached end of inputs. Stopping")
             self._step_log("Checkpointer flushed.")
