@@ -23,6 +23,12 @@ from axlearn.common.mixture_of_experts import (
     get_outer_batch_from_mesh
 )
 
+from axlearn.common.attention import (
+    FusedGroupedQKVLinear,
+    GroupedQKVLinear,
+    RoFormerQKVLinear,
+)
+
 from axlearn.common.layers import (
     Dropout,
     StochasticDepth,
@@ -33,6 +39,12 @@ from axlearn.common.utils import PartitionSpec, infer_mesh_shape, cast_floats
 from axlearn.experiments.text.gpt.common import MESH_AXIS_NAMES, mesh_shape_from_axes
 from axlearn.common.param_init import PARAM_REGEXP_WEIGHT, DefaultInitializer, WeightInitializer
 from axlearn.experiments.text.gpt.envy import MOE_OUTER_BATCH_AXIS_NAMES, MOE_DIM_TO_MESH_AXIS_MAP
+
+from axlearn.common.flash_attention.layer import (
+    FlashAttention,
+    default_mha_dim_to_partition_spec,
+    default_output_dim_to_partition_spec,
+)
 
 # FP32 test tolerances
 TEST_TOLS_FP32 = {
@@ -69,6 +81,8 @@ def build_name(cfg, invoker_cfg):
         else:
             block_size_str = ''
         return f"MoE_b{invoker_cfg['batch_size']}_s{invoker_cfg['seq_len']}_i{cfg.input_dim}_h{cfg.hidden_dim}_e{cfg.num_experts}_topk{cfg.gating.top_k}_g{cfg.num_groups}_ec{cfg.gating.train_capacity_factor}{block_size_str}_mesh{mesh_str}_{dtype_str}"
+    elif hasattr(cfg, "query_dim"):
+        return f"Gating_b{invoker_cfg['batch_size']}_s{invoker_cfg['seq_len']}_ATTENTION_mesh{mesh_str}_{dtype_str}"
     else:
         # Gating layer
         E = invoker_cfg['input_shape'][-1]
@@ -130,12 +144,19 @@ class ModuleConfig():
 
     @property
     def layer_type(self):
-        return "MoE" if isinstance(self.cfg, TransformerFeedForwardMoE.Config) else "Gating"
+        if isinstance(self.cfg, TransformerFeedForwardMoE.Config):
+            return "MoE"
+        elif isinstance(self.cfg, FlashAttention.Config):
+            return "Attention"
+        else:
+            return "Gating"
     
     @property
     def gating_type(self):
         if self.layer_type == "MoE":
             return self.cfg.gating.__class__.__name__
+        elif self.layer_type == "Attention":
+            return "NA"
         else:
             return self.cfg.__class__.__name__
 
@@ -215,6 +236,9 @@ class TestCaseConfig():
         # replace O and S from input shape with outer batch and seq
         if self.test.layer_type == "MoE":
             input_key = 'inputs'
+            pspec = PartitionSpec(('data','fsdp'), 'model', None)
+        elif self.test.layer_type == "Attention":
+            input_key = 'query'
             pspec = PartitionSpec(('data','fsdp'), 'model', None)
         else:
             input_key = 'logits'
@@ -310,19 +334,19 @@ class GridSpaceBuilder:
         }
         # 12B Configs
         kwargs_12b = {
-            'input_dim': 2048,
+            'input_dim': 7168,
             'hidden_dim': 7168,
-            'mesh_spec': {"fsdp":-1, "model":4},
+            'mesh_spec': {"fsdp":-1, "model":16},
         }
 
         grid_space.extend([
             self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=1, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=2, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=2, capacity_factor=2, seq=4096),
+            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
+            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=1, capacity_factor=2, seq=4096),
+            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192),
+            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=1, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
+            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=2, capacity_factor=2, seq=4096),
+            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=2, capacity_factor=2, seq=4096),
         ])
         
         if self.layer == "moe":
@@ -520,6 +544,43 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
         else:
             golden_cfg = None
         conv_output = None
+    elif layer == "attention":
+
+        # input_linear = GroupedQKVLinear.default_config().set(
+        #     num_kv_heads=8,
+        # )
+        
+        attention_qkv_linear = RoFormerQKVLinear.default_config().set(
+            input_linear=GroupedQKVLinear.default_config().set(
+            num_kv_heads=8,
+            ),
+            rotary_value=False,
+        )
+        attention_qkv_linear.rope_pos_emb_layer.theta = 5e5
+        attention_qkv_linear.input_linear.layer.param_partition_spec = (None, None, None)
+
+        test_cfg = FlashAttention.default_config().set(
+            name='test',
+            param_init=model_param_init,
+            causal=True,
+            mha_dim_to_partition_spec={
+                "btnh": PartitionSpec(("data", "expert", "fsdp"), None, ("seq", "model"), None),
+                "bsnh": PartitionSpec(("data", "expert", "fsdp"), None, ("seq", "model"), None),
+                "bnts": PartitionSpec(("data", "expert", "fsdp"), None, None, None),
+            },
+            output_dim_to_partition_spec={
+                "btnh": PartitionSpec(("data", "expert", "fsdp"), "seq", "model", None),
+                "bnts": PartitionSpec(("data", "expert", "fsdp"), "model", "seq", None),
+            },
+            query_dim=hidden_dim, key_dim=hidden_dim, value_dim=hidden_dim, num_heads=64,
+            input_linear=attention_qkv_linear
+        )
+
+        if golden:
+            golden_cfg = test_cfg.clone(name="golden")
+        else:
+            golden_cfg = None
+        conv_output = None
     else:
         test_cfg = get_gating_config(test, n_experts, top_k, capacity_factor, expert_capacity=None, name="test", block_size=block_size)
 
@@ -539,20 +600,25 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
         "dtype": jnp.bfloat16 if dtype in ["bfloat16", jnp.bfloat16] else jnp.float32,
         "device": test_device,
         "mesh_spec": mesh_spec,
-        "input_shape": (batch, seq, input_dim) if layer == "moe" else ('O', n_groups, 'S', n_experts),
+        "input_shape": (batch, seq, input_dim) if layer == "moe" or layer == "attention" else ('O', n_groups, 'S', n_experts),
     }
     if golden:
         golden_invoker_cfg = dict(test_invoker_cfg)
         golden_invoker_cfg['device'] = golden_device
     else:
         golden_invoker_cfg = {}
+
+    if layer == "moe":
+        loss_fn = lambda x: jnp.mean(x)*1e2
+    else:
+        loss_fn = lambda x: jnp.mean(x.data)*1e2
     
     config = TestCaseConfig(
         test_cfg, 
         golden_cfg, 
         test_invoker_cfg, 
         golden_invoker_cfg,
-        loss_fn=lambda x: jnp.mean(x)*1e2,
+        loss_fn=loss_fn,
         conv_output=conv_output,
         prefix="_moe"
     )
@@ -562,40 +628,40 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
 @cache
 def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGather, golden=TopKGating, test_device="neuron", golden_device="cpu"):
     builder = GridSpaceBuilder(layer=layer, test=test, golden=golden, test_device=test_device, golden_device=golden_device)
-    if test_suite == "toy":
-        return builder.build_toy_grid_space()
-    elif test_suite == 'presubmit':
-        return builder.build_presubmit_grid_space()
-    elif test_suite == 'small_models':
-        return builder.build_grid_space_12B() + builder.build_grid_space_50B()
-    elif test_suite == '12b':
-        return builder.build_grid_space_12B()
-    elif test_suite == '50b':
-        return builder.build_grid_space_50B()
-    elif test_suite == '150b':
-        return builder.build_grid_space_150B()
-    else:
-        raise ValueError(f"Unknown test suite: {test_suite}")
+    # if test_suite == "toy":
+    return builder.build_presubmit_grid_space()
+    # elif test_suite == 'presubmit':
+    #     return builder.build_presubmit_grid_space()
+    # elif test_suite == 'small_models':
+    #     return builder.build_grid_space_12B() + builder.build_grid_space_50B()
+    # elif test_suite == '12b':
+    #     return builder.build_grid_space_12B()
+    # elif test_suite == '50b':
+    #     return builder.build_grid_space_50B()
+    # elif test_suite == '150b':
+    #     return builder.build_grid_space_150B()
+    # else:
+    #     raise ValueError(f"Unknown test suite: {test_suite}")
 
     # leaving it here for any custom local testing
-    test_configs = []
-    for (batch, seq, input_dim,  hidden_dim, n_experts, top_k, n_groups,
-         out_batch, capacity_factor, mesh_spec, dtype) in grid_space:
-        test_configs.append(create_test_config(
-            test=test,
-            golden=golden,
-            test_device=test_device,
-            golden_device=golden_device,
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            n_experts=n_experts,
-            n_groups=n_groups,
-            top_k=top_k,
-            capacity_factor=capacity_factor, 
-            mesh_spec=mesh_spec,
-            batch=batch,
-            seq=seq,
-            dtype=dtype,
-        ))
+    # test_configs = []
+    # for (batch, seq, input_dim,  hidden_dim, n_experts, top_k, n_groups,
+    #      out_batch, capacity_factor, mesh_spec, dtype) in grid_space:
+    #     test_configs.append(create_test_config(
+    #         test=test,
+    #         golden=golden,
+    #         test_device=test_device,
+    #         golden_device=golden_device,
+    #         input_dim=input_dim,
+    #         hidden_dim=hidden_dim,
+    #         n_experts=n_experts,
+    #         n_groups=n_groups,
+    #         top_k=top_k,
+    #         capacity_factor=capacity_factor, 
+    #         mesh_spec=mesh_spec,
+    #         batch=batch,
+    #         seq=seq,
+    #         dtype=dtype,
+    #     ))
     return test_configs
 

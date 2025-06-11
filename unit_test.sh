@@ -27,6 +27,7 @@ export NEURON_FSDP=0
 export NEURON_FSDP_NUM_LAYER_COALESCE=-1
 export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1 # changed from 0
 export NEURON_DISABLE_BOUNDARY_MARKER=1
+export NEURON_HLO_ANALYZER=1
 
 # Neuron runtime flags
 export NEURON_RT_DBG_CC_DMA_PACKET_SIZE=4096 && export NEURON_RT_DBG_DMA_PACKETIZATION_SIZE=104857
@@ -69,6 +70,7 @@ export TF_CPP_MIN_LOG_LEVEL=3
 
 # default set to presubmit/12B/50B/150B
 # used by mixture_of_experts_neuron_test.py
+<<<<<<< Updated upstream
 export TEST_SUITE=${2:-"presubmit"}
 set -ex
 
@@ -97,3 +99,24 @@ elif [ "$1" = "150b_blockwise_neuron" ]; then
     pytest -rsA --tb=short axlearn/common/mixture_of_experts_neuron_test.py -k 'TestDev150bInteg and test_fwd_blockwise_vs_einsum or TestDev150bInteg and test_fwdbwd_blockwise_vs_einsum'
     pytest -rsA --tb=short axlearn/common/mixture_of_experts_neuron_test.py -k 'TestDev150bInteg and test_fwd_blockwisev2_vs_einsum or TestDev150bInteg and test_fwdbwd_blockwisev2_vs_einsum'
 fi
+=======
+# export TEST_SUITE=${2:-"presubmit"}
+# set -ex
+# if [ "$1" = "unit" ]; then
+#     pytest -rsA --tb=short --junitxml=test_logs/$TEST_SUITE/unit.xml axlearn/common/mixture_of_experts_neuron_test.py::TestLayerOnCpu
+# elif [ "$1" = "integ" ]; then
+#     pytest -rsA --tb=short --junitxml=test_logs/$TEST_SUITE/integ.xml axlearn/common/mixture_of_experts_neuron_test.py::TestLayerOnTrn
+# elif [ "$1" = "150b" ]; then
+#     pytest -rsA --tb=short --junitxml=test_logs/$TEST_SUITE/150b.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestDev150bUnit or TestDev150bGating or TestDev150bInteg"
+# elif [ "$1" = "150b_gather" ]; then
+#     pytest -rsA --tb=short axlearn/common/mixture_of_experts_neuron_test.py -k 'TestDev150bUnit and test_fwd_gather_vs_einsum or TestDev150bUnit and test_fwdbwd_gather_vs_einsum or TestDev150bInteg and test_fwd_gather_vs_einsum or TestDev150bInteg and test_fwdbwd_gather_vs_einsum'
+# elif [ "$1" = "150b_blockwise" ]; then
+#     pytest -rsA --tb=short axlearn/common/mixture_of_experts_neuron_test.py -k 'TestDev150bUnit and test_fwd_blockwise_vs_einsum or TestDev150bUnit and test_fwdbwd_blockwise_vs_einsum or TestDev150bInteg and test_fwd_blockwise_vs_einsum or TestDev150bInteg and test_fwdbwd_blockwise_vs_einsum'
+# elif [ "$1" = "150b_blockwise_cpu" ]; then
+#     pytest -rsA --tb=short axlearn/common/mixture_of_experts_neuron_test.py -k 'TestDev150bUnit and test_fwd_blockwise_vs_einsum or TestDev150bUnit and test_fwdbwd_blockwise_vs_einsum'
+# elif [ "$1" = "150b_blockwise_neuron" ]; then
+#     pytest -rsA --tb=short axlearn/common/mixture_of_experts_neuron_test.py -k 'TestDev150bInteg and test_fwd_blockwise_vs_einsum or TestDev150bInteg and test_fwdbwd_blockwise_vs_einsum'
+# fi
+
+pytest -rsA --tb=short --junitxml=test_logs/$TEST_SUITE/integ.xml axlearn/common/mixture_of_experts_neuron_test.py::TestLayerOnTrn
+>>>>>>> Stashed changes

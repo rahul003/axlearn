@@ -349,6 +349,12 @@ def _generate_trn2_custom_configs(
                         "input_partition_spec": (("data", "fsdp"), "model", None),
                         "output_partition_spec": (("data", "fsdp"), None, None),
                     },
+                    "model.decoder.transformer.layer.self_attention.attention.input_linear.input_linear.layer": {
+                        "param_partition_spec": (None, None, None),
+                    },
+                    "model.decoder.transformer.layer.self_attention.attention.output_linear": {
+                        "param_partition_spec": (None, None, None),
+                    }
                 },
             )
         )
