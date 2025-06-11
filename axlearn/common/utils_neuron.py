@@ -628,20 +628,20 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
 @cache
 def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGather, golden=TopKGating, test_device="neuron", golden_device="cpu"):
     builder = GridSpaceBuilder(layer=layer, test=test, golden=golden, test_device=test_device, golden_device=golden_device)
-    # if test_suite == "toy":
-    return builder.build_presubmit_grid_space()
-    # elif test_suite == 'presubmit':
-    #     return builder.build_presubmit_grid_space()
-    # elif test_suite == 'small_models':
-    #     return builder.build_grid_space_12B() + builder.build_grid_space_50B()
-    # elif test_suite == '12b':
-    #     return builder.build_grid_space_12B()
-    # elif test_suite == '50b':
-    #     return builder.build_grid_space_50B()
-    # elif test_suite == '150b':
-    #     return builder.build_grid_space_150B()
-    # else:
-    #     raise ValueError(f"Unknown test suite: {test_suite}")
+    if test_suite == "toy":
+        return builder.build_toy_grid_space()
+    elif test_suite == 'presubmit':
+        return builder.build_presubmit_grid_space()
+    elif test_suite == 'small_models':
+        return builder.build_grid_space_12B() + builder.build_grid_space_50B()
+    elif test_suite == '12b':
+        return builder.build_grid_space_12B()
+    elif test_suite == '50b':
+        return builder.build_grid_space_50B()
+    elif test_suite == '150b':
+        return builder.build_grid_space_150B()
+    else:
+        raise ValueError(f"Unknown test suite: {test_suite}")
 
     # leaving it here for any custom local testing
     # test_configs = []
@@ -663,5 +663,5 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
     #         seq=seq,
     #         dtype=dtype,
     #     ))
-    return test_configs
+    # return test_configs
 
