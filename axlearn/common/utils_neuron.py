@@ -334,19 +334,20 @@ class GridSpaceBuilder:
         }
         # 12B Configs
         kwargs_12b = {
-            'input_dim': 7168,
+            'input_dim': 2048,
             'hidden_dim': 7168,
-            'mesh_spec': {"fsdp":-1, "model":16},
+            'mesh_spec': {"fsdp":-1, "model":4},
         }
 
         grid_space.extend([
             self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096),
-            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
-            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=1, capacity_factor=2, seq=4096),
-            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192),
-            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=1, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
-            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=2, capacity_factor=2, seq=4096),
-            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=2, capacity_factor=2, seq=4096),
+            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
+            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=1, capacity_factor=2, seq=4096),
+            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192),
+            self.create_test_config(**kwargs, **kwargs_12b, n_experts=1, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
+            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=2, capacity_factor=2, seq=4096),
+            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=2, capacity_factor=2, seq=4096),
+
         ])
         
         if self.layer == "moe":
@@ -545,11 +546,6 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
             golden_cfg = None
         conv_output = None
     elif layer == "attention":
-
-        # input_linear = GroupedQKVLinear.default_config().set(
-        #     num_kv_heads=8,
-        # )
-        
         attention_qkv_linear = RoFormerQKVLinear.default_config().set(
             input_linear=GroupedQKVLinear.default_config().set(
             num_kv_heads=8,
@@ -644,24 +640,24 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
         raise ValueError(f"Unknown test suite: {test_suite}")
 
     # leaving it here for any custom local testing
-    # test_configs = []
-    # for (batch, seq, input_dim,  hidden_dim, n_experts, top_k, n_groups,
-    #      out_batch, capacity_factor, mesh_spec, dtype) in grid_space:
-    #     test_configs.append(create_test_config(
-    #         test=test,
-    #         golden=golden,
-    #         test_device=test_device,
-    #         golden_device=golden_device,
-    #         input_dim=input_dim,
-    #         hidden_dim=hidden_dim,
-    #         n_experts=n_experts,
-    #         n_groups=n_groups,
-    #         top_k=top_k,
-    #         capacity_factor=capacity_factor, 
-    #         mesh_spec=mesh_spec,
-    #         batch=batch,
-    #         seq=seq,
-    #         dtype=dtype,
-    #     ))
-    # return test_configs
+    test_configs = []
+    for (batch, seq, input_dim,  hidden_dim, n_experts, top_k, n_groups,
+         out_batch, capacity_factor, mesh_spec, dtype) in grid_space:
+        test_configs.append(create_test_config(
+            test=test,
+            golden=golden,
+            test_device=test_device,
+            golden_device=golden_device,
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            n_experts=n_experts,
+            n_groups=n_groups,
+            top_k=top_k,
+            capacity_factor=capacity_factor, 
+            mesh_spec=mesh_spec,
+            batch=batch,
+            seq=seq,
+            dtype=dtype,
+        ))
+    return test_configs
 

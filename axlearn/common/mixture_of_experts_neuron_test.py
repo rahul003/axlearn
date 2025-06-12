@@ -276,9 +276,9 @@ class TestGatingOnCpu(GatingTestCase):
         super().__init__(*args, **kwargs)
         jax.config.update('jax_platform_name', 'cpu')
     
-#     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, layer='gating', test=TopKGatingGather, golden=TopKGating, test_device="cpu", golden_device="cpu"))
-#     def test_fwd_gather_vs_einsum(self, cfg):
-#         self.helper_fwd(cfg)
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, layer='gating', test=TopKGatingGather, golden=TopKGating, test_device="cpu", golden_device="cpu"))
+    def test_fwd_gather_vs_einsum(self, cfg):
+        self.helper_fwd(cfg)
 
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, layer='gating', test=TopKGatingGatherBlockwise, golden=None, test_device="cpu"))
     def test_fwd_blockwisegather(self, cfg):
@@ -294,10 +294,10 @@ class TestLayerOnCpu(LayerTestCase):
         super().__init__(*args, **kwargs)
         jax.config.update('jax_platform_name', 'cpu')
 
-#     @unittest.skip("test fwd skipped as fwd is part of fwd+bwd test")
-#     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGatingGather, test_device="cpu", golden_device="cpu"))
-#     def test_fwd_blockwisegather_vs_gather(self, cfg: TestCaseConfig):
-#         self.helper_fwd(cfg)
+    @unittest.skip("test fwd skipped as fwd is part of fwd+bwd test")
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGatingGather, test_device="cpu", golden_device="cpu"))
+    def test_fwd_blockwisegather_vs_gather(self, cfg: TestCaseConfig):
+        self.helper_fwd(cfg)
 
     @unittest.skip("test fwd skipped as fwd is part of fwd+bwd test")
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="cpu", golden_device="cpu"))
@@ -309,9 +309,9 @@ class TestLayerOnCpu(LayerTestCase):
     def test_fwdbwd_gather_vs_einsum(self, cfg: TestCaseConfig):
         self.helper_bwd(cfg)
 
-#     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="cpu", golden_device="cpu"))
-#     def test_fwdbwd_blockwisegather_vs_einsum(self, cfg: TestCaseConfig):
-#         self.helper_bwd(cfg)
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="cpu", golden_device="cpu"))
+    def test_fwdbwd_blockwisegather_vs_einsum(self, cfg: TestCaseConfig):
+        self.helper_bwd(cfg)
 
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="cpu", golden_device="cpu"))
     def test_fwdbwd_blockwisev2_vs_einsum(self, cfg: TestCaseConfig):
@@ -332,14 +332,14 @@ class TestLayerOnTrn(LayerTestCase):
     def test_fwd_blockwisegatherv2_vs_einsum(self, cfg):
         self.helper_fwd(cfg)
     
-    # @unittest.skip("skip gather")
-    # @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGather, golden=TopKGating, test_device="neuron", golden_device="cpu"))
-    # def test_fwdbwd_gather_vs_einsum(self, cfg: TestCaseConfig):
-    #     self.helper_bwd(cfg)
+    @unittest.skip("skip gather")
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGather, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+    def test_fwdbwd_gather_vs_einsum(self, cfg: TestCaseConfig):
+        self.helper_bwd(cfg)
 
-    # @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
-    # def test_fwdbwd_blockwisegather_vs_einsum(self, cfg: TestCaseConfig):
-    #     self.helper_bwd(cfg)
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+    def test_fwdbwd_blockwisegather_vs_einsum(self, cfg: TestCaseConfig):
+        self.helper_bwd(cfg)
 
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, layer="attention", test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
     def test_fwdbwd_blockwisegather_vs_einsum(self, cfg: TestCaseConfig):
