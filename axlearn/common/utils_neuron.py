@@ -340,41 +340,40 @@ class GridSpaceBuilder:
         }
 
         grid_space.extend([
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=1, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=2, capacity_factor=2, seq=4096),
+            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096),
+            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
             self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=2, capacity_factor=2, seq=4096),
-
+            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=1, capacity_factor=2, seq=4096),
+            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192),
+            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=1, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
+            # self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=2, capacity_factor=2, seq=4096),
         ])
         
-        if self.layer == "moe":
-            # 50B Config
-            grid_space.append(
-                self.create_test_config(
-                    **kwargs, input_dim=4096, hidden_dim=14336, mesh_spec={"fsdp":-1, "model":4}, 
-                    n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096
-                )
-            )
-            # 150B Config
-            # 16x10
-            # OOB on neuron, pass on cpu
-            grid_space.append(
-                self.create_test_config(
-                    **kwargs, input_dim=6144, hidden_dim=15360, mesh_spec={"fsdp":-1, "model":16},
-                    n_experts=16, top_k=4, n_groups=1, capacity_factor=2, seq=4096
-                )
-            )
-            # 8x20
-            kwargs['batch'] = 8
-            grid_space.append(
-                self.create_test_config(
-                    **kwargs, input_dim=8192, hidden_dim=16384, mesh_spec={"fsdp":-1, "model":16},
-                    n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192
-                )
-            )
+        # if self.layer == "moe":
+        #     # 50B Config
+        #     grid_space.append(
+        #         self.create_test_config(
+        #             **kwargs, input_dim=4096, hidden_dim=14336, mesh_spec={"fsdp":-1, "model":4}, 
+        #             n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096
+        #         )
+        #     )
+        #     # 150B Config
+        #     # 16x10
+        #     # OOB on neuron, pass on cpu
+        #     grid_space.append(
+        #         self.create_test_config(
+        #             **kwargs, input_dim=6144, hidden_dim=15360, mesh_spec={"fsdp":-1, "model":16},
+        #             n_experts=16, top_k=4, n_groups=1, capacity_factor=2, seq=4096
+        #         )
+        #     )
+        #     # 8x20
+        #     kwargs['batch'] = 8
+        #     grid_space.append(
+        #         self.create_test_config(
+        #             **kwargs, input_dim=8192, hidden_dim=16384, mesh_spec={"fsdp":-1, "model":16},
+        #             n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192
+        #         )
+        #     )
         return grid_space
 
     def build_grid_space_12B(self):

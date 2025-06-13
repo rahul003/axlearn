@@ -341,9 +341,9 @@ class TestLayerOnTrn(LayerTestCase):
     def test_fwdbwd_blockwisegather_vs_einsum(self, cfg: TestCaseConfig):
         self.helper_bwd(cfg)
 
-    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, layer="attention", test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
-    def test_fwdbwd_blockwisegather_vs_einsum(self, cfg: TestCaseConfig):
-        self.helper_bwd(cfg)
+    # @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, layer="attention", test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+    # def test_fwdbwd_blockwisegather_vs_einsum(self, cfg: TestCaseConfig):
+    #     self.helper_bwd(cfg)
 
     @unittest.skip("skip till change merged to compiler")
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
