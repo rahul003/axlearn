@@ -6,10 +6,15 @@
 # Licensed under the Apache License, Version 2.0 (the "License").
 """Utils for tests for mixture_of_experts.py"""
 import os
+import glob
+import shutil
+import numpy as np
+import json
 from functools import partial, cache
 from itertools import product
+from contextlib import contextmanager
 import math
-
+from datetime import datetime
 import jax
 import jax.numpy as jnp
 from jax.experimental import mesh_utils
@@ -23,12 +28,6 @@ from axlearn.common.mixture_of_experts import (
     get_outer_batch_from_mesh
 )
 
-from axlearn.common.layers import (
-    Dropout,
-    StochasticDepth,
-    RMSNorm,
-)
-#
 from axlearn.common.utils import PartitionSpec, infer_mesh_shape, cast_floats
 from axlearn.experiments.text.gpt.common import MESH_AXIS_NAMES, mesh_shape_from_axes
 from axlearn.common.param_init import PARAM_REGEXP_WEIGHT, DefaultInitializer, WeightInitializer
@@ -68,7 +67,7 @@ def build_name(cfg, invoker_cfg):
             block_size_str = f'_blocksize{cfg.gating.block_size}'
         else:
             block_size_str = ''
-        return f"MoE_b{invoker_cfg['batch_size']}_s{invoker_cfg['seq_len']}_i{cfg.input_dim}_h{cfg.hidden_dim}_e{cfg.num_experts}_topk{cfg.gating.top_k}_g{cfg.num_groups}_ec{cfg.gating.train_capacity_factor}{block_size_str}_mesh{mesh_str}_{dtype_str}"
+        return f"MoE_i{cfg.input_dim}_h{cfg.hidden_dim}_e{cfg.num_experts}_topk{cfg.gating.top_k}_g{cfg.num_groups}_ec{cfg.gating.train_capacity_factor}{block_size_str}_b{invoker_cfg['batch_size']}_s{invoker_cfg['seq_len']}_mesh{mesh_str}_{dtype_str}"
     else:
         # Gating layer
         E = invoker_cfg['input_shape'][-1]
@@ -125,8 +124,67 @@ class ModuleConfig():
         self.out_shard = None
         self.inputs = {}
         self.state = None
+        self.testid = None
         self.atol = TEST_TOLS_BF16['atol'] if self.dtype in ["bfloat16", jnp.bfloat16] else TEST_TOLS_FP32['atol']
         self.rtol = TEST_TOLS_BF16['rtol'] if self.dtype in ["bfloat16", jnp.bfloat16] else TEST_TOLS_FP32['rtol']
+        self.name = build_name(cfg, invoker_cfg)
+
+    def to_dict(self):
+        return {
+            'cfg': self.cfg.to_dict(),
+            'invoker_cfg': self.invoker_cfg,
+            'jax': jax.__version__,
+        }
+    
+    def matches_cached_config(self):
+        with open(os.path.join(self.golden_dump_path, 'golden_config_new.txt'), 'w') as f:
+            f.write(f"{self.to_dict()}")
+        with open(os.path.join(self.golden_dump_path, 'golden_config.txt'), 'r') as f:
+            loaded_cfg = f.read()
+        return f"{self.to_dict()}" == loaded_cfg
+
+    @property
+    def golden_dump_path(self):
+        if hasattr(self, '_golden_dump_path'):
+            return self._golden_dump_path
+        else:
+            GOLDENS_DIR = os.getenv('GOLDENS_DIR')
+            if GOLDENS_DIR:
+                testname = self.testid.split('.', 3)[-1]
+                self._golden_dump_path = os.path.join(GOLDENS_DIR, testname)
+            else:
+                self._golden_dump_path = None
+            return self._golden_dump_path
+
+    def dump_goldens(self, tensors):
+        os.makedirs(self.golden_dump_path, exist_ok=True)
+        with open(os.path.join(self.golden_dump_path, 'golden_config.txt'), 'w') as f:
+            f.write(f"{self.to_dict()}")
+        for k, v in tensors.items():
+            jnp.save(os.path.join(self.golden_dump_path, f'{k}.npy'), v, allow_pickle=True)
+
+    def load_goldens(self, tensors):
+        if not self.golden_dump_path or not os.path.exists(self.golden_dump_path):
+            print(self.testid, 'Could not find cache for test')
+            return False
+        if not self.matches_cached_config():
+            print(self.testid, 'Cached config does not match current config')
+            return False
+        for k in tensors.keys():
+            tensor_path = os.path.join(self.golden_dump_path, f'{k}.npy')
+            if not os.path.exists(tensor_path):
+                print('Incomplete cache, could not find', tensor_path)
+                return False
+            tensors[k] = jnp.load(tensor_path, allow_pickle=True)
+            if isinstance(tensors[k], np.ndarray):
+                val = tensors[k]
+                i = 0
+                for ck, v in np.ndenumerate(val):
+                    if i == 0:
+                        tensors[k] = v
+                    i+=1
+                assert i == 1, f"Expected single value, got {i} values"
+        return tensors
 
     @property
     def layer_type(self):
@@ -138,6 +196,46 @@ class ModuleConfig():
             return self.cfg.gating.__class__.__name__
         else:
             return self.cfg.__class__.__name__
+
+    @contextmanager
+    def dump_for_spectometer(self):
+        if self.device != "neuron":
+            yield
+            return
+
+        testname = self.testid.split('.', 3)[-1]
+        neuron_dump_path = os.path.join(os.environ.get('NEURON_DUMP_PATH'), testname)
+        os.environ["NEURON_CC_FLAGS"] = os.environ["NEURON_CC_FLAGS_BASE"] + f" --dump={neuron_dump_path}"
+        # Create dump folder if it doesn't exist
+        os.makedirs(neuron_dump_path, exist_ok=True)
+        # Create metadata JSON file for spectometer
+        metadata = {
+            "name": f"FSMoE-tests-integ-{testname}",
+            "hlo_generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "submitter_alias": "huilgolr",
+            "compiler_flags": os.environ["NEURON_CC_FLAGS_BASE"],
+            "target_instance_type": "trn2.48xl",
+            "model_info": {
+            },
+            "software": {
+                "jax": jax.__version__,
+                "axlearn": os.getenv("GIT_COMMIT")
+            },
+            "source_code_url": "https://github.com/rahul003/axlearn/",
+        }
+        metadata_path = os.path.join(neuron_dump_path, "hlo_metadata.json")
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+
+        yield
+
+        matches = glob.glob(os.path.join(neuron_dump_path, "**/*.code"))
+        if matches:
+            for match in matches:
+                shutil.copyfile(
+                    match,
+                    os.path.join(neuron_dump_path, "model.hlo_module.pb"),
+                )
 
 class TestCaseConfig():
     def __init__(
@@ -162,10 +260,12 @@ class TestCaseConfig():
         if self.golden:
             print('> Golden device:', self.golden.device, 'Layer:', self.golden.layer_type, 'Gating:', self.golden.gating_type)
     
-    def instantiate(self):
+    def instantiate(self, testid):
+        self.test.testid = testid
         self.test.mesh_dims = get_mesh_dims_from_spec(self.test.invoker_cfg["mesh_spec"])
         self.test.num_devices = math.prod(self.test.mesh_dims)
         if self.golden:
+            self.golden.testid = testid
             self.golden.mesh_dims = get_mesh_dims_from_spec(self.golden.invoker_cfg["mesh_spec"])
             self.golden.num_devices = math.prod(self.golden.mesh_dims)
         self.maybe_set_outer_batch()
@@ -304,52 +404,131 @@ class GridSpaceBuilder:
     
     def build_presubmit_grid_space(self):
         grid_space = []
+        tp_4_mesh_spec = {"fsdp":-1, "model":4}
+        tp_16_mesh_spec = {"fsdp":-1, "model":16}
+        tp_64_mesh_spec = {"fsdp":-1, "model":64}
         kwargs={
             'dtype': jnp.bfloat16,
             'batch': 16,
         }
-        # 12B Configs
-        kwargs_12b = {
-            'input_dim': 2048,
-            'hidden_dim': 7168,
-            'mesh_spec': {"fsdp":-1, "model":4},
-        }
-
+        # all tp4
         grid_space.extend([
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=1, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=2, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=2, capacity_factor=2, seq=4096),
+            # 12b
+            self.create_test_config(
+                **kwargs, input_dim=2048, hidden_dim=7168, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096, mesh_spec=tp_4_mesh_spec,
+            ),
+            # switch base
+            self.create_test_config(
+                **kwargs, input_dim=1536, hidden_dim=6144, n_experts=128, top_k=2, n_groups=1, capacity_factor=2, seq=8192, mesh_spec=tp_4_mesh_spec,
+            ),
+            # 50b
+            self.create_test_config(
+                **kwargs, input_dim=4096, hidden_dim=14336, n_experts=8, top_k=2, n_groups=4, capacity_factor=2, seq=8192, mesh_spec=tp_4_mesh_spec,
+            ),
+            # llama4 scout
+            self.create_test_config(
+                **kwargs, input_dim=5120, hidden_dim=8192, n_experts=16, top_k=1, n_groups=1, capacity_factor=4, seq=4096, mesh_spec=tp_4_mesh_spec,
+            ),
         ])
         
         if self.layer == "moe":
-            # 50B Config
+            # all tp16
+            kwargs['batch'] = 4
+            # switch large
             grid_space.append(
                 self.create_test_config(
-                    **kwargs, input_dim=4096, hidden_dim=14336, mesh_spec={"fsdp":-1, "model":4}, 
+                **kwargs, input_dim=2048, hidden_dim=8196, n_experts=128, top_k=4, n_groups=1, capacity_factor=2, seq=2048, mesh_spec=tp_16_mesh_spec,
+                )
+            )
+            # deepseek
+            self.create_test_config(
+                **kwargs, input_dim=7168, hidden_dim=2048, n_experts=256, top_k=8, n_groups=4, capacity_factor=4, seq=4096, mesh_spec=tp_4_mesh_spec,
+            ),
+            # dbrx
+            grid_space.append(
+                self.create_test_config(
+                    **kwargs, input_dim=6144, hidden_dim=10752, mesh_spec=tp_16_mesh_spec,
+                    n_experts=16, top_k=4, n_groups=1, capacity_factor=4, seq=4096
+                )
+            )
+            # 16x10b
+            grid_space.append(
+                self.create_test_config(
+                    **kwargs, input_dim=6144, hidden_dim=15360, mesh_spec=tp_16_mesh_spec,
+                    n_experts=16, top_k=4, n_groups=1, capacity_factor=4, seq=4096
+                )
+            )
+            # 8x20b
+            grid_space.append(
+                self.create_test_config(
+                    **kwargs, input_dim=8192, hidden_dim=16384, mesh_spec=tp_16_mesh_spec,
                     n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096
                 )
             )
-            # 150B Config
-            # 16x10
-            # OOB on neuron, pass on cpu
+            # switch xxl
             grid_space.append(
                 self.create_test_config(
-                    **kwargs, input_dim=6144, hidden_dim=15360, mesh_spec={"fsdp":-1, "model":16},
-                    n_experts=16, top_k=4, n_groups=1, capacity_factor=2, seq=4096
+                    **kwargs, input_dim=8192, hidden_dim=20480, mesh_spec=tp_16_mesh_spec,
+                    n_experts=64, top_k=2, n_groups=1, capacity_factor=2, seq=8192
                 )
             )
-            # 8x20
-            kwargs['batch'] = 8
+            # llama 4 maverick
             grid_space.append(
                 self.create_test_config(
-                    **kwargs, input_dim=8192, hidden_dim=16384, mesh_spec={"fsdp":-1, "model":16},
-                    n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192
+                    **kwargs, input_dim=5120, hidden_dim=6144, mesh_spec=tp_16_mesh_spec,
+                    n_experts=128, top_k=1, n_groups=1, capacity_factor=2, seq=8192
                 )
             )
+
+            # tp64
+            # 8x20b
+            kwargs['batch'] = 1
+            grid_space.append(
+                self.create_test_config(
+                    **kwargs, input_dim=8192, hidden_dim=16384, mesh_spec=tp_64_mesh_spec,
+                    n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096
+                )
+            )
+        return grid_space
+
+    def build_grid_space_input_hidden(self, input_dim=2048, hidden_dim=7168, min_tp=None, max_tp=None, max_E=None, dtype=jnp.bfloat16):
+        # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
+        # Grid space for testing
+        grid_space = []
+        batch_sizes = {
+            4: 16,
+            8: 8,
+            16: 4,
+            32: 2,
+            64: 1,
+        }
+        tp_degrees = [4, 16, 64]
+        tp_degrees = [d for d in tp_degrees if min_tp is None or d >= min_tp]
+        tp_degrees = [d for d in tp_degrees if max_tp is None or d <=  max_tp]
+        kwargs={
+            'dtype': dtype,
+            'input_dim': int(input_dim),
+            'hidden_dim': int(hidden_dim),
+        }
+        for tp_degree in tp_degrees:
+            mesh_spec = {"fsdp": -1, "model": tp_degree}
+            batch = batch_sizes[tp_degree]
+            for E in [1, 8, 16, 64, 128, 256]:
+                if max_E and E > max_E:
+                    # to skip large Es for large experts
+                    break
+                if E >= 64 and tp_degree < 16:
+                    continue
+                # min sparsity of 25% assumed
+                for K in [1, 2, 4, 8, 16]:
+                    if E >= K*4:
+                        break
+                    for G in [1, 4]:
+                        if G > E:
+                            break
+                        cf = 2
+                        for S in [8*1024, 16*1024]:
+                            grid_space.append(self.create_test_config(**kwargs, n_experts=E, top_k=K, n_groups=G, capacity_factor=cf, seq=S, batch=batch, mesh_spec=mesh_spec))
         return grid_space
 
     def build_grid_space_12B(self):
@@ -440,36 +619,40 @@ class GridSpaceBuilder:
 
         grid_space.extend([
             # base
-            self.create_test_config(**kwargs, n_experts=16, top_k=4, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
+            self.create_test_config(**kwargs, n_experts=16, top_k=4, n_groups=1, capacity_factor=2, batch=4, seq=8192, mesh_spec={"fsdp":-1, "model":16}),
             # topk changes
-            self.create_test_config(**kwargs, n_experts=16, top_k=1, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
-            self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
-            self.create_test_config(**kwargs, n_experts=16, top_k=8, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
+            self.create_test_config(**kwargs, n_experts=16, top_k=1, n_groups=1, capacity_factor=2, batch=4, seq=8192, mesh_spec={"fsdp":-1, "model":16}),
+            self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=8192, mesh_spec={"fsdp":-1, "model":16}),
+            self.create_test_config(**kwargs, n_experts=16, top_k=8, n_groups=1, capacity_factor=2, batch=4, seq=8192, mesh_spec={"fsdp":-1, "model":16}),
             # capf change
-            self.create_test_config(**kwargs, n_experts=16, top_k=8, n_groups=1, capacity_factor=4, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
+            self.create_test_config(**kwargs, n_experts=16, top_k=8, n_groups=1, capacity_factor=4, batch=4, seq=8192, mesh_spec={"fsdp":-1, "model":16}),
 
             # seqlen changes
             # using 8x20b
-            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=256, mesh_spec={"fsdp":-1, "model":4}),
-            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=2048, mesh_spec={"fsdp":-1, "model":4}),
-            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=8192, mesh_spec={"fsdp":-1, "model":4}),
-            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=16*1024, mesh_spec={"fsdp":-1, "model":4}),
-            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=32*1024, mesh_spec={"fsdp":-1, "model":4}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=256, mesh_spec={"fsdp":-1, "model":16}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=2048, mesh_spec={"fsdp":-1, "model":16}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=8192, mesh_spec={"fsdp":-1, "model":16}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=16*1024, mesh_spec={"fsdp":-1, "model":16}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=32*1024, mesh_spec={"fsdp":-1, "model":16}),
 
-            # tp8
+            # tp changes
             # self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=2, capacity_factor=2, batch=8, seq=4096, mesh_spec={"fsdp":-1, "model":8}),
-            self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=2, capacity_factor=2, batch=4, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
+            self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
             # self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=2, capacity_factor=2, batch=2, seq=4096, mesh_spec={"fsdp":-1, "model":32}),
-            self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=2, capacity_factor=2, batch=1, seq=4096, mesh_spec={"fsdp":-1, "model":64}),
+            self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=1, capacity_factor=2, batch=1, seq=4096, mesh_spec={"fsdp":-1, "model":64}),
             
             # num groups
-            self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=4, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
+            self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=4, capacity_factor=2, batch=4, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
 
             # num experts
-            self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
+            # self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}), # not-needed
+
+            #batch per TP-group
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=8, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
         ])
         return grid_space
-
 
 def get_gating_config(gating_cls, num_experts, top_k, train_capacity_factor, expert_capacity, block_size=None, name=None):
 
@@ -554,10 +737,29 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
         golden_invoker_cfg,
         loss_fn=lambda x: jnp.mean(x)*1e2,
         conv_output=conv_output,
-        prefix="_moe"
+        prefix="_moe" if layer == "moe" else "_gating"
     )
+    return (build_name(test_cfg, test_invoker_cfg), config)
 
-    return (build_name(test_cfg, test_invoker_cfg) + config.prefix, config)
+@cache
+def get_gating_configs(test_suite="presubmit", layer='moe', test=TopKGatingGather, golden=TopKGating, test_device="neuron", golden_device="cpu"):
+    builder = GridSpaceBuilder(layer=layer, test=test, golden=golden, test_device=test_device, golden_device=golden_device)
+    if test_suite == 'presubmit':
+        return builder.build_presubmit_grid_space()
+    elif test_suite == 'small_models':
+        return builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=7168)
+    elif test_suite == 'large_models':
+        # same as for small_models
+        return builder.build_presubmit_grid_space()[:1]
+    elif test_suite == '12b':
+        return builder.build_grid_space_12B()
+    elif test_suite == '50b':
+        return builder.build_grid_space_50B()
+    elif test_suite == '150b':
+        return builder.build_grid_space_150B()
+    else:
+        raise ValueError(f"Unknown test suite: {test_suite}")
+
 
 @cache
 def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGather, golden=TopKGating, test_device="neuron", golden_device="cpu"):
@@ -566,14 +768,40 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
         return builder.build_toy_grid_space()
     elif test_suite == 'presubmit':
         return builder.build_presubmit_grid_space()
-    elif test_suite == 'small_models':
-        return builder.build_grid_space_12B() + builder.build_grid_space_50B()
     elif test_suite == '12b':
         return builder.build_grid_space_12B()
     elif test_suite == '50b':
         return builder.build_grid_space_50B()
     elif test_suite == '150b':
         return builder.build_grid_space_150B()
+    elif test_suite == 'small_models':
+        grid_space = []
+        # qwen3-30b
+        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=6144, max_E=128))
+        # switch base
+        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=1536, hidden_dim=6144, max_tp=16))
+        # switch large
+        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16))
+        # mixtral 50b
+        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=14336, max_E=16, max_tp=16))
+        # llama4 scout (topk=1, E=16)
+        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=8192, max_E=64, max_tp=16))
+        # deepseek v3
+        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=7168, hidden_dim=2048, max_tp=16))
+        return grid_space
+    elif test_suite == 'large_models':
+        grid_space = []
+        # qwen3-235b
+        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=12288, min_tp=16, max_E=128))
+        # 150b
+        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=6144, hidden_dim=15360, min_tp=16, max_tp=32, max_E=16))
+        # 8x20b
+        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=8192, hidden_dim=16384, max_E=16))
+        # switch_xxl
+        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=8192, hidden_dim=20480, min_tp=16, max_E=64))
+        # llama4 maverick
+        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=6144, min_tp=16, max_tp=16))
+        return grid_space
     else:
         raise ValueError(f"Unknown test suite: {test_suite}")
 
