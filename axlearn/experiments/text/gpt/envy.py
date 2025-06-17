@@ -50,7 +50,7 @@ from axlearn.common.attention import (
 from axlearn.common.base_layer import RematSpec
 from axlearn.common.embedding import TransformerTextEmbeddings
 from axlearn.common.layers import RMSNorm
-from axlearn.common.mixture_of_experts import TransformerFeedForwardMoE, get_outer_batch_from_mesh, TopKGatingGather, TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2
+from axlearn.common.mixture_of_experts import TransformerFeedForwardMoE, get_outer_batch_from_mesh, TopKGatingGather, TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2, TopKGating
 from axlearn.common.trainer import SpmdTrainer
 from axlearn.common.trainer_config_modifier import (
     ChainConfigModifier,
@@ -266,8 +266,8 @@ def common_trainer_kwargs() -> dict[str, Any]:
             "alpha": 1 / 200.0,
             "weight_decay": 3.16e-4,
         },
-        "save_every_n_steps": 250000,
-        "keep_every_n_steps": 250000,
+        "save_every_n_steps": 100,
+        "keep_last_n": 2,
         "eval_every_n_steps": 250_000,
         "mesh_shape": mesh_shape_from_axes(data=-1),
     }
@@ -671,6 +671,17 @@ def get_trainer_kwargs(
                         ],
                     ),
                 ),
+                (
+                    "gpu-7b-mesh",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(data=1, fsdp=-1, model=8)
+                            ),
+                            remat_policy,
+                        ],
+                    ),
+                ),
             ),
         )
     # pylint: enable=use-dict-literal
@@ -678,10 +689,10 @@ def get_trainer_kwargs(
         raise NotImplementedError(f"Unknown model size {model_size}.")
 
     merged_trainer_kwargs = common_trainer_kwargs()
-    callback_modify_trainer_kwargs_env_vars(trainer_kwargs)
     merged_trainer_kwargs.update(
         {k: v for k, v in trainer_kwargs.items() if k not in ("model_kwargs", "learner_kwargs")}
     )
+    callback_modify_trainer_kwargs_env_vars(trainer_kwargs)
     # Update the model_kwargs
     model_kwargs: dict[str, Any] = merged_trainer_kwargs.pop("model_kwargs")
     model_kwargs.update(trainer_kwargs.get("model_kwargs", {}))
@@ -754,7 +765,7 @@ def model_config(
     attention_mask = None
     # RoPE embeddings: https://arxiv.org/abs/2104.09864.
     attention_qkv_linear = RoFormerQKVLinear.default_config().set(
-        input_linear=FusedGroupedQKVLinear.default_config().set(
+        input_linear=GroupedQKVLinear.default_config().set(
             num_kv_heads=num_kv_heads,
         ),
         rotary_value=False,
@@ -777,12 +788,12 @@ def model_config(
         outer_batch_size = get_outer_batch_from_mesh(
             MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, mesh_shape
         )
-
-    use_blockwise = int(os.getenv('AXLEARN_USE_BLOCKWISE', 1))
     if use_blockwise == 1:
         gating_type = TopKGatingGatherBlockwise
     elif use_blockwise == 2:
         gating_type = TopKGatingGatherBlockwiseV2
+    elif use_blockwise == 3:
+        gating_type = TopKGating
     else:
         gating_type = TopKGatingGather
     expert_config = TransformerFeedForwardMoE.default_config().set(

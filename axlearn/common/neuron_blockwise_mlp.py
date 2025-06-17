@@ -154,8 +154,7 @@ def _blockwise_mm_bwd(
             block_to_expert.astype(jnp.int32),
             grad_output,
             block_size=block_size,
-            # ktype=2 if block_to_expert.shape[-1] == down_proj_weight.shape[0] else 1,
-            # need new compiler for this line
+            ktype=2 if block_to_expert.shape[-1] == down_proj_weight.shape[0] else 1,
         )
         
         sliced_tensor = hidden_states_grad[:-1,:]
