@@ -130,13 +130,13 @@ MOE_DIM_TO_MESH_AXIS_MAP = {
 }
 
 def get_ffn_layer_types():
-    ffn_type = os.getenv("AXLEARN_MIXTRAL_MOE", "1")
+    ffn_type = os.getenv("AXLEARN_MOE_LAYER_FREQ", "1")
     if ffn_type == "0":
         ffn_layer_types = ["dense"]
     elif ffn_type == "1":
         ffn_layer_types = ["sparse"]
     elif ffn_type == "2":
-        ffn_layer_types = ["sparse", "dense"]
+        ffn_layer_types = ["dense", "sparse"]
     return ffn_layer_types
 
 def get_remat_policy():
@@ -419,6 +419,12 @@ def get_trainer_kwargs(
     """Construct default trainer kwargs given a model size."""
     tokens_per_batch = 8 * (1024**2)  # 8M tokens.
     trn2_config = _generate_trn2_custom_configs(model_size)
+    remat_policy = get_remat_policy()
+    ffn_layer_types = get_ffn_layer_types()
+    fsdp_degree=int(os.getenv("AXLEARN_FSDP_DEGREE", -1))
+    tp_degree=int(os.getenv("AXLEARN_TP_DEGREE", 4))
+    ep_degree=int(os.getenv("AXLEARN_EP_DEGREE", 1))
+    neuron_mesh = mesh_shape_from_axes(fsdp=fsdp_degree, model=tp_degree, expert=ep_degree)
     # check_env_vars()
     # pylint: disable=use-dict-literal
     if model_size == "test":
@@ -446,9 +452,12 @@ def get_trainer_kwargs(
         )
     elif model_size == "Switch-Base":
         # Num of parameters: 30B.
+        # ffn_layer_types = get_ffn_layer_types()
+        num_layers=int(os.getenv("AXLEARN_NUM_LAYERS", 12))
+        ffn_layer_types = get_ffn_layer_types()
         trainer_kwargs = dict(
             model_kwargs=dict(
-                num_layers=12,
+                num_layers=num_layers,
                 hidden_dim=12 * 128,
                 ffn_dim=scaled_hidden_dim(scale=4, round_up_to_multiples_of=128),
                 num_heads=12,
@@ -458,10 +467,8 @@ def get_trainer_kwargs(
                 num_groups=2,
                 ffn_structure="hybridnorm",
                 # MoE layer every 2 layers.
-                ffn_layer_types=[
-                    "dense",
-                    "sparse",
-                ],
+                ffn_layer_types=ffn_layer_types,
+                outer_batch_size=get_outer_batch_from_mesh(MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, neuron_mesh),
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
             max_sequence_length=max_sequence_length,
@@ -494,6 +501,21 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 mesh_shape=mesh_shape_from_axes(data=-1, expert=16, fsdp=16)
                             ),
+                        ],
+                    ),
+                ),
+                (
+                    "neuron-(trn2|trn2n).48xlarge-64",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                # TP within the chip, FSDP across chips.
+                                # Each TRN2 chip has 4 XLA cores.
+                                mesh_shape=neuron_mesh
+                            ),
+                            *trn2_config.module_modifications,
+                            *trn2_config.partition_spec_modifications,
+                            remat_policy,
                         ],
                     ),
                 ),
@@ -555,6 +577,21 @@ def get_trainer_kwargs(
                         ],
                     ),
                 ),
+                (
+                    "neuron-(trn2|trn2n).48xlarge-64",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                # TP within the chip, FSDP across chips.
+                                # Each TRN2 chip has 4 XLA cores.
+                                mesh_shape=neuron_mesh
+                            ),
+                            *trn2_config.module_modifications,
+                            *trn2_config.partition_spec_modifications,
+                            remat_policy,
+                        ],
+                    ),
+                ),
             ),
         )
     elif model_size == "Switch-XXL":
@@ -584,12 +621,6 @@ def get_trainer_kwargs(
             mesh_shape=mesh_shape_from_axes(fsdp=-1, expert=16, model=8),
         )
     elif "Mistral" in model_size:
-        ffn_layer_types = get_ffn_layer_types()
-        remat_policy = get_remat_policy()
-        tp_degree=int(os.getenv("AXLEARN_TP_DEGREE", 4))
-        fsdp_degree=int(os.getenv("AXLEARN_FSDP_DEGREE", -1))
-        ep_degree=int(os.getenv("AXLEARN_EP_DEGREE", 1))
-        neuron_mesh = mesh_shape_from_axes(fsdp=fsdp_degree, model=tp_degree, expert=ep_degree)
         num_layers=int(os.getenv("AXLEARN_NUM_LAYERS", 4))
         ffn_sparse_top_k=4
         num_kv_heads = max(8, tp_degree)
