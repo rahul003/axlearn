@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
-
+sudo rmmod neuron; sudo modprobe neuron
 if [ -z "$VENV_NAME" ]; then
 	VENV_NAME=../jaxmoe
 fi
@@ -43,7 +43,7 @@ export NEURON_DISABLE_BOUNDARY_MARKER=1
 
 # Neuron runtime flags
 export NEURON_RT_DBG_CC_DMA_PACKET_SIZE=4096 && export NEURON_RT_DBG_DMA_PACKETIZATION_SIZE=104857
-export NEURON_RT_ASYNC_EXEC_MAX_INFLIGHT_REQUESTS=1
+export NEURON_RT_ASYNC_EXEC_MAX_INFLIGHT_REQUESTS=0
 export NEURON_RT_IO_RING_CACHE_SIZE=0
 export NEURON_RT_ENABLE_MEMORY_METRICS=0
 export NEURON_RT_VIRTUAL_CORE_SIZE=2
@@ -72,9 +72,7 @@ export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --internal-hlo2tensorizer-o
 export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} -O1"
 export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --tensorizer-options='--enable-hoist-fsdp-collectives'"
 export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --internal-hlo2tensorizer-options='--remat-rope --verify-hlo'"
-export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --auto-cast=none --hbm-scratchpad-page-size=1024"
-
-export NEURON_SCRATCHPAD_PAGE_SIZE=1024
+export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --auto-cast=none" # --hbm-scratchpad-page-size=1024"
 export TF_CPP_MIN_LOG_LEVEL=3
 
 set -ex
@@ -83,7 +81,7 @@ if [ "$1" = "unit" ]; then
     export JAX_PLATFORMS=cpu
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/unit.xml axlearn/common/mixture_of_experts_neuron_test.py::TestLayerOnCpu
 elif [ "$1" = "integ" ]; then
-    pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ.xml axlearn/common/mixture_of_experts_neuron_test.py::TestLayerOnTrn
+    pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestLayerOnTrn"
 elif [ "$1" = "150bdev" ]; then
     export TEST_SUITE="150b"
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_integ.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestDev150bInteg or TestDev150bGatingInteg"

@@ -17,8 +17,9 @@ import jax
 import math
 import numpy as np
 import jax.numpy as jnp
+from jax.sharding import Sharding
 from jax_neuronx.experimental import debug_callback
-
+from axlearn.common.utils import PartitionSpec
 from absl.testing import absltest, parameterized
 from axlearn.common.mixture_of_experts import TopKGatingGather, TopKGating, TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2
 from axlearn.common.module import functional as F
@@ -80,75 +81,84 @@ class LayerTestCase(TestCase):
             self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output),
                                     atol=cfg.test.atol, rtol=cfg.test.rtol)
 
+    def _load_or_compute_goldens(self, golden_bwd_call, cfg, use_cached_goldens, cache_goldens):
+        if use_cached_goldens:
+            gold_tensors = {
+                'golden_loss': None,
+                'golden_grads': None,
+                'golden_output': None
+            }
+            if not cfg.golden.load_goldens(gold_tensors):
+                # can't find goldens
+                use_cached_goldens = False
+            else:
+                golden_loss = gold_tensors['golden_loss']
+                golden_grads = gold_tensors['golden_grads']
+                golden_output = gold_tensors['golden_output']
+
+        if not use_cached_goldens:
+            jax.config.update('jax_platform_name', cfg.golden.device)
+            with cfg.golden.mesh:
+                golden_loss, golden_grads, golden_output = golden_bwd_call(cfg.golden.layer, cfg.golden.state, cfg.golden.inputs)
+                #Transfer results to CPU before comparison
+                if cfg.golden.device == "neuron":
+                    # we never have this case in current tests
+                    golden_loss = jax.tree_map(jax.device_get, golden_loss)
+                    golden_grads = jax.tree_map(jax.device_get, golden_grads)
+                    golden_output = jax.tree_map(jax.device_get, golden_output)
+
+            if cache_goldens:
+                assert cfg.golden.device == "cpu", "Golden device must be cpu for caching"
+                cfg.golden.dump_goldens({
+                    'golden_loss': golden_loss,
+                    'golden_grads': golden_grads,
+                    'golden_output': golden_output
+                })
+        return golden_loss, golden_grads, golden_output
+
+    def create_golden_bwd_fn(self, cfg):
+        @partial(jax.jit, static_argnums=0, out_shardings=(None, cfg.golden.param_partition_specs, None))
+        def golden_bwd_call(golden_layer, golden_state, golden_inputs):
+            def loss_fn(state):
+                output, aux = self._fwd_call(golden_layer, state, golden_inputs)
+                return cfg.loss_fn(output), output  # Return both loss and output
+            (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(golden_state)
+            return loss, grads, output
+        return golden_bwd_call
+
+    def create_test_bwd_fn(self, cfg):
+        @partial(jax.jit, static_argnums=0, in_shardings=(cfg.test.param_partition_specs, None), out_shardings=(None, cfg.test.param_partition_specs, None))
+        def test_bwd_call(test_layer, test_state, test_inputs):
+            def loss_fn(state):
+                output, aux = self._fwd_call(test_layer, state, test_inputs)
+                return cfg.loss_fn(output), output
+            (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+            return loss, grads, output
+        return test_bwd_call
+
     def helper_bwd(self, cfg: TestCaseConfig):
         cfg.instantiate(unittest.TestCase.id(self))
         cfg.print_summary()
         use_cached_goldens = int(os.getenv("USE_CACHED_GOLDENS", "0"))
         cache_goldens = int(os.getenv("CACHE_GOLDENS", "0"))
-        @partial(jax.jit, static_argnums=0)
-        def test_bwd_call(test_layer, test_state, test_inputs):
-            def loss_fn(state):
-                output, aux = self._fwd_call(test_layer, state, test_inputs)
-                return cfg.loss_fn(output), output  # Return both loss and output
 
-            (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
-            return loss, grads, output
-
-        @partial(jax.jit, static_argnums=0)
-        def golden_bwd_call(golden_layer, golden_state, golden_inputs):
-            def loss_fn(state):
-                output, aux = self._fwd_call(golden_layer, state, golden_inputs)
-                return cfg.loss_fn(output), output  # Return both loss and output
-
-            (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(golden_state)
-            return loss, grads, output
-
-        jax.config.update('jax_platform_name', cfg.test.device)
-        with cfg.test.mesh, cfg.test.dump_for_spectometer():
-            test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
-        
-        test_output = jax.tree_map(jax.device_get, test_output)
-        test_loss = jax.tree_map(jax.device_get, test_loss)
-        test_grads = jax.tree_map(jax.device_get, test_grads)
         if cfg.golden:
-            if use_cached_goldens:
-                gold_tensors = {
-                    'golden_loss': None,
-                    'golden_grads': None,
-                    'golden_output': None
-                }
-                if not cfg.golden.load_goldens(gold_tensors):
-                    # can't find goldens
-                    use_cached_goldens = False
-                else:
-                    golden_loss = gold_tensors['golden_loss']
-                    golden_grads = gold_tensors['golden_grads']
-                    golden_output = gold_tensors['golden_output']
+            golden_bwd_call = self.create_golden_bwd_fn(cfg)
+            golden_loss, golden_grads, golden_output = self._load_or_compute_goldens(golden_bwd_call, cfg, use_cached_goldens, cache_goldens)
 
-            if not use_cached_goldens:
-                jax.config.update('jax_platform_name', cfg.golden.device)
-                with cfg.golden.mesh:
-                    golden_loss, golden_grads, golden_output = golden_bwd_call(cfg.golden.layer, cfg.golden.state, cfg.golden.inputs)
-
-                    #Transfer results to CPU before comparison
-                    if cfg.golden.device == "neuron":
-                        golden_loss = jax.tree_map(jax.device_get, golden_loss)
-                        golden_grads = jax.tree_map(jax.device_get, golden_grads)
-                        golden_output = jax.tree_map(jax.device_get, golden_output)
-            
-                if cache_goldens:
-                    assert cfg.golden.device == "cpu", "Golden device must be cpu for caching"
-                    cfg.golden.dump_goldens({
-                        'golden_loss': golden_loss,
-                        'golden_grads': golden_grads,
-                        'golden_output': golden_output
-                    })
-            # Compare losses
+        test_bwd_call = self.create_test_bwd_fn(cfg)
+        with cfg.test.mesh:
+            jax.config.update('jax_platform_name', cfg.test.device)
+            with cfg.test.dump_for_spectometer():
+                test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+        if cfg.golden:
             self.assertNestedAllClose(test_loss, golden_loss, atol=cfg.test.atol, rtol=cfg.test.rtol)
-            # Compare gradients
             self.assertNestedAllClose(test_grads, golden_grads, atol=cfg.test.atol, rtol=cfg.test.rtol)
-            # Compare outputs
             self.assertNestedAllClose(test_output, golden_output, atol=cfg.test.atol, rtol=cfg.test.rtol)
+            cfg.golden.reset()
+            del golden_loss, golden_grads, golden_output
+        del test_loss, test_grads, test_output
+        cfg.test.reset()
 
 class GatingTestCase(TestCase):
     def _fwd_call(self, layer, state, inputs):
@@ -360,15 +370,20 @@ class TestLayerOnCpu(LayerTestCase):
     def test_fwdbwd_blockwisegather(self, cfg: TestCaseConfig):
         self.helper_bwd(cfg)
 
-    # skipping last 4 as they are going Out of memory on CPU
-    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="cpu", golden_device="cpu")[:-4])
-    def test_fwdbwd_blockwisev2(self, cfg: TestCaseConfig):
-        self.helper_bwd(cfg)
+    # skipping as going Out of memory on CPU
+    # @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="cpu", golden_device="cpu")[:-4])
+    # def test_fwdbwd_blockwisev2(self, cfg: TestCaseConfig):
+    #     self.helper_bwd(cfg)
 
 class TestLayerOnTrn(LayerTestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         jax.config.update('jax_platform_name', 'neuron')
+    
+    # def tearDown(self):
+    #     output = subprocess.check_output(["/fsx/huilgolr/axlearn/get_memory_split.sh"], shell=True, text=True)
+    #     print(output)
+    #     return super().tearDown()
 
     @unittest.skip("test fwd skipped as fwd is part of fwd+bwd test")
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))

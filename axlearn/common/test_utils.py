@@ -238,13 +238,14 @@ class TestCase(parameterized.TestCase):
             if isinstance(a_value, (np.ndarray, jnp.ndarray)) or isinstance(
                 b_value, (np.ndarray, jnp.ndarray)
             ):
+                # for shard in a_value.addressable_shards:
+                # print(type(a_value), a_value.sharding, a_value.addressable_shards)
                 a_value, b_value = as_numpy_array(a_value), as_numpy_array(b_value)
                 self.assertEqual(a_value.dtype, b_value.dtype, msg=f"{a_name}")
                 self.assertEqual(a_value.shape, b_value.shape, msg=f"{a_name}")
                 assert_allclose(a_value, b_value, atol=atol, rtol=rtol, err_msg=f"{a_name}")
             else:
                 self.assertAlmostEqual(a_value, b_value, msg=f"{a_name}")
-
     def assertNestedEqual(self, a, b):
         a_kv = flatten_items(a)
         b_kv = flatten_items(b)
