@@ -640,7 +640,7 @@ class GridSpaceBuilder:
             self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
             self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=8192, mesh_spec={"fsdp":-1, "model":16}),
             self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=16*1024, mesh_spec={"fsdp":-1, "model":16}),
-            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=32*1024, mesh_spec={"fsdp":-1, "model":16}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=1, seq=32*1024, mesh_spec={"fsdp":-1, "model":64}),
 
             # tp changes
             # self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=2, capacity_factor=2, batch=8, seq=4096, mesh_spec={"fsdp":-1, "model":8}),
