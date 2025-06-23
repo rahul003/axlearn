@@ -28,6 +28,7 @@ from axlearn.common.utils_neuron import TestCaseConfig, create_test_config, get_
 import os
 
 
+
 TEST_SUITE = os.environ.get("TEST_SUITE", 'presubmit').lower()
 class LayerTestCase(TestCase):
     def _fwd_call(self, layer, state, inputs):
@@ -380,10 +381,13 @@ class TestLayerOnTrn(LayerTestCase):
         super().__init__(*args, **kwargs)
         jax.config.update('jax_platform_name', 'neuron')
     
-    # def tearDown(self):
-    #     output = subprocess.check_output(["/fsx/huilgolr/axlearn/get_memory_split.sh"], shell=True, text=True)
-    #     print(output)
-    #     return super().tearDown()
+    def tearDown(self):
+        from jax._src import xla_bridge as xb
+        xb._clear_backends()
+        import subprocess
+        output = subprocess.check_output(["/fsx/huilgolr/axlearn/get_memory_split.sh"], shell=True, text=True)
+        print(output)
+        return super().tearDown()
 
     @unittest.skip("test fwd skipped as fwd is part of fwd+bwd test")
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
