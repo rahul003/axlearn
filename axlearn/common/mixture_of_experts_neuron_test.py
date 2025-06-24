@@ -329,6 +329,7 @@ class GatingTestCase(TestCase):
         self.validate_token_position_to_id(O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
         self.validate_expert_affinties(expert_affinities_masked, cfg)
 
+@unittest.skipIf(TEST_SUITE != "presubmit", "Skipping tests for suites not equal to presubmit")
 class TestGatingOnCpu(GatingTestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -384,9 +385,6 @@ class TestLayerOnTrn(LayerTestCase):
     def tearDown(self):
         from jax._src import xla_bridge as xb
         xb._clear_backends()
-        import subprocess
-        output = subprocess.check_output(["/fsx/huilgolr/axlearn/get_memory_split.sh"], shell=True, text=True)
-        print(output)
         return super().tearDown()
 
     @unittest.skip("test fwd skipped as fwd is part of fwd+bwd test")

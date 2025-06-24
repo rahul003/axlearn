@@ -8,9 +8,9 @@ fi
 source $VENV_NAME/bin/activate
 
 export TEST_SUITE=${2:-"presubmit"}
-export TEST_LOG_DIR=${3:-"test_logs/shell"}
+export TEST_LOG_DIR=${3:-"test_artifacts/shell"}
 export GOLDENS_DIR=${4:-"test_goldens"}
-export JAX_COMPILATION_CACHE_DIR=${5:-"test_jax_cc"}
+export JAX_COMPILATION_CACHE_DIR=${5:-"test_artifacts/shell_jax_cc"}
 
 
 mkdir -p "${JAX_COMPILATION_CACHE_DIR}"
@@ -61,18 +61,18 @@ export FI_EFA_FORK_SAFE=1
 export OFI_NCCL_MR_CACHE_DISABLE=1
 
 # Neuron compiler flags
-export NEURON_CC_FLAGS_BASE="--framework=XLA"
-export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --internal-max-instruction-limit=20000000"
-export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --target=trn2"
-export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --internal-num-neuroncores-per-sengine=2"
-export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --model-type transformer"
-export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --no-internal-hlo-remat"
-export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --enable-mixed-precision-accumulation"
-export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --internal-hlo2tensorizer-options=--verify-hlo"
-export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} -O1"
-export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --tensorizer-options='--enable-hoist-fsdp-collectives'"
-export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --internal-hlo2tensorizer-options='--remat-rope --verify-hlo'"
-export NEURON_CC_FLAGS_BASE="${NEURON_CC_FLAGS_BASE} --auto-cast=none" # --hbm-scratchpad-page-size=1024"
+export NEURON_CC_FLAGS="--framework=XLA"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-max-instruction-limit=20000000"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --target=trn2"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-num-neuroncores-per-sengine=2"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --model-type transformer"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --no-internal-hlo-remat"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --enable-mixed-precision-accumulation"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options=--verify-hlo"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} -O1"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --tensorizer-options='--enable-hoist-fsdp-collectives'"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--remat-rope --verify-hlo'"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --auto-cast=none" # --hbm-scratchpad-page-size=1024"
 export TF_CPP_MIN_LOG_LEVEL=3
 
 set -ex
@@ -81,7 +81,20 @@ if [ "$1" = "unit" ]; then
     export JAX_PLATFORMS=cpu
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/unit.xml axlearn/common/mixture_of_experts_neuron_test.py::TestLayerOnCpu
 elif [ "$1" = "integ" ]; then
-    pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestLayerOnTrn"
+    # if 150b or presubmit, break into two parts
+    # breaking them up as we seem to leak memory across tests
+    if [ "$2" = "presubmit" ] || [ "$2" = "150b" ]; then
+        set +e
+        TEST_SUITE_PART=0 pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestLayerOnTrn"
+        status_a=$?
+        TEST_SUITE_PART=1 pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestLayerOnTrn"
+        status_b=$?
+        if [ $status_a -ne 0 ] || [ $status_b -ne 0 ]; then
+            exit 1
+        fi
+    else
+        pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestLayerOnTrn" # and test_fwdbwd_blockwisegather_MoE_i8192_h16384_e8_topk2_g1_ec2_blocksize512_b4_s4096_meshfsdp-1tp16_bf16"
+    fi
 elif [ "$1" = "150bdev" ]; then
     export TEST_SUITE="150b"
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_integ.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestDev150bInteg or TestDev150bGatingInteg"

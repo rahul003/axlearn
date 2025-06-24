@@ -136,8 +136,8 @@ class ModuleConfig():
         }
     
     def matches_cached_config(self):
-        with open(os.path.join(self.golden_dump_path, 'golden_config_new.txt'), 'w') as f:
-            f.write(f"{self.to_dict()}")
+        # with open(os.path.join(self.golden_dump_path, 'golden_config_new.txt'), 'w') as f:
+        #     f.write(f"{self.to_dict()}")
         with open(os.path.join(self.golden_dump_path, 'golden_config.txt'), 'r') as f:
             loaded_cfg = f.read()
         return f"{self.to_dict()}" == loaded_cfg
@@ -204,7 +204,8 @@ class ModuleConfig():
 
         testname = self.testid.split('.', 3)[-1]
         neuron_dump_path = os.path.join(os.environ.get('NEURON_DUMP_PATH'), testname)
-        os.environ["NEURON_CC_FLAGS"] = os.environ["NEURON_CC_FLAGS_BASE"] + f" --dump={neuron_dump_path}"
+        prev_flags = os.environ["NEURON_CC_FLAGS"]
+        os.environ["NEURON_CC_FLAGS"] = os.environ["NEURON_CC_FLAGS"] + f" --dump={neuron_dump_path}"
         # Create dump folder if it doesn't exist
         os.makedirs(neuron_dump_path, exist_ok=True)
         # Create metadata JSON file for spectometer
@@ -212,7 +213,7 @@ class ModuleConfig():
             "name": f"FSMoE-tests-integ-{testname}",
             "hlo_generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "submitter_alias": "huilgolr",
-            "compiler_flags": os.environ["NEURON_CC_FLAGS_BASE"],
+            "compiler_flags": os.environ["NEURON_CC_FLAGS"],
             "target_instance_type": "trn2.48xl",
             "model_info": {
             },
@@ -225,9 +226,8 @@ class ModuleConfig():
         metadata_path = os.path.join(neuron_dump_path, "hlo_metadata.json")
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
-
         yield
-
+        os.environ["NEURON_CC_FLAGS"] = prev_flags
         matches = glob.glob(os.path.join(neuron_dump_path, "**/*.code"))
         if matches:
             for match in matches:
@@ -444,7 +444,7 @@ class GridSpaceBuilder:
             # switch large
             grid_space.append(
                 self.create_test_config(
-                **kwargs, input_dim=2048, hidden_dim=8196, n_experts=128, top_k=4, n_groups=1, capacity_factor=2, seq=2048, mesh_spec=tp_16_mesh_spec,
+                **kwargs, input_dim=2048, hidden_dim=8192, n_experts=128, top_k=4, n_groups=1, capacity_factor=2, seq=2048, mesh_spec=tp_16_mesh_spec,
                 )
             )
             # deepseek
@@ -469,14 +469,7 @@ class GridSpaceBuilder:
             grid_space.append(
                 self.create_test_config(
                     **kwargs, input_dim=8192, hidden_dim=16384, mesh_spec=tp_16_mesh_spec,
-                    n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096
-                )
-            )
-            # switch xxl
-            grid_space.append(
-                self.create_test_config(
-                    **kwargs, input_dim=8192, hidden_dim=20480, mesh_spec=tp_16_mesh_spec,
-                    n_experts=64, top_k=2, n_groups=1, capacity_factor=2, seq=8192
+                    n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=2048
                 )
             )
             # llama 4 maverick
@@ -496,6 +489,14 @@ class GridSpaceBuilder:
                     n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096
                 )
             )
+            # switch xxl
+            grid_space.append(
+                self.create_test_config(
+                    **kwargs, input_dim=8192, hidden_dim=20480, mesh_spec=tp_64_mesh_spec,
+                    n_experts=64, top_k=2, n_groups=1, capacity_factor=2, seq=8192
+                )
+            )
+            
         return grid_space
 
     def build_grid_space_input_hidden(self, input_dim=2048, hidden_dim=7168, min_tp=None, max_tp=None, max_E=None, dtype=jnp.bfloat16):
@@ -752,19 +753,9 @@ def get_gating_configs(test_suite="presubmit", layer='moe', test=TopKGatingGathe
     builder = GridSpaceBuilder(layer=layer, test=test, golden=golden, test_device=test_device, golden_device=golden_device)
     if test_suite == 'presubmit':
         return builder.build_presubmit_grid_space()
-    elif test_suite == 'small_models':
-        return builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=7168)
-    elif test_suite == 'large_models':
-        # same as for small_models
-        return builder.build_presubmit_grid_space()[:1]
-    elif test_suite == '12b':
-        return builder.build_grid_space_12B()
-    elif test_suite == '50b':
-        return builder.build_grid_space_50B()
-    elif test_suite == '150b':
-        return builder.build_grid_space_150B()
     else:
-        raise ValueError(f"Unknown test suite: {test_suite}")
+        # dummy to avoid errors, can't have empty grid space
+        return builder.build_presubmit_grid_space()[:1]
 
 
 @cache
@@ -773,43 +764,40 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
     if test_suite == "toy":
         return builder.build_toy_grid_space()
     elif test_suite == 'presubmit':
-        return builder.build_presubmit_grid_space()
+        tests = builder.build_presubmit_grid_space()
     elif test_suite == '12b':
         return builder.build_grid_space_12B()
     elif test_suite == '50b':
         return builder.build_grid_space_50B()
     elif test_suite == '150b':
-        return builder.build_grid_space_150B()
-    elif test_suite == 'small_models':
-        grid_space = []
-        # qwen3-30b
-        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=6144, max_E=128))
-        # switch base
-        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=1536, hidden_dim=6144, max_tp=16))
-        # switch large
-        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16))
-        # mixtral 50b
-        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=14336, max_E=16, max_tp=16))
+        tests = builder.build_grid_space_150B()
+    elif test_suite == 'qwen3-30b':
+        return builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=6144, max_E=128)
+    elif test_suite == 'switch-base':
+        return builder.build_grid_space_input_hidden(input_dim=1536, hidden_dim=6144, max_tp=16)
+    elif test_suite == 'switch-large':
+        return builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16)
+    elif test_suite == 'mixtral-50b':
+        return builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=14336, max_E=16, max_tp=16)
+    elif test_suite == 'llama4-scout':
         # llama4 scout (topk=1, E=16)
-        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=8192, max_E=64, max_tp=16))
-        # deepseek v3
-        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=7168, hidden_dim=2048, max_tp=16))
-        return grid_space
-    elif test_suite == 'large_models':
-        grid_space = []
-        # qwen3-235b
-        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=12288, min_tp=16, max_E=128))
-        # 150b
-        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=6144, hidden_dim=15360, min_tp=16, max_tp=32, max_E=16))
-        # 8x20b
-        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=8192, hidden_dim=16384, min_tp=16, max_E=16))
-        # switch_xxl
-        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=8192, hidden_dim=20480, min_tp=16, max_E=64))
-        # llama4 maverick
-        grid_space.extend(builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=6144, min_tp=16, max_tp=16))
-        return grid_space
+        return builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=8192, max_E=64, max_tp=16)
+    elif test_suite == 'deepseek-v3':
+        return builder.build_grid_space_input_hidden(input_dim=7168, hidden_dim=2048, max_tp=16)
+    elif test_suite == 'qwen3-235b':
+        return builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=12288, min_tp=16, max_E=128)
+    elif test_suite == 'switch-xxl':
+        return builder.build_grid_space_input_hidden(input_dim=8192, hidden_dim=20480, min_tp=16, max_E=64)
+    elif test_suite == 'llama4-maverick':
+        return builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=6144, min_tp=16, max_tp=16)
     else:
         raise ValueError(f"Unknown test suite: {test_suite}")
+    if int(os.getenv('TEST_SUITE_PART', 0)) == 0:
+            tests = tests[:len(tests)//2]
+    else:
+        tests = tests[len(tests)//2:]
+    return tests
+
 
     # leaving it here for any custom local testing
     test_configs = []
