@@ -788,6 +788,7 @@ def model_config(
         outer_batch_size = get_outer_batch_from_mesh(
             MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, mesh_shape
         )
+    use_blockwise = int(os.getenv('AXLEARN_USE_BLOCKWISE', 1))
     if use_blockwise == 1:
         gating_type = TopKGatingGatherBlockwise
     elif use_blockwise == 2:
