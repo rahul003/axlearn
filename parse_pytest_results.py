@@ -6,6 +6,7 @@ Usage: python pytest_parser.py <xml_file>
 
 import xml.etree.ElementTree as ET
 import sys
+import os
 import argparse
 
 
@@ -77,14 +78,16 @@ def parse_pytest_xml(xml_file):
     }
 
 
-def print_results(results, fname):
+def print_results(results, fname, matches):
     """Print formatted test results."""
     if results is None:
         return
     
     print("=" * 60)
     print(f"Results summary for {fname.upper()}")
-    print("=" * 60)
+    for m in matches:
+        print(f"  {m}")
+    
     print(f"Total tests: {results['total']}")
     print(f"Passed: {results['passed']}")
     print(f"Failed: {results['failed']}")
@@ -109,19 +112,24 @@ def main():
     parser.add_argument('artifacts_dir', help='Path to pytest artifacts dir')
     
     args = parser.parse_args()
+    suites = [d for d in os.listdir(args.artifacts_dir) if os.path.isdir(os.path.join(args.artifacts_dir, d))]
     import glob
-    matches = glob.glob(args.artifacts_dir + "/*/integ.xml")
-    if matches:
-        for m in matches:
-            results = parse_pytest_xml(m)
-            suite = m.split("/")[-2]
-            print_results(results, suite)
-    else:
-        print(f"No XML files found in {args.artifacts_dir}")
-        sys.exit(1)
-    
-    
-
+    for suite in suites:
+        matches = glob.glob(os.path.join(args.artifacts_dir, suite, "integ_*.xml"))
+        if matches:
+            results = {}
+            for m in matches:
+                m_result = parse_pytest_xml(m)
+                for k, v in m_result.items():
+                    if k not in results:
+                        results[k] = v
+                    else:
+                        results[k] += v
+            print_results(results, suite, matches)
+        else:
+            print("=" * 60)
+            print(f"Results summary for {suite.upper()}")
+            print(f"MISSING XML FILE")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:

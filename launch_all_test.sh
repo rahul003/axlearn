@@ -2,7 +2,7 @@ id=$(date +"%Y%m%d_%H%M%S")
 
 TEST_LOGDIR=test_artifacts/$id
 GOLDENS_DIR="test_goldens"
-JAX_CC_DIR="test_artifacts/jax_cc_cache"
+JAX_CC_DIR="test_artifacts/jax_cc_cache_$id"
 
 #small_models
 for suite in "presubmit" "12b" "50b" "150b" "qwen3-30b" "switch-base" "switch-large" "mixtral-50b" "llama4-scout" "deepseek-v3" "qwen3-235b" "switch-xxl" "llama4-maverick"; do

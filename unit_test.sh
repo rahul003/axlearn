@@ -28,8 +28,8 @@ export XLA_FLAGS="--xla_cpu_use_thunk_runtime=false --xla_force_host_platform_de
 
 export GIT_COMMIT=$(git rev-parse --short HEAD)
 
-# HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
-# export XLA_FLAGS="${XLA_FLAGS} --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*' --xla_dump_hlo_as_text"
+HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
+export XLA_FLAGS="${XLA_FLAGS} --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*' --xla_dump_hlo_as_text"
 # export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_snapshots"
 
 # PJRT Flags 
@@ -83,17 +83,20 @@ if [ "$1" = "unit" ]; then
 elif [ "$1" = "integ" ]; then
     # if 150b or presubmit, break into two parts
     # breaking them up as we seem to leak memory across tests
-    if [ "$2" = "presubmit" ] || [ "$2" = "150b" ]; then
-        set +e
-        TEST_SUITE_PART=0 pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestLayerOnTrn"
-        status_a=$?
-        TEST_SUITE_PART=1 pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestLayerOnTrn"
-        status_b=$?
-        if [ $status_a -ne 0 ] || [ $status_b -ne 0 ]; then
-            exit 1
-        fi
+    if [ "$2" = "12b" ] || [ "$2" = "50b" ]; then
+        export TEST_SUITE_PARTS=1
     else
-        pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestLayerOnTrn" # and test_fwdbwd_blockwisegather_MoE_i8192_h16384_e8_topk2_g1_ec2_blocksize512_b4_s4096_meshfsdp-1tp16_bf16"
+        export TEST_SUITE_PARTS=10
+    fi
+    status=0
+    set +e
+    for ((part=0;part<TEST_SUITE_PARTS;part++)); do
+        TEST_SUITE_PART=$part pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ_$part.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestLayerOnTrn"
+        status_part=$?
+        status=$((status + status_part))
+    done
+    if [ $status -ne 0 ]; then
+        exit 1
     fi
 elif [ "$1" = "150bdev" ]; then
     export TEST_SUITE="150b"
@@ -101,7 +104,7 @@ elif [ "$1" = "150bdev" ]; then
     export JAX_PLATFORMS=cpu
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_unit.xml axlearn/common/mixture_of_experts_neuron_test.py -k "TestDev150bUnit or TestDev150bGatingUnit"
 elif [ "$1" = "dev" ]; then
-    pytest -rsA axlearn/common/mixture_of_experts_neuron_test.py -k "TestLayerOnTrn and test_fwdbwd_blockwisegather_MoE_i8192_h20480_e1_topk8_g1_ec2_blocksize512_b1_s8192_meshfsdp-1tp64_bf16"
+    pytest -rsA -v axlearn/common/mixture_of_experts_neuron_test.py -k "TestLayerOnTrn and test_fwdbwd_blockwisegather_MoE_i8192_h20480_e16_topk2_g1_ec2_blocksize512_b1_s8192_meshfsdp-1tp64_bf16"
 elif [ "$1" = "150b_gather" ]; then
     pytest -rsA --tb=short axlearn/common/mixture_of_experts_neuron_test.py -k 'TestDev150bUnit and test_fwd_gather_vs_einsum or TestDev150bUnit and test_fwdbwd_gather_vs_einsum or TestDev150bInteg and test_fwd_gather_vs_einsum or TestDev150bInteg and test_fwdbwd_gather_vs_einsum'
 elif [ "$1" = "150b_blockwise" ]; then

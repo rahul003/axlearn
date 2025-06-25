@@ -19,6 +19,7 @@ import jax
 import jax.numpy as jnp
 from jax.experimental import mesh_utils
 from jax.sharding import NamedSharding, Mesh
+from parse_pytest_results import parse_pytest_xml
 
 from axlearn.common.mixture_of_experts import (
     TopKGating,
@@ -159,8 +160,13 @@ class ModuleConfig():
         os.makedirs(self.golden_dump_path, exist_ok=True)
         with open(os.path.join(self.golden_dump_path, 'golden_config.txt'), 'w') as f:
             f.write(f"{self.to_dict()}")
-        for k, v in tensors.items():
-            jnp.save(os.path.join(self.golden_dump_path, f'{k}.npy'), v, allow_pickle=True)
+        try:
+            for k, v in tensors.items():
+                jnp.save(os.path.join(self.golden_dump_path, f'{k}.npy'), v, allow_pickle=True)
+            return True
+        except OverflowError:
+            print(self.testid, 'OverflowError while saving tensors, skipping golden dump')
+            return False
 
     def load_goldens(self, tensors):
         if not self.golden_dump_path or not os.path.exists(self.golden_dump_path):
@@ -169,21 +175,25 @@ class ModuleConfig():
         if not self.matches_cached_config():
             print(self.testid, 'Cached config does not match current config')
             return False
-        for k in tensors.keys():
-            tensor_path = os.path.join(self.golden_dump_path, f'{k}.npy')
-            if not os.path.exists(tensor_path):
-                print('Incomplete cache, could not find', tensor_path)
-                return False
-            tensors[k] = jnp.load(tensor_path, allow_pickle=True)
-            if isinstance(tensors[k], np.ndarray):
-                val = tensors[k]
-                i = 0
-                for ck, v in np.ndenumerate(val):
-                    if i == 0:
-                        tensors[k] = v
-                    i+=1
-                assert i == 1, f"Expected single value, got {i} values"
-        return tensors
+        try:
+            for k in tensors.keys():
+                tensor_path = os.path.join(self.golden_dump_path, f'{k}.npy')
+                if not os.path.exists(tensor_path):
+                    print('Incomplete cache, could not find', tensor_path)
+                    return False
+                tensors[k] = jnp.load(tensor_path, allow_pickle=True)
+                if isinstance(tensors[k], np.ndarray):
+                    val = tensors[k]
+                    i = 0
+                    for ck, v in np.ndenumerate(val):
+                        if i == 0:
+                            tensors[k] = v
+                        i+=1
+                    assert i == 1, f"Expected single value, got {i} values"
+            return True
+        except Exception as e:
+            print(self.testid, 'Error loading cached tensors:', e)
+            return False
 
     @property
     def layer_type(self):
@@ -205,6 +215,7 @@ class ModuleConfig():
         testname = self.testid.split('.', 3)[-1]
         neuron_dump_path = os.path.join(os.environ.get('NEURON_DUMP_PATH'), testname)
         prev_flags = os.environ["NEURON_CC_FLAGS"]
+        print(prev_flags)
         os.environ["NEURON_CC_FLAGS"] = os.environ["NEURON_CC_FLAGS"] + f" --dump={neuron_dump_path}"
         # Create dump folder if it doesn't exist
         os.makedirs(neuron_dump_path, exist_ok=True)
@@ -364,50 +375,12 @@ class GridSpaceBuilder:
         )
     
     def build_toy_grid_space(self):
-        return [
-            self.create_test_config(
-                input_dim=3, hidden_dim=6,
-                n_experts=4, top_k=1, n_groups=1, capacity_factor=2, 
-                mesh_spec={}, 
-                batch=1, seq=8, dtype=jnp.float32, 
-                block_size=4,
-            ),
-            self.create_test_config(
-                input_dim=3, hidden_dim=6, 
-                n_experts=4, top_k=2, n_groups=1, capacity_factor=2,
-                mesh_spec={}, 
-                batch=1, seq=8, dtype=jnp.float32, 
-                block_size=4
-            ),
-            self.create_test_config(
-                input_dim=256, hidden_dim=512,
-                n_experts=16, top_k=2, n_groups=1, capacity_factor=2,
-                mesh_spec={}, 
-                batch=1, seq=2048, dtype=jnp.float32, 
-                block_size=256
-            ),
-            self.create_test_config(
-                input_dim=3, hidden_dim=6, n_experts=4, 
-                top_k=1, n_groups=1, capacity_factor=2, 
-                mesh_spec={}, 
-                batch=4, seq=8, dtype=jnp.float32, 
-                block_size=4
-            ),
-            self.create_test_config(
-                input_dim=3, hidden_dim=6, n_experts=4, 
-                top_k=2, n_groups=1, capacity_factor=2, 
-                mesh_spec={}, 
-                batch=4, seq=8, dtype=jnp.float32, 
-                block_size=4
-            ),
-            self.create_test_config(
-                input_dim=3, hidden_dim=6, n_experts=4, 
-                top_k=1, n_groups=1, capacity_factor=2, 
-                mesh_spec={}, 
-                batch=4, seq=8, dtype=jnp.bfloat16, 
-                block_size=4
-            ),
-    ][0]
+        return self.create_test_config(
+                input_dim=2048, hidden_dim=2048,
+                n_experts=2, top_k=1, n_groups=1, capacity_factor=1,
+                mesh_spec={},
+                batch=1, seq=256, dtype=jnp.float32
+            )
     
     def build_presubmit_grid_space(self):
         grid_space = []
@@ -499,7 +472,7 @@ class GridSpaceBuilder:
             
         return grid_space
 
-    def build_grid_space_input_hidden(self, input_dim=2048, hidden_dim=7168, min_tp=None, max_tp=None, max_E=None, dtype=jnp.bfloat16):
+    def build_grid_space_input_hidden(self, input_dim=2048, hidden_dim=7168, min_seq=8*1024, max_seq=None, min_tp=None, max_tp=None, max_E=None, dtype=jnp.bfloat16):
         # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
         # Grid space for testing
         grid_space = []
@@ -529,14 +502,16 @@ class GridSpaceBuilder:
                     continue
                 # min sparsity of 25% assumed
                 for K in [1, 2, 4, 8, 16]:
-                    if E >= K*4:
+                    if K >= E//4:
                         break
                     for G in [1, 4]:
                         if G > E:
                             break
                         cf = 2
-                        for S in [8*1024, 16*1024]:
+                        S = min_seq
+                        while (max_seq and S <= max_seq) or (S <= 16*1024):
                             grid_space.append(self.create_test_config(**kwargs, n_experts=E, top_k=K, n_groups=G, capacity_factor=cf, seq=S, batch=batch, mesh_spec=mesh_spec))
+                            S = S * 2
         return grid_space
 
     def build_grid_space_12B(self):
@@ -772,52 +747,49 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
     elif test_suite == '150b':
         tests = builder.build_grid_space_150B()
     elif test_suite == 'qwen3-30b':
-        return builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=6144, max_E=128)
+        tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=6144, max_E=128)
     elif test_suite == 'switch-base':
-        return builder.build_grid_space_input_hidden(input_dim=1536, hidden_dim=6144, max_tp=16)
+        tests = builder.build_grid_space_input_hidden(input_dim=1536, hidden_dim=6144, max_tp=16)
     elif test_suite == 'switch-large':
-        return builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16)
+        tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16)
     elif test_suite == 'mixtral-50b':
-        return builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=14336, max_E=16, max_tp=16)
+        tests = builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=14336, max_E=16, max_tp=16)
     elif test_suite == 'llama4-scout':
         # llama4 scout (topk=1, E=16)
-        return builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=8192, max_E=64, max_tp=16)
+        tests = builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=8192, max_E=64, max_tp=16)
     elif test_suite == 'deepseek-v3':
-        return builder.build_grid_space_input_hidden(input_dim=7168, hidden_dim=2048, max_tp=16)
+        tests = builder.build_grid_space_input_hidden(input_dim=7168, hidden_dim=2048, max_tp=16)
     elif test_suite == 'qwen3-235b':
-        return builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=12288, min_tp=16, max_E=128)
+        tests = builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=12288, min_tp=16, max_seq=8*1024, min_seq=4096, max_E=128)
     elif test_suite == 'switch-xxl':
-        return builder.build_grid_space_input_hidden(input_dim=8192, hidden_dim=20480, min_tp=16, max_E=64)
+        tests = builder.build_grid_space_input_hidden(input_dim=8192, hidden_dim=20480, min_tp=64, max_seq=8*1024, min_seq=4096, max_E=64)
     elif test_suite == 'llama4-maverick':
-        return builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=6144, min_tp=16, max_tp=16)
+        tests = builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=6144, min_tp=16, max_tp=16)
     else:
         raise ValueError(f"Unknown test suite: {test_suite}")
-    if int(os.getenv('TEST_SUITE_PART', 0)) == 0:
-            tests = tests[:len(tests)//2]
+
+    test_suite_part = int(os.getenv('TEST_SUITE_PART', 0))
+    test_suite_parts = int(os.getenv('TEST_SUITE_PARTS', 4))
+    part_size = len(tests)//test_suite_parts
+    tests = tests[part_size*test_suite_part:part_size*(test_suite_part+1)]
+    print(tests)
+    RESUME_TESTS_PATH=os.getenv('RESUME_TESTS_PATH', None)
+    if RESUME_TESTS_PATH:
+        matches = glob.glob(os.path.join(RESUME_TESTS_PATH, test_suite, "integ_*.xml"))
+        tests_to_resume = []
+        failed_tests = set()
+        for m in matches:
+            # load each xml result and list test names
+            results = parse_pytest_xml(m)
+            failed_tests.update(set(results['failures']))
+        print(failed_tests)
+        for t in tests:
+            if t in failed_tests:
+                tests_to_resume.append(t)
+        tests = tests_to_resume
+        print(tests)
+    if tests:
+        return tests
     else:
-        tests = tests[len(tests)//2:]
-    return tests
-
-
-    # leaving it here for any custom local testing
-    test_configs = []
-    for (batch, seq, input_dim,  hidden_dim, n_experts, top_k, n_groups,
-         out_batch, capacity_factor, mesh_spec, dtype) in grid_space:
-        test_configs.append(create_test_config(
-            test=test,
-            golden=golden,
-            test_device=test_device,
-            golden_device=golden_device,
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            n_experts=n_experts,
-            n_groups=n_groups,
-            top_k=top_k,
-            capacity_factor=capacity_factor, 
-            mesh_spec=mesh_spec,
-            batch=batch,
-            seq=seq,
-            dtype=dtype,
-        ))
-    return test_configs
-
+        # dummy test as we can't return no test
+        return builder.build_toy_grid_space()
