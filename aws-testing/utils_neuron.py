@@ -34,6 +34,8 @@ from axlearn.experiments.text.gpt.common import MESH_AXIS_NAMES, mesh_shape_from
 from axlearn.common.param_init import PARAM_REGEXP_WEIGHT, DefaultInitializer, WeightInitializer
 from axlearn.experiments.text.gpt.envy import MOE_OUTER_BATCH_AXIS_NAMES, MOE_DIM_TO_MESH_AXIS_MAP
 
+TEST_SUITE = os.environ.get("TEST_SUITE", 'presubmit').lower()
+
 # FP32 test tolerances
 TEST_TOLS_FP32 = {
     "atol": 5e-4,
@@ -150,7 +152,8 @@ class ModuleConfig():
         else:
             GOLDENS_DIR = os.getenv('GOLDENS_DIR')
             if GOLDENS_DIR:
-                testname = self.testid.split('.', 3)[-1]
+                testname = self.testid.split('.', 1)[-1]
+                self.testname = testname
                 self._golden_dump_path = os.path.join(GOLDENS_DIR, testname)
             else:
                 self._golden_dump_path = None
@@ -165,15 +168,16 @@ class ModuleConfig():
                 jnp.save(os.path.join(self.golden_dump_path, f'{k}.npy'), v, allow_pickle=True)
             return True
         except OverflowError:
-            print(self.testid, 'OverflowError while saving tensors, skipping golden dump')
+            # TODO: shard and write to disk
+            print(self.testid, self.testname, 'OverflowError while saving tensors, skipping golden dump')
             return False
 
     def load_goldens(self, tensors):
         if not self.golden_dump_path or not os.path.exists(self.golden_dump_path):
-            print(self.testid, 'Could not find cache for test')
+            print(self.testid, self.testname, 'Could not find cache for test')
             return False
         if not self.matches_cached_config():
-            print(self.testid, 'Cached config does not match current config')
+            print(self.testid, self.testname, 'Cached config does not match current config')
             return False
         try:
             for k in tensors.keys():
@@ -192,7 +196,7 @@ class ModuleConfig():
                     assert i == 1, f"Expected single value, got {i} values"
             return True
         except Exception as e:
-            print(self.testid, 'Error loading cached tensors:', e)
+            print(self.testid, self.testname, 'Error loading cached tensors:', e)
             return False
 
     @property
@@ -212,10 +216,9 @@ class ModuleConfig():
             yield
             return
 
-        testname = self.testid.split('.', 3)[-1]
+        testname = self.testid.split('.', 1)[-1]
         neuron_dump_path = os.path.join(os.environ.get('NEURON_DUMP_PATH'), testname)
         prev_flags = os.environ["NEURON_CC_FLAGS"]
-        print(prev_flags)
         os.environ["NEURON_CC_FLAGS"] = os.environ["NEURON_CC_FLAGS"] + f" --dump={neuron_dump_path}"
         # Create dump folder if it doesn't exist
         os.makedirs(neuron_dump_path, exist_ok=True)
@@ -252,7 +255,7 @@ class ModuleConfig():
         self.state = None
         self.inputs = None
 
-class TestCaseConfig():
+class ExperimentConfig():
     def __init__(
             self, 
             test_cfg, 
@@ -514,6 +517,70 @@ class GridSpaceBuilder:
                             S = S * 2
         return grid_space
 
+    def build_grid_space_llama4_maverick(self):
+        kwargs={
+            'dtype': jnp.bfloat16,
+            'input_dim': 5120,
+            'hidden_dim': 6144,
+            'n_experts': 128,
+            'dtype': jnp.bfloat16,
+            'seq': 8192,
+            'capacity_factor': 2,
+            'n_groups': 1,
+        }
+
+        # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
+        # Grid space for testing
+        grid_space = []
+        # TODO add EP
+        for mesh_spec in [{"fsdp": -1, "model": 16}]:
+            batch = 4 if mesh_spec["model"] == 16 else 1
+            for top_k in [1, 8]:
+                grid_space.append(self.create_test_config(**kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
+        return grid_space
+    
+    def build_grid_space_switch_xxl(self):
+        kwargs={
+            'dtype': jnp.bfloat16,
+            'input_dim': 8192,
+            'hidden_dim': 20480,
+            'n_experts': 64,
+            'dtype': jnp.bfloat16,
+            'seq': 2048,
+            'capacity_factor': 2,
+            'n_groups': 1,
+        }
+        # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
+        # Grid space for testing
+        grid_space = []
+        # TODO add EP
+        for mesh_spec in [{"fsdp": -1, "model": 64}]:
+            batch = 4 if mesh_spec["model"] == 16 else 1
+            for top_k in [1, 2]:
+                grid_space.append(self.create_test_config(**kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
+        return grid_space
+
+    def build_grid_space_qwen3_235b(self):
+        kwargs={
+            'dtype': jnp.bfloat16,
+            'input_dim': 4096,
+            'hidden_dim': 12288,
+            'n_experts': 128,
+            'dtype': jnp.bfloat16,
+            'seq': 16384,
+            'capacity_factor': 2,
+            'n_groups': 1,
+        }
+        # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
+        # Grid space for testing
+        grid_space = []
+        # TODO add EP
+        for mesh_spec in [{"fsdp": -1, "model": 64}]:
+            batch = 4 if mesh_spec["model"] == 16 else 1
+            for top_k in [1, 8]:
+                grid_space.append(self.create_test_config(**kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
+        return grid_space
+
     def build_grid_space_12B(self):
         # Grid space for testing
         grid_space = []
@@ -712,7 +779,7 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
     else:
         golden_invoker_cfg = {}
     
-    config = TestCaseConfig(
+    config = ExperimentConfig(
         test_cfg, 
         golden_cfg, 
         test_invoker_cfg, 
@@ -759,12 +826,13 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
         tests = builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=8192, max_E=64, max_tp=16)
     elif test_suite == 'deepseek-v3':
         tests = builder.build_grid_space_input_hidden(input_dim=7168, hidden_dim=2048, max_tp=16)
+    # below are too big, takes too long to run, and many tests go CPU OOM if we do grid like for above configs
     elif test_suite == 'qwen3-235b':
-        tests = builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=12288, min_tp=16, max_seq=8*1024, min_seq=4096, max_E=128)
+        tests = builder.build_grid_space_qwen3_235b()
     elif test_suite == 'switch-xxl':
-        tests = builder.build_grid_space_input_hidden(input_dim=8192, hidden_dim=20480, min_tp=64, max_seq=8*1024, min_seq=4096, max_E=64)
+        tests = builder.build_grid_space_switch_xxl()
     elif test_suite == 'llama4-maverick':
-        tests = builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=6144, min_tp=16, max_tp=16)
+        tests = builder.build_grid_space_llama4_maverick()
     else:
         raise ValueError(f"Unknown test suite: {test_suite}")
 
@@ -772,22 +840,26 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
     test_suite_parts = int(os.getenv('TEST_SUITE_PARTS', 4))
     part_size = len(tests)//test_suite_parts
     tests = tests[part_size*test_suite_part:part_size*(test_suite_part+1)]
-    print(tests)
+    print('Candidate tests', [x[0] for x in tests])
     RESUME_TESTS_PATH=os.getenv('RESUME_TESTS_PATH', None)
     if RESUME_TESTS_PATH:
         matches = glob.glob(os.path.join(RESUME_TESTS_PATH, test_suite, "integ_*.xml"))
-        tests_to_resume = []
-        failed_tests = set()
-        for m in matches:
-            # load each xml result and list test names
-            results = parse_pytest_xml(m)
-            failed_tests.update(set(results['failures']))
-        print(failed_tests)
-        for t in tests:
-            if t in failed_tests:
-                tests_to_resume.append(t)
-        tests = tests_to_resume
-        print(tests)
+        if matches:
+            tests_to_resume = []
+            failed_tests = set()
+            for m in matches:
+                # load each xml result and list test names
+                results = parse_pytest_xml(m)
+                for r in results['failures']:
+                    failed_tests.add('MoE' + r[0].split('_MoE')[1])
+            print('Failed tests', failed_tests)
+            for t in tests:
+                if t[0] in failed_tests:
+                    tests_to_resume.append(t)
+            tests = tests_to_resume
+            print('Filtered tests', tests)
+        else:
+            print(f"No previous results found in {RESUME_TESTS_PATH} for {test_suite}, running all tests")
     if tests:
         return tests
     else:

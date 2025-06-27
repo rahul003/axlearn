@@ -78,13 +78,15 @@ def parse_pytest_xml(xml_file):
     }
 
 
-def print_results(results, fname, matches):
+def print_results(results, fname, matches, job_killed=False):
     """Print formatted test results."""
     if results is None:
         return
     
     print("=" * 60)
     print(f"Results summary for {fname.upper()}")
+    if job_killed:
+        print(f"Some tests were KILLED")
     for m in matches:
         print(f"  {m}")
     
@@ -106,6 +108,17 @@ def print_results(results, fname, matches):
     else:
         print("No failures! 🎉")
 
+def was_job_killed(filepath):
+    try:
+        with open(filepath, 'r') as f:
+            content = f.read()
+            return "Killed" in content
+    except FileNotFoundError:
+        print(f"Error: File '{filepath}' not found.")
+        return True
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return True
 
 def main():
     parser = argparse.ArgumentParser(description='Parse pytest XML output')
@@ -116,6 +129,8 @@ def main():
     import glob
     for suite in suites:
         matches = glob.glob(os.path.join(args.artifacts_dir, suite, "integ_*.xml"))
+        log_file = os.path.join(args.artifacts_dir, suite, "integ.log")
+        job_killed = was_job_killed(log_file)
         if matches:
             results = {}
             for m in matches:
@@ -125,7 +140,7 @@ def main():
                         results[k] = v
                     else:
                         results[k] += v
-            print_results(results, suite, matches)
+            print_results(results, suite, matches, job_killed=job_killed)
         else:
             print("=" * 60)
             print(f"Results summary for {suite.upper()}")

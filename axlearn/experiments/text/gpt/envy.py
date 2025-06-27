@@ -622,19 +622,20 @@ def get_trainer_kwargs(
         )
     elif "Mistral" in model_size:
         num_layers=int(os.getenv("AXLEARN_NUM_LAYERS", 4))
-        ffn_sparse_top_k=4
         num_kv_heads = max(8, tp_degree)
         if int(os.getenv("AXLEARN_NUM_KV_HEADS", -1)) != -1:
             num_kv_heads = int(os.getenv("AXLEARN_NUM_KV_HEADS"))
         if model_size == "Mistral-toy":
             num_heads = 32
             head_size = 32
+            ffn_sparse_top_k=2
             ffn_scale_factor=3.5
         elif model_size == "Mistral-8x7B":
             # 32 layers gets to 47B
             num_layers = int(os.getenv("AXLEARN_NUM_LAYERS", 32))
             num_heads = 32
             head_size = 128
+            ffn_sparse_top_k=2
             ffn_scale_factor=3.5
         elif model_size == "Mistral-16x10B":
             head_size = 128

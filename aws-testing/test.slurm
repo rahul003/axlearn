@@ -41,9 +41,9 @@ function run_suite() {
     echo "Running test suite: $suite"
     mkdir -p $TEST_LOGDIR/${suite}
     if [ "$suite" = "150b" ]; then
-        srun -l unit_test.sh 150bdev ${suite} $TEST_LOGDIR $GOLDENS_DIR $JAX_CC_DIR 2>&1 | tee $TEST_LOGDIR/${suite}/150bdev.log
+        srun -l ./aws-testing/unit_test.sh 150bdev ${suite} $TEST_LOGDIR $GOLDENS_DIR $JAX_CC_DIR 2>&1 | tee $TEST_LOGDIR/${suite}/150bdev.log
     fi
-    srun -l unit_test.sh integ $suite $TEST_LOGDIR $GOLDENS_DIR $JAX_CC_DIR 2>&1 | tee $TEST_LOGDIR/${suite}/integ.log
+    srun -l ./aws-testing/unit_test.sh integ $suite $TEST_LOGDIR $GOLDENS_DIR $JAX_CC_DIR 2>&1 | tee $TEST_LOGDIR/${suite}/integ.log
     #srun -l unit_test.sh unit $suite $TEST_LOGDIR $GOLDENS_DIR $JAX_CC_DIR 2>&1 | tee $TEST_LOGDIR/${suite}/unit.log
     summary $suite
 }
