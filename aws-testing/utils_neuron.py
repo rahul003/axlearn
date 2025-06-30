@@ -224,12 +224,17 @@ class ModuleConfig():
         os.makedirs(neuron_dump_path, exist_ok=True)
         # Create metadata JSON file for spectometer
         metadata = {
-            "name": f"FSMoE-tests-integ-{testname}",
+            "name": testname,
             "hlo_generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "submitter_alias": "huilgolr",
             "compiler_flags": os.environ["NEURON_CC_FLAGS"],
             "target_instance_type": "trn2.48xl",
             "model_info": {
+                "name": testname,
+                "batch_size": self.invoker_cfg["batch_size"],
+                "number_of_layers": 1,  # Assuming single layer for now
+                "sequence_length": self.invoker_cfg["seq_len"],
+                "hlo_url": f"s3://kaena-nn-models/spectometer-staging/training-moe-jax-integration-tests/{testname}/model.hlo_module.pb",
             },
             "software": {
                 "jax": jax.__version__,

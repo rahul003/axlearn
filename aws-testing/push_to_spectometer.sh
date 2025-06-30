@@ -18,8 +18,8 @@ for dir in "$TEST_ARTIFACTS_DIR"/*; do
             continue
         fi
         echo "Pushing $base_test to spectometer"
-        cmd="aws s3 cp $test/hlo_metadata.json s3://kaena-nn-models/spectometer-staging/training-moe-jax-integration-tests/$base_test/"
-        cmd2="aws s3 cp $test/model.hlo_module.pb s3://kaena-nn-models/spectometer-staging/training-moe-jax-integration-tests/$base_test/"
+        cmd="aws s3 cp $test/model.hlo_module.pb s3://kaena-nn-models/spectometer-staging/training-moe-jax-integration-tests/$base_test/"
+        cmd2="aws s3 cp $test/hlo_metadata.json s3://kaena-nn-models/spectometer-staging/training-moe-jax-integration-tests/metadatas/$base_test.json"
         if [ "$DRY_RUN" -eq 0 ]; then
             # exec cmd
             eval "$cmd"

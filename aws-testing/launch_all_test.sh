@@ -7,7 +7,7 @@ JAX_CC_DIR=""
 
 for suite in "presubmit" "12b" "50b" "150b" "qwen3-30b" "switch-base" "switch-large" "mixtral-50b" "llama4-scout" "deepseek-v3" "qwen3-235b" "switch-xxl" "llama4-maverick"; do
     sbatch -W --exclusive -J rh_test_$suite --output=test_artifacts/$id/%x_%j.out ./aws-testing/test.slurm $suite $TEST_LOGDIR $GOLDENS_DIR $JAX_CC_DIR &
-done    
+done
 
 echo "All tests launched with logdir: $TEST_LOGDIR"
 wait

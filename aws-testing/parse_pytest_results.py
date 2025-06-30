@@ -128,6 +128,7 @@ def main():
     suites = [d for d in os.listdir(args.artifacts_dir) if os.path.isdir(os.path.join(args.artifacts_dir, d))]
     import glob
     for suite in suites:
+        
         matches = glob.glob(os.path.join(args.artifacts_dir, suite, "integ_*.xml"))
         log_file = os.path.join(args.artifacts_dir, suite, "integ.log")
         job_killed = was_job_killed(log_file)
@@ -145,6 +146,8 @@ def main():
             print("=" * 60)
             print(f"Results summary for {suite.upper()}")
             print(f"MISSING XML FILE")
+            if job_killed:
+                print(f"Some tests were KILLED")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
