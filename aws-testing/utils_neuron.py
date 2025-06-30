@@ -6,14 +6,20 @@
 # Licensed under the Apache License, Version 2.0 (the "License").
 """Utils for tests for mixture_of_experts.py"""
 import os
+import glob
+import shutil
+import numpy as np
+import json
 from functools import partial, cache
 from itertools import product
+from contextlib import contextmanager
 import math
-
+from datetime import datetime
 import jax
 import jax.numpy as jnp
 from jax.experimental import mesh_utils
 from jax.sharding import NamedSharding, Mesh
+from parse_pytest_results import parse_pytest_xml
 
 from axlearn.common.mixture_of_experts import (
     TopKGating,
@@ -23,16 +29,12 @@ from axlearn.common.mixture_of_experts import (
     get_outer_batch_from_mesh
 )
 
-from axlearn.common.layers import (
-    Dropout,
-    StochasticDepth,
-    RMSNorm,
-)
-#
 from axlearn.common.utils import PartitionSpec, infer_mesh_shape, cast_floats
 from axlearn.experiments.text.gpt.common import MESH_AXIS_NAMES, mesh_shape_from_axes
 from axlearn.common.param_init import PARAM_REGEXP_WEIGHT, DefaultInitializer, WeightInitializer
 from axlearn.experiments.text.gpt.envy import MOE_OUTER_BATCH_AXIS_NAMES, MOE_DIM_TO_MESH_AXIS_MAP
+
+TEST_SUITE = os.environ.get("TEST_SUITE", 'presubmit').lower()
 
 # FP32 test tolerances
 TEST_TOLS_FP32 = {
@@ -68,7 +70,7 @@ def build_name(cfg, invoker_cfg):
             block_size_str = f'_blocksize{cfg.gating.block_size}'
         else:
             block_size_str = ''
-        return f"MoE_b{invoker_cfg['batch_size']}_s{invoker_cfg['seq_len']}_i{cfg.input_dim}_h{cfg.hidden_dim}_e{cfg.num_experts}_topk{cfg.gating.top_k}_g{cfg.num_groups}_ec{cfg.gating.train_capacity_factor}{block_size_str}_mesh{mesh_str}_{dtype_str}"
+        return f"MoE_i{cfg.input_dim}_h{cfg.hidden_dim}_e{cfg.num_experts}_topk{cfg.gating.top_k}_g{cfg.num_groups}_ec{cfg.gating.train_capacity_factor}{block_size_str}_b{invoker_cfg['batch_size']}_s{invoker_cfg['seq_len']}_mesh{mesh_str}_{dtype_str}"
     else:
         # Gating layer
         E = invoker_cfg['input_shape'][-1]
@@ -122,11 +124,80 @@ class ModuleConfig():
         self.mesh_dims = None
         self.num_devices = None
         self.device = invoker_cfg['device']
-        self.out_shard = None
         self.inputs = {}
         self.state = None
+        self.testid = None
         self.atol = TEST_TOLS_BF16['atol'] if self.dtype in ["bfloat16", jnp.bfloat16] else TEST_TOLS_FP32['atol']
         self.rtol = TEST_TOLS_BF16['rtol'] if self.dtype in ["bfloat16", jnp.bfloat16] else TEST_TOLS_FP32['rtol']
+        self.name = build_name(cfg, invoker_cfg)
+
+    def to_dict(self):
+        return {
+            'cfg': self.cfg.to_dict(),
+            'invoker_cfg': self.invoker_cfg,
+            'jax': jax.__version__,
+        }
+    
+    def matches_cached_config(self):
+        # with open(os.path.join(self.golden_dump_path, 'golden_config_new.txt'), 'w') as f:
+        #     f.write(f"{self.to_dict()}")
+        with open(os.path.join(self.golden_dump_path, 'golden_config.txt'), 'r') as f:
+            loaded_cfg = f.read()
+        return f"{self.to_dict()}" == loaded_cfg
+
+    @property
+    def golden_dump_path(self):
+        if hasattr(self, '_golden_dump_path'):
+            return self._golden_dump_path
+        else:
+            GOLDENS_DIR = os.getenv('GOLDENS_DIR')
+            if GOLDENS_DIR:
+                testname = self.testid.split('.', 1)[-1]
+                self.testname = testname
+                self._golden_dump_path = os.path.join(GOLDENS_DIR, testname)
+            else:
+                self._golden_dump_path = None
+            return self._golden_dump_path
+
+    def dump_goldens(self, tensors):
+        os.makedirs(self.golden_dump_path, exist_ok=True)
+        with open(os.path.join(self.golden_dump_path, 'golden_config.txt'), 'w') as f:
+            f.write(f"{self.to_dict()}")
+        try:
+            for k, v in tensors.items():
+                jnp.save(os.path.join(self.golden_dump_path, f'{k}.npy'), v, allow_pickle=True)
+            return True
+        except OverflowError:
+            # TODO: shard and write to disk
+            print(self.testid, self.testname, 'OverflowError while saving tensors, skipping golden dump')
+            return False
+
+    def load_goldens(self, tensors):
+        if not self.golden_dump_path or not os.path.exists(self.golden_dump_path):
+            print(self.testid, self.testname, 'Could not find cache for test')
+            return False
+        if not self.matches_cached_config():
+            print(self.testid, self.testname, 'Cached config does not match current config')
+            return False
+        try:
+            for k in tensors.keys():
+                tensor_path = os.path.join(self.golden_dump_path, f'{k}.npy')
+                if not os.path.exists(tensor_path):
+                    print('Incomplete cache, could not find', tensor_path)
+                    return False
+                tensors[k] = jnp.load(tensor_path, allow_pickle=True)
+                if isinstance(tensors[k], np.ndarray):
+                    val = tensors[k]
+                    i = 0
+                    for ck, v in np.ndenumerate(val):
+                        if i == 0:
+                            tensors[k] = v
+                        i+=1
+                    assert i == 1, f"Expected single value, got {i} values"
+            return True
+        except Exception as e:
+            print(self.testid, self.testname, 'Error loading cached tensors:', e)
+            return False
 
     @property
     def layer_type(self):
@@ -139,7 +210,57 @@ class ModuleConfig():
         else:
             return self.cfg.__class__.__name__
 
-class TestCaseConfig():
+    @contextmanager
+    def dump_for_spectometer(self):
+        if self.device != "neuron":
+            yield
+            return
+
+        testname = self.testid.split('.', 1)[-1]
+        neuron_dump_path = os.path.join(os.environ.get('NEURON_DUMP_PATH'), testname)
+        prev_flags = os.environ["NEURON_CC_FLAGS"]
+        os.environ["NEURON_CC_FLAGS"] = os.environ["NEURON_CC_FLAGS"] + f" --dump={neuron_dump_path}"
+        # Create dump folder if it doesn't exist
+        os.makedirs(neuron_dump_path, exist_ok=True)
+        # Create metadata JSON file for spectometer
+        metadata = {
+            "name": testname,
+            "hlo_generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "submitter_alias": "huilgolr",
+            "compiler_flags": os.environ["NEURON_CC_FLAGS"],
+            "target_instance_type": "trn2.48xl",
+            "model_info": {
+                "name": testname,
+                "batch_size": self.invoker_cfg["batch_size"],
+                "number_of_layers": 1,  # Assuming single layer for now
+                "sequence_length": self.invoker_cfg["seq_len"],
+                "hlo_url": f"s3://kaena-nn-models/spectometer-staging/training-moe-jax-integration-tests/{testname}/model.hlo_module.pb",
+            },
+            "software": {
+                "jax": jax.__version__,
+                "axlearn": os.getenv("GIT_COMMIT")
+            },
+            "source_code_url": "https://github.com/rahul003/axlearn/",
+        }
+        metadata_path = os.path.join(neuron_dump_path, "hlo_metadata.json")
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+        yield
+        os.environ["NEURON_CC_FLAGS"] = prev_flags
+        matches = glob.glob(os.path.join(neuron_dump_path, "**/*.code"))
+        if matches:
+            for match in matches:
+                shutil.copyfile(
+                    match,
+                    os.path.join(neuron_dump_path, "model.hlo_module.pb"),
+                )
+
+    def reset(self):
+        self.layer = None
+        self.state = None
+        self.inputs = None
+
+class ExperimentConfig():
     def __init__(
             self, 
             test_cfg, 
@@ -162,10 +283,12 @@ class TestCaseConfig():
         if self.golden:
             print('> Golden device:', self.golden.device, 'Layer:', self.golden.layer_type, 'Gating:', self.golden.gating_type)
     
-    def instantiate(self):
+    def instantiate(self, testid):
+        self.test.testid = testid
         self.test.mesh_dims = get_mesh_dims_from_spec(self.test.invoker_cfg["mesh_spec"])
         self.test.num_devices = math.prod(self.test.mesh_dims)
         if self.golden:
+            self.golden.testid = testid
             self.golden.mesh_dims = get_mesh_dims_from_spec(self.golden.invoker_cfg["mesh_spec"])
             self.golden.num_devices = math.prod(self.golden.mesh_dims)
         self.maybe_set_outer_batch()
@@ -192,8 +315,11 @@ class TestCaseConfig():
         with module_config.mesh:
             with jax.default_device(devices[0]):
                 module_config.layer = module_config.cfg.instantiate(parent=None) 
-                param_specs = module_config.layer.create_parameter_specs_recursively() 
-                param_partition_specs = jax.tree.map(lambda spec: spec.sharding, param_specs)
+                module_config.param_specs = module_config.layer.create_parameter_specs_recursively()
+                for p, v in module_config.param_specs.items():
+                    module_config.param_specs[p] = v if v else None
+                param_partition_specs = jax.tree.map(lambda spec: spec.sharding, module_config.param_specs)
+                module_config.param_partition_specs = param_partition_specs
                 if state_to_copy:
                     module_config.state = {}
                     for key, value in state_to_copy.items():
@@ -257,99 +383,207 @@ class GridSpaceBuilder:
         )
     
     def build_toy_grid_space(self):
-        return [
-            self.create_test_config(
-                input_dim=3, hidden_dim=6,
-                n_experts=4, top_k=1, n_groups=1, capacity_factor=2, 
-                mesh_spec={}, 
-                batch=1, seq=8, dtype=jnp.float32, 
-                block_size=4,
-            ),
-            self.create_test_config(
-                input_dim=3, hidden_dim=6, 
-                n_experts=4, top_k=2, n_groups=1, capacity_factor=2,
-                mesh_spec={}, 
-                batch=1, seq=8, dtype=jnp.float32, 
-                block_size=4
-            ),
-            self.create_test_config(
-                input_dim=256, hidden_dim=512,
-                n_experts=16, top_k=2, n_groups=1, capacity_factor=2,
-                mesh_spec={}, 
-                batch=1, seq=2048, dtype=jnp.float32, 
-                block_size=256
-            ),
-            self.create_test_config(
-                input_dim=3, hidden_dim=6, n_experts=4, 
-                top_k=1, n_groups=1, capacity_factor=2, 
-                mesh_spec={}, 
-                batch=4, seq=8, dtype=jnp.float32, 
-                block_size=4
-            ),
-            self.create_test_config(
-                input_dim=3, hidden_dim=6, n_experts=4, 
-                top_k=2, n_groups=1, capacity_factor=2, 
-                mesh_spec={}, 
-                batch=4, seq=8, dtype=jnp.float32, 
-                block_size=4
-            ),
-            self.create_test_config(
-                input_dim=3, hidden_dim=6, n_experts=4, 
-                top_k=1, n_groups=1, capacity_factor=2, 
-                mesh_spec={}, 
-                batch=4, seq=8, dtype=jnp.bfloat16, 
-                block_size=4
-            ),
-    ][0]
+        return self.create_test_config(
+                input_dim=2048, hidden_dim=2048,
+                n_experts=2, top_k=1, n_groups=1, capacity_factor=1,
+                mesh_spec={},
+                batch=1, seq=256, dtype=jnp.float32
+            )
     
     def build_presubmit_grid_space(self):
         grid_space = []
+        tp_4_mesh_spec = {"fsdp":-1, "model":4}
+        tp_16_mesh_spec = {"fsdp":-1, "model":16}
+        tp_64_mesh_spec = {"fsdp":-1, "model":64}
         kwargs={
             'dtype': jnp.bfloat16,
             'batch': 16,
         }
-        # 12B Configs
-        kwargs_12b = {
-            'input_dim': 2048,
-            'hidden_dim': 7168,
-            'mesh_spec': {"fsdp":-1, "model":4},
-        }
-
+        # all tp4
         grid_space.extend([
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=1, top_k=1, n_groups=1, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=1, n_groups=2, capacity_factor=2, seq=4096),
-            self.create_test_config(**kwargs, **kwargs_12b, n_experts=8, top_k=4, n_groups=2, capacity_factor=2, seq=4096),
+            # 12b
+            self.create_test_config(
+                **kwargs, input_dim=2048, hidden_dim=7168, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096, mesh_spec=tp_4_mesh_spec,
+            ),
+            # switch base
+            self.create_test_config(
+                **kwargs, input_dim=1536, hidden_dim=6144, n_experts=128, top_k=2, n_groups=1, capacity_factor=2, seq=8192, mesh_spec=tp_4_mesh_spec,
+            ),
+            # 50b
+            self.create_test_config(
+                **kwargs, input_dim=4096, hidden_dim=14336, n_experts=8, top_k=2, n_groups=4, capacity_factor=2, seq=8192, mesh_spec=tp_4_mesh_spec,
+            ),
+            # llama4 scout
+            self.create_test_config(
+                **kwargs, input_dim=5120, hidden_dim=8192, n_experts=16, top_k=1, n_groups=1, capacity_factor=4, seq=4096, mesh_spec=tp_4_mesh_spec,
+            ),
         ])
         
         if self.layer == "moe":
-            # 50B Config
+            # all tp16
+            kwargs['batch'] = 4
+            # switch large
             grid_space.append(
                 self.create_test_config(
-                    **kwargs, input_dim=4096, hidden_dim=14336, mesh_spec={"fsdp":-1, "model":4}, 
+                **kwargs, input_dim=2048, hidden_dim=8192, n_experts=128, top_k=4, n_groups=1, capacity_factor=2, seq=2048, mesh_spec=tp_16_mesh_spec,
+                )
+            )
+            # deepseek
+            self.create_test_config(
+                **kwargs, input_dim=7168, hidden_dim=2048, n_experts=256, top_k=8, n_groups=4, capacity_factor=4, seq=4096, mesh_spec=tp_4_mesh_spec,
+            ),
+            # dbrx
+            grid_space.append(
+                self.create_test_config(
+                    **kwargs, input_dim=6144, hidden_dim=10752, mesh_spec=tp_16_mesh_spec,
+                    n_experts=16, top_k=4, n_groups=1, capacity_factor=4, seq=4096
+                )
+            )
+            # 16x10b
+            grid_space.append(
+                self.create_test_config(
+                    **kwargs, input_dim=6144, hidden_dim=15360, mesh_spec=tp_16_mesh_spec,
+                    n_experts=16, top_k=4, n_groups=1, capacity_factor=4, seq=4096
+                )
+            )
+            # 8x20b
+            grid_space.append(
+                self.create_test_config(
+                    **kwargs, input_dim=8192, hidden_dim=16384, mesh_spec=tp_16_mesh_spec,
+                    n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=2048
+                )
+            )
+            # llama 4 maverick
+            grid_space.append(
+                self.create_test_config(
+                    **kwargs, input_dim=5120, hidden_dim=6144, mesh_spec=tp_16_mesh_spec,
+                    n_experts=128, top_k=1, n_groups=1, capacity_factor=2, seq=8192
+                )
+            )
+
+            # tp64
+            # 8x20b
+            kwargs['batch'] = 1
+            grid_space.append(
+                self.create_test_config(
+                    **kwargs, input_dim=8192, hidden_dim=16384, mesh_spec=tp_64_mesh_spec,
                     n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=4096
                 )
             )
-            # 150B Config
-            # 16x10
-            # OOB on neuron, pass on cpu
+            # switch xxl
             grid_space.append(
                 self.create_test_config(
-                    **kwargs, input_dim=6144, hidden_dim=15360, mesh_spec={"fsdp":-1, "model":16},
-                    n_experts=16, top_k=4, n_groups=1, capacity_factor=2, seq=4096
+                    **kwargs, input_dim=8192, hidden_dim=20480, mesh_spec=tp_64_mesh_spec,
+                    n_experts=64, top_k=2, n_groups=1, capacity_factor=2, seq=8192
                 )
             )
-            # 8x20
-            kwargs['batch'] = 8
-            grid_space.append(
-                self.create_test_config(
-                    **kwargs, input_dim=8192, hidden_dim=16384, mesh_spec={"fsdp":-1, "model":16},
-                    n_experts=8, top_k=2, n_groups=1, capacity_factor=2, seq=8192
-                )
-            )
+            
+        return grid_space
+
+    def build_grid_space_input_hidden(self, input_dim=2048, hidden_dim=7168, min_seq=8*1024, max_seq=None, min_tp=None, max_tp=None, max_E=None, dtype=jnp.bfloat16):
+        # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
+        # Grid space for testing
+        grid_space = []
+        batch_sizes = {
+            4: 16,
+            8: 8,
+            16: 4,
+            32: 2,
+            64: 1,
+        }
+        tp_degrees = [4, 16, 64]
+        tp_degrees = [d for d in tp_degrees if min_tp is None or d >= min_tp]
+        tp_degrees = [d for d in tp_degrees if max_tp is None or d <=  max_tp]
+        kwargs={
+            'dtype': dtype,
+            'input_dim': int(input_dim),
+            'hidden_dim': int(hidden_dim),
+        }
+        for tp_degree in tp_degrees:
+            mesh_spec = {"fsdp": -1, "model": tp_degree}
+            batch = batch_sizes[tp_degree]
+            for E in [1, 8, 16, 64, 128, 256]:
+                if max_E and E > max_E:
+                    # to skip large Es for large experts
+                    break
+                if E >= 64 and tp_degree < 16:
+                    continue
+                # min sparsity of 25% assumed
+                for K in [1, 2, 4, 8, 16]:
+                    if K >= E//4:
+                        break
+                    for G in [1, 4]:
+                        if G > E:
+                            break
+                        cf = 2
+                        S = min_seq
+                        while (max_seq and S <= max_seq) or (S <= 16*1024):
+                            grid_space.append(self.create_test_config(**kwargs, n_experts=E, top_k=K, n_groups=G, capacity_factor=cf, seq=S, batch=batch, mesh_spec=mesh_spec))
+                            S = S * 2
+        return grid_space
+
+    def build_grid_space_llama4_maverick(self):
+        kwargs={
+            'dtype': jnp.bfloat16,
+            'input_dim': 5120,
+            'hidden_dim': 6144,
+            'n_experts': 128,
+            'dtype': jnp.bfloat16,
+            'seq': 8192,
+            'capacity_factor': 2,
+            'n_groups': 1,
+        }
+
+        # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
+        # Grid space for testing
+        grid_space = []
+        # TODO add EP
+        for mesh_spec in [{"fsdp": -1, "model": 16}]:
+            batch = 4 if mesh_spec["model"] == 16 else 1
+            for top_k in [1, 8]:
+                grid_space.append(self.create_test_config(**kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
+        return grid_space
+    
+    def build_grid_space_switch_xxl(self):
+        kwargs={
+            'dtype': jnp.bfloat16,
+            'input_dim': 8192,
+            'hidden_dim': 20480,
+            'n_experts': 64,
+            'dtype': jnp.bfloat16,
+            'seq': 2048,
+            'capacity_factor': 2,
+            'n_groups': 1,
+        }
+        # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
+        # Grid space for testing
+        grid_space = []
+        # TODO add EP
+        for mesh_spec in [{"fsdp": -1, "model": 64}]:
+            batch = 4 if mesh_spec["model"] == 16 else 1
+            for top_k in [1, 2]:
+                grid_space.append(self.create_test_config(**kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
+        return grid_space
+
+    def build_grid_space_qwen3_235b(self):
+        kwargs={
+            'dtype': jnp.bfloat16,
+            'input_dim': 4096,
+            'hidden_dim': 12288,
+            'n_experts': 128,
+            'dtype': jnp.bfloat16,
+            'seq': 16384,
+            'capacity_factor': 2,
+            'n_groups': 1,
+        }
+        # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
+        # Grid space for testing
+        grid_space = []
+        # TODO add EP
+        for mesh_spec in [{"fsdp": -1, "model": 64}]:
+            batch = 4 if mesh_spec["model"] == 16 else 1
+            for top_k in [1, 8]:
+                grid_space.append(self.create_test_config(**kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
         return grid_space
 
     def build_grid_space_12B(self):
@@ -431,13 +665,12 @@ class GridSpaceBuilder:
 
     def build_grid_space_150B(self):
         # Grid space for testing
-        grid_space = []
         kwargs={
             'dtype': jnp.bfloat16,
             'input_dim': 6144,
             'hidden_dim': 15360,
         }
-
+        grid_space = []
         grid_space.extend([
             # base
             self.create_test_config(**kwargs, n_experts=16, top_k=4, n_groups=1, capacity_factor=2, batch=4, seq=8192, mesh_spec={"fsdp":-1, "model":16}),
@@ -455,11 +688,11 @@ class GridSpaceBuilder:
             self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
             self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=8192, mesh_spec={"fsdp":-1, "model":16}),
             self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=16*1024, mesh_spec={"fsdp":-1, "model":16}),
-            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=4, seq=32*1024, mesh_spec={"fsdp":-1, "model":16}),
+            self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=1, seq=32*1024, mesh_spec={"fsdp":-1, "model":64}),
 
             # tp changes
             # self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=2, capacity_factor=2, batch=8, seq=4096, mesh_spec={"fsdp":-1, "model":8}),
-            self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
+            self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=2048, mesh_spec={"fsdp":-1, "model":4}),
             # self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=2, capacity_factor=2, batch=2, seq=4096, mesh_spec={"fsdp":-1, "model":32}),
             self.create_test_config(**kwargs, n_experts=16, top_k=2, n_groups=1, capacity_factor=2, batch=1, seq=4096, mesh_spec={"fsdp":-1, "model":64}),
             
@@ -474,7 +707,6 @@ class GridSpaceBuilder:
             self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
         ])
         return grid_space
-
 
 def get_gating_config(gating_cls, num_experts, top_k, train_capacity_factor, expert_capacity, block_size=None, name=None):
 
@@ -552,17 +784,26 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
     else:
         golden_invoker_cfg = {}
     
-    config = TestCaseConfig(
+    config = ExperimentConfig(
         test_cfg, 
         golden_cfg, 
         test_invoker_cfg, 
         golden_invoker_cfg,
         loss_fn=lambda x: jnp.mean(x)*1e2,
         conv_output=conv_output,
-        prefix="_moe"
+        prefix="_moe" if layer == "moe" else "_gating"
     )
+    return (build_name(test_cfg, test_invoker_cfg), config)
 
-    return (build_name(test_cfg, test_invoker_cfg) + config.prefix, config)
+@cache
+def get_gating_configs(test_suite="presubmit", layer='moe', test=TopKGatingGather, golden=TopKGating, test_device="neuron", golden_device="cpu"):
+    builder = GridSpaceBuilder(layer=layer, test=test, golden=golden, test_device=test_device, golden_device=golden_device)
+    if test_suite == 'presubmit':
+        return builder.build_presubmit_grid_space()
+    else:
+        # dummy to avoid errors, can't have empty grid space
+        return builder.build_presubmit_grid_space()[:1]
+
 
 @cache
 def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGather, golden=TopKGating, test_device="neuron", golden_device="cpu"):
@@ -570,37 +811,62 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
     if test_suite == "toy":
         return builder.build_toy_grid_space()
     elif test_suite == 'presubmit':
-        return builder.build_presubmit_grid_space()
-    elif test_suite == 'small_models':
-        return builder.build_grid_space_12B() + builder.build_grid_space_50B()
+        tests = builder.build_presubmit_grid_space()
     elif test_suite == '12b':
         return builder.build_grid_space_12B()
     elif test_suite == '50b':
         return builder.build_grid_space_50B()
     elif test_suite == '150b':
-        return builder.build_grid_space_150B()
+        tests = builder.build_grid_space_150B()
+    elif test_suite == 'qwen3-30b':
+        tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=6144, max_E=128)
+    elif test_suite == 'switch-base':
+        tests = builder.build_grid_space_input_hidden(input_dim=1536, hidden_dim=6144, max_tp=16)
+    elif test_suite == 'switch-large':
+        tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16)
+    elif test_suite == 'mixtral-50b':
+        tests = builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=14336, max_E=16, max_tp=16)
+    elif test_suite == 'llama4-scout':
+        # llama4 scout (topk=1, E=16)
+        tests = builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=8192, max_E=64, max_tp=16)
+    elif test_suite == 'deepseek-v3':
+        tests = builder.build_grid_space_input_hidden(input_dim=7168, hidden_dim=2048, max_tp=16)
+    # below are too big, takes too long to run, and many tests go CPU OOM if we do grid like for above configs
+    elif test_suite == 'qwen3-235b':
+        tests = builder.build_grid_space_qwen3_235b()
+    elif test_suite == 'switch-xxl':
+        tests = builder.build_grid_space_switch_xxl()
+    elif test_suite == 'llama4-maverick':
+        tests = builder.build_grid_space_llama4_maverick()
     else:
         raise ValueError(f"Unknown test suite: {test_suite}")
 
-    # leaving it here for any custom local testing
-    test_configs = []
-    for (batch, seq, input_dim,  hidden_dim, n_experts, top_k, n_groups,
-         out_batch, capacity_factor, mesh_spec, dtype) in grid_space:
-        test_configs.append(create_test_config(
-            test=test,
-            golden=golden,
-            test_device=test_device,
-            golden_device=golden_device,
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            n_experts=n_experts,
-            n_groups=n_groups,
-            top_k=top_k,
-            capacity_factor=capacity_factor, 
-            mesh_spec=mesh_spec,
-            batch=batch,
-            seq=seq,
-            dtype=dtype,
-        ))
-    return test_configs
-
+    test_suite_part = int(os.getenv('TEST_SUITE_PART', 0))
+    test_suite_parts = int(os.getenv('TEST_SUITE_PARTS', 4))
+    part_size = len(tests)//test_suite_parts
+    tests = tests[part_size*test_suite_part:part_size*(test_suite_part+1)]
+    print('Candidate tests', [x[0] for x in tests])
+    RESUME_TESTS_PATH=os.getenv('RESUME_TESTS_PATH', None)
+    if RESUME_TESTS_PATH:
+        matches = glob.glob(os.path.join(RESUME_TESTS_PATH, test_suite, "integ_*.xml"))
+        if matches:
+            tests_to_resume = []
+            failed_tests = set()
+            for m in matches:
+                # load each xml result and list test names
+                results = parse_pytest_xml(m)
+                for r in results['failures']:
+                    failed_tests.add('MoE' + r[0].split('_MoE')[1])
+            print('Failed tests', failed_tests)
+            for t in tests:
+                if t[0] in failed_tests:
+                    tests_to_resume.append(t)
+            tests = tests_to_resume
+            print('Filtered tests', tests)
+        else:
+            print(f"No previous results found in {RESUME_TESTS_PATH} for {test_suite}, running all tests")
+    if tests:
+        return tests
+    else:
+        # dummy test as we can't return no test
+        return builder.build_toy_grid_space()

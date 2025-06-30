@@ -1,0 +1,308 @@
+import os
+import unittest
+from functools import partial
+import jax
+from axlearn.common.test_utils import TestCase
+from utils_neuron import ExperimentConfig
+from axlearn.common.module import functional as F
+import numpy as np
+import jax.numpy as jnp
+
+class LayerTestCase(TestCase):
+    def _fwd_call(self, layer, state, inputs):
+        return F(
+                layer,
+                is_training=True,
+                prng_key=jax.random.PRNGKey(123),
+                state=state,
+                inputs=inputs,
+        )
+
+    def helper_fwd(self, cfg):
+        cfg.instantiate(unittest.TestCase.id(self))
+        cfg.print_summary()
+        use_cached_goldens = int(os.getenv("USE_CACHED_GOLDENS", "0"))
+        cache_goldens = int(os.getenv("CACHE_GOLDENS", "0"))
+        # @debug_callback
+        @jax.jit
+        def test_fwd_call(test_state, test_inputs):
+            test_output, _ = self._fwd_call(cfg.test.layer, test_state, test_inputs)
+            return test_output
+
+        @jax.jit
+        def golden_fwd_call(golden_state, golden_inputs):
+            golden_output, _ =  self._fwd_call(cfg.golden.layer, golden_state, golden_inputs)
+            return golden_output
+        
+        with cfg.test.mesh, cfg.test.dump_for_spectometer():
+            test_output = test_fwd_call(cfg.test.state, cfg.test.inputs)
+
+        if cfg.golden:
+            if use_cached_goldens:
+                # load cached goldens
+                gold_tensors = {'golden_output': None}
+                if not cfg.golden.load_goldens(gold_tensors):
+                    # can't find goldens
+                    use_cached_goldens = False
+                else:
+                    golden_output = gold_tensors['golden_output']
+            if not use_cached_goldens:
+                jax.config.update('jax_platform_name', cfg.golden.device)
+                with cfg.golden.mesh:
+                    golden_output = golden_fwd_call(cfg.golden.state, cfg.golden.inputs)
+                if cache_goldens:
+                    assert cfg.golden.device == "cpu", "Golden device must be cpu for caching"
+                    cfg.golden.dump_goldens({'golden_output': golden_output})
+
+            if cfg.conv_output != None:
+                test_output = cfg.conv_output(test_output)
+            # Transfer results to CPU before comparison
+            self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output),
+                                    atol=cfg.test.atol, rtol=cfg.test.rtol)
+
+    def _load_or_compute_goldens(self, golden_bwd_call, cfg, use_cached_goldens, cache_goldens):
+        if use_cached_goldens:
+            gold_tensors = {
+                'golden_loss': None,
+                'golden_grads': None,
+                'golden_output': None
+            }
+            if not cfg.golden.load_goldens(gold_tensors):
+                # can't find goldens
+                use_cached_goldens = False
+            else:
+                golden_loss = gold_tensors['golden_loss']
+                golden_grads = gold_tensors['golden_grads']
+                golden_output = gold_tensors['golden_output']
+
+        if not use_cached_goldens:
+            jax.config.update('jax_platform_name', cfg.golden.device)
+            with cfg.golden.mesh:
+                golden_loss, golden_grads, golden_output = golden_bwd_call(cfg.golden.layer, cfg.golden.state, cfg.golden.inputs)
+                #Transfer results to CPU before comparison
+                if cfg.golden.device == "neuron":
+                    # we never have this case in current tests
+                    golden_loss = jax.tree_map(jax.device_get, golden_loss)
+                    golden_grads = jax.tree_map(jax.device_get, golden_grads)
+                    golden_output = jax.tree_map(jax.device_get, golden_output)
+
+            if cache_goldens:
+                assert cfg.golden.device == "cpu", "Golden device must be cpu for caching"
+                cfg.golden.dump_goldens({
+                    'golden_loss': golden_loss,
+                    'golden_grads': golden_grads,
+                    'golden_output': golden_output
+                })
+        return golden_loss, golden_grads, golden_output
+
+    def create_golden_bwd_fn(self, cfg):
+        @partial(jax.jit, static_argnums=0, out_shardings=(None, cfg.golden.param_partition_specs, None))
+        def golden_bwd_call(golden_layer, golden_state, golden_inputs):
+            def loss_fn(state):
+                output, aux = self._fwd_call(golden_layer, state, golden_inputs)
+                return cfg.loss_fn(output), output  # Return both loss and output
+            (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(golden_state)
+            return loss, grads, output
+        return golden_bwd_call
+
+    def create_test_bwd_fn(self, cfg):
+        @partial(jax.jit, static_argnums=0, in_shardings=(cfg.test.param_partition_specs, None), out_shardings=(None, cfg.test.param_partition_specs, None))
+        def test_bwd_call(test_layer, test_state, test_inputs):
+            def loss_fn(state):
+                output, aux = self._fwd_call(test_layer, state, test_inputs)
+                return cfg.loss_fn(output), output
+            (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+            return loss, grads, output
+        return test_bwd_call
+
+    def helper_bwd(self, cfg: ExperimentConfig):
+        cfg.instantiate(unittest.TestCase.id(self))
+        cfg.print_summary()
+        use_cached_goldens = int(os.getenv("USE_CACHED_GOLDENS", "0"))
+        cache_goldens = int(os.getenv("CACHE_GOLDENS", "0"))
+
+        if cfg.golden:
+            golden_bwd_call = self.create_golden_bwd_fn(cfg)
+            golden_loss, golden_grads, golden_output = self._load_or_compute_goldens(golden_bwd_call, cfg, use_cached_goldens, cache_goldens)
+
+        test_bwd_call = self.create_test_bwd_fn(cfg)
+        with cfg.test.mesh:
+            jax.config.update('jax_platform_name', cfg.test.device)
+            with cfg.test.dump_for_spectometer():
+                test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+        if cfg.golden:
+            self.assertNestedAllClose(test_loss, golden_loss, atol=cfg.test.atol, rtol=cfg.test.rtol)
+            self.assertNestedAllClose(test_grads, golden_grads, atol=cfg.test.atol, rtol=cfg.test.rtol)
+            self.assertNestedAllClose(test_output, golden_output, atol=cfg.test.atol, rtol=cfg.test.rtol)
+            cfg.golden.reset()
+            del golden_loss, golden_grads, golden_output
+        del test_loss, test_grads, test_output
+        cfg.test.reset()
+
+class GatingTestCase(TestCase):
+    def _fwd_call(self, layer, state, inputs):
+        return F(
+                layer,
+                is_training=True,
+                prng_key=jax.random.PRNGKey(123),
+                state=state,
+                inputs=inputs,
+        )
+
+    def helper_fwd(self, cfg):
+        cfg.instantiate(unittest.TestCase.id(self))
+        cfg.print_summary()
+        use_cached_goldens = int(os.getenv("USE_CACHED_GOLDENS", "0"))
+        cache_goldens = int(os.getenv("CACHE_GOLDENS", "0"))
+        assert cfg.golden is not None, "Golden config must be provided for comparison."
+
+        @partial(jax.jit, static_argnums=0)
+        def test_fwd_call(test_layer, test_state, test_inputs):
+            test_output = self._fwd_call(test_layer, test_state, test_inputs)
+            return test_output
+
+        @partial(jax.jit, static_argnums=0)
+        def golden_fwd_call(golden_layer, golden_state, golden_inputs):
+            golden_output =  self._fwd_call(golden_layer, golden_state, golden_inputs)
+            return golden_output
+        
+        with cfg.test.mesh, cfg.test.dump_for_spectometer():
+            test_output = test_fwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+
+        if use_cached_goldens:
+            gold_tensors = {'golden_output': None}
+            if not cfg.golden.load_goldens(gold_tensors):
+                # can't find goldens
+                use_cached_goldens = False
+            else:
+                golden_output = gold_tensors['golden_output']
+        if not use_cached_goldens:
+            jax.config.update('jax_platform_name', cfg.golden.device)
+            # Ensure golden mesh is set up correctly
+            with cfg.golden.mesh:
+                golden_output = golden_fwd_call(cfg.golden.layer, cfg.golden.state, cfg.golden.inputs)
+            if cache_goldens:
+                assert cfg.golden.device == "cpu", "Golden device must be cpu for caching"
+                cfg.golden.dump_goldens({'golden_output': golden_output})
+
+        if cfg.conv_output != None:
+            test_output = cfg.conv_output(test_output)
+        # Transfer results to CPU before comparison
+        self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output),
+                                  atol=cfg.test.atol, rtol=cfg.test.rtol)
+
+    def validate_block_to_expert(self, block_to_expert, cfg, num_blocks, num_blocks_per_expert):
+        # Validating block_to_expert tensor
+        # (O, G, N)
+        O, G, N = block_to_expert.shape
+        assert N == num_blocks
+        for o in range(O):
+            for g in range(G):
+                num_blocks_for_expert = {}
+                for n in range(N):
+                    expert_id = block_to_expert[o, g, n]
+                    if expert_id not in num_blocks_for_expert:
+                        num_blocks_for_expert[expert_id] = 0
+                    num_blocks_for_expert[expert_id] += 1
+                assert len(num_blocks_for_expert) == cfg.test.cfg.num_experts, f"Expected {cfg.test.cfg.num_experts} experts, but got {len(num_blocks_for_expert)}"
+                for expert_id, num_blocks in num_blocks_for_expert.items():
+                    assert num_blocks == num_blocks_per_expert, f"Expert {expert_id} has {num_blocks} blocks, expected {num_blocks_per_expert}"
+
+    def validate_token_position_to_id(self, O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id):
+        # Validating token_position_to_id (O, G, N*B)
+        token_position_to_id = token_position_to_id.reshape(O, G, N, block_size)
+        in_range = np.where(((token_position_to_id >=0) & (token_position_to_id<=S)), True, False)
+        all_in_range = jnp.all(in_range)
+        for o in range(O):
+            for g in range(G):
+                for n in range(N):
+                    bid = n
+                    expert_id = block_to_expert[o, g, n]
+                    for b in range(block_size):
+                        # current block's id:
+                        token_id_in_seq = token_position_to_id[o, g, n, b]
+                        if token_id_in_seq == S:
+                            # padding token
+                            continue
+                        elif token_id_in_seq < 0 or token_id_in_seq > S:
+                            print(token_position_to_id[o, g, n, b], token_id_in_seq)
+                        else:
+                            assert expert_affinities_masked[o, g, token_id_in_seq, expert_id] > 0
+                        # must be in range [0, S]
+        assert all_in_range, f"token_position_to_id out of range: {token_position_to_id}, {in_range}"
+
+    def validate_expert_affinties(self, expert_affinities_masked, cfg):
+        # assert that max of top k in each row of expert_affinities_masked
+        # O, G, S, E
+        assert np.all(np.count_nonzero(expert_affinities_masked, axis=3) <= cfg.test.cfg.top_k)
+
+    def helper_blockwise_gating(self, cfg):
+        cfg.instantiate(unittest.TestCase.id(self))
+        cfg.print_summary()
+        assert cfg.golden is None, "This test doesn't use golden "
+        @partial(jax.jit, static_argnums=0)
+        def test_fwd_call(test_layer, test_state, test_inputs):
+            return self._fwd_call(test_layer, test_state, test_inputs)
+        with cfg.test.mesh, cfg.test.dump_for_spectometer():
+            test_output = test_fwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+
+        test_output = jax.device_get(test_output)
+        outputs = test_output[0]
+        token_position_to_id, expert_affinities_masked = outputs.combine_tensor
+        _,_, S, E = expert_affinities_masked.shape
+        expert_capacity = int(S * cfg.test.cfg.train_capacity_factor / E)
+        if isinstance(cfg.test.cfg, TopKGatingGatherBlockwise.Config):
+            block_size = cfg.test.cfg.block_size
+        else:
+            block_size = expert_capacity
+        num_blocks = math.ceil(expert_capacity / block_size) * E
+        num_blocks_per_expert = num_blocks / E
+
+        block_to_expert = outputs.dispatch_tensor
+        O, G, N = block_to_expert.shape
+        self.validate_block_to_expert(block_to_expert, cfg, num_blocks, num_blocks_per_expert)
+        self.validate_token_position_to_id(O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
+        self.validate_expert_affinties(expert_affinities_masked, cfg)
+
+    def helper_blockwise_gating_v2(self, cfg):
+        cfg.instantiate(unittest.TestCase.id(self))
+        cfg.print_summary()
+        @partial(jax.jit, static_argnums=0)
+        def test_fwd_call(test_layer, test_state, test_inputs):
+            return self._fwd_call(test_layer, test_state, test_inputs)
+        with cfg.test.mesh:
+            test_output = test_fwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+        with cfg.golden.mesh:
+            golden_output = test_fwd_call(cfg.golden.layer, cfg.golden.state, cfg.golden.inputs)
+        test_output = jax.device_get(test_output)
+        golden_output = jax.device_get(golden_output)
+        outputs = test_output[0]
+        golden_outputs = golden_output[0]
+
+        token_position_to_id, expert_affinities_masked = outputs.combine_tensor
+        g_token_position_to_id, g_expert_affinities_masked = golden_outputs.combine_tensor
+        block_to_expert = outputs.dispatch_tensor
+
+        self.assertNestedAllClose(
+            expert_affinities_masked,
+            g_expert_affinities_masked,
+            atol=cfg.test.atol, rtol=cfg.test.rtol)
+        self.assertNestedAllClose(
+            token_position_to_id,
+            g_token_position_to_id,
+            atol=cfg.test.atol, rtol=cfg.test.rtol)
+
+        _,_, S, E = expert_affinities_masked.shape
+        expert_capacity = int(S * cfg.test.cfg.train_capacity_factor / E)
+
+        if isinstance(cfg.test.cfg, TopKGatingGatherBlockwise.Config):
+            block_size = cfg.test.cfg.block_size
+        else:
+            block_size = expert_capacity
+        num_blocks = math.ceil(expert_capacity / block_size) * E
+        num_blocks_per_expert = num_blocks / E
+
+        O, G, N = block_to_expert.shape
+        self.validate_block_to_expert(block_to_expert, cfg, num_blocks, num_blocks_per_expert)
+        self.validate_token_position_to_id(O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
+        self.validate_expert_affinties(expert_affinities_masked, cfg)

@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -e
+sudo rmmod neuron; sudo modprobe neuron
+if [ -z "$VENV_NAME" ]; then
+	VENV_NAME=../jaxmoe
+fi
+
+source $VENV_NAME/bin/activate
+
+export TEST_SUITE=${2:-"presubmit"}
+export TEST_LOG_DIR=${3:-"test_artifacts/shell"}
+export GOLDENS_DIR=${4:-"test_goldens"}
+export JAX_COMPILATION_CACHE_DIR=${5:-"test_artifacts/shell_jax_cc"}
+
+# if defined
+if [ -n "$1" ]; then
+    mkdir -p "${JAX_COMPILATION_CACHE_DIR}"
+fi
+mkdir -p "${GOLDENS_DIR}"
+
+export TEST_ARTIFACTS_PATH=$TEST_LOG_DIR/$TEST_SUITE/artifacts
+export NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
+mkdir -p "$TEST_ARTIFACTS_PATH"
+
+export USE_CACHED_GOLDENS=1
+export CACHE_GOLDENS=1
+export USE_SHARDMAP_FFN=1
+
+export XLA_FLAGS="--xla_cpu_use_thunk_runtime=false --xla_force_host_platform_device_count=64 --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives"
+
+export GIT_COMMIT=$(git rev-parse --short HEAD)
+
+HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
+export XLA_FLAGS="${XLA_FLAGS} --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*' --xla_dump_hlo_as_text"
+# export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_snapshots"
+
+# PJRT Flags 
+export NEURON_FSDP_NUM_LAYER_EARLY_AG_SHIFT=1
+export NEURON_FSDP_NUM_LAYER_LATE_RS_SHIFT=2
+export NEURON_ENABLE_INT_MATMUL_DOWNCAST=1
+export NEURON_FSDP=0
+export NEURON_FSDP_NUM_LAYER_COALESCE=-1
+export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1 # changed from 0
+export NEURON_DISABLE_BOUNDARY_MARKER=1
+
+# Neuron runtime flags
+export NEURON_RT_DBG_CC_DMA_PACKET_SIZE=4096 && export NEURON_RT_DBG_DMA_PACKETIZATION_SIZE=104857
+export NEURON_RT_ASYNC_EXEC_MAX_INFLIGHT_REQUESTS=0
+export NEURON_RT_IO_RING_CACHE_SIZE=0
+export NEURON_RT_ENABLE_MEMORY_METRICS=0
+export NEURON_RT_VIRTUAL_CORE_SIZE=2
+export NEURON_RT_RESET_CORES=1
+export NEURON_RT_LOG_LEVEL="ERROR"
+export NEURON_RT_ENABLE_INTERNODE_EXECUTION_BARRIER=1
+
+# Neuron collectives flag
+export FI_LOG_LEVEL="warn"
+export OFI_NCCL_PROTOCOL=RDMA
+export LD_LIBRARY_PATH="/opt/amazon/efa/lib/"
+export FI_EFA_USE_DEVICE_RDMA="1"
+export FI_PROVIDER="efa"
+export FI_EFA_FORK_SAFE=1
+export OFI_NCCL_MR_CACHE_DISABLE=1
+
+# Neuron compiler flags
+export NEURON_CC_FLAGS="--framework=XLA"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-max-instruction-limit=20000000"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --target=trn2"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-num-neuroncores-per-sengine=2"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --model-type transformer"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --no-internal-hlo-remat"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --enable-mixed-precision-accumulation"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options=--verify-hlo"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} -O1"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --tensorizer-options='--enable-hoist-fsdp-collectives'"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--remat-rope --verify-hlo'"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --auto-cast=none" # --hbm-scratchpad-page-size=1024"
+export TF_CPP_MIN_LOG_LEVEL=3
+
+if [ "$1" = "unit" ]; then
+    export JAX_PLATFORMS=cpu
+    pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/unit.xml aws-testing/moe_layer_unit_test.py
+elif [ "$1" = "integ" ]; then
+    # breaking them up as we seem to leak memory across tests
+    if [ "$2" = "12b" ] || [ "$2" = "50b" ] || [ "$2" = "switch-xxl" ] || [ "$2" = "llama4-maverick" ] || [ "$2" = "qwen3-235b" ]; then
+        export TEST_SUITE_PARTS=1
+    else
+        export TEST_SUITE_PARTS=10
+    fi
+    echo "Splitting tests into $TEST_SUITE_PARTS parts"
+    status=0
+    set +e
+    for ((part=0;part<TEST_SUITE_PARTS;part++)); do
+        # --collect-only -q
+        # use above if you only want to see the tests that will be run
+        set -x
+        TEST_SUITE_PART=$part pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ_$part.xml aws-testing/moe_layer_integ_test.py -k "TestLayerOnTrn"
+        status_part=$?
+        status=$((status + status_part))
+        set +x
+    done
+    if [ $status -ne 0 ]; then
+        exit 1
+    fi
+elif [ "$1" = "150bdev" ]; then
+    export TEST_SUITE="150b"
+    pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_layer_integ.xml aws-testing/moe_layer_integ_test.py -k "TestDev150bInteg"
+    pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_gating_integ.xml aws-testing/gating_test.py -k "TestDev150bGatingInteg"
+    export JAX_PLATFORMS=cpu
+    pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_layer_unit.xml aws-testing/moe_layer_unit_test.py -k "TestDev150bUnit"
+    pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_gating_unit.xml aws-testing/gating_test.py -k "TestGatingOnCpu or TestDev150bGatingUnit"
+elif [ "$1" = "dev" ]; then
+    pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestLayerOnTrn and test_fwdbwd_blockwisegather_MoE_i8192_h20480_e16_topk2_g1_ec2_blocksize512_b1_s8192_meshfsdp-1tp64_bf16"
+elif [ "$1" = "150b_blockwise_cpu" ]; then
+    pytest -rsA --tb=short aws-testing/moe_layer_unit_test.py -k 'TestDev150bUnit and test_fwd_blockwise_vs_einsum or TestDev150bUnit and test_fwdbwd_blockwise_vs_einsum'
+    pytest -rsA --tb=short aws-testing/moe_layer_unit_test.py -k 'TestDev150bUnit and test_fwd_blockwisev2_vs_einsum or TestDev150bUnit and test_fwdbwd_blockwisev2_vs_einsum'
+elif [ "$1" = "150b_blockwise_neuron" ]; then
+    pytest -rsA --tb=short aws-testing/moe_layer_integ_test.py -k 'TestDev150bInteg and test_fwd_blockwise_vs_einsum or TestDev150bInteg and test_fwdbwd_blockwise_vs_einsum'
+    pytest -rsA --tb=short aws-testing/moe_layer_integ_test.py -k 'TestDev150bInteg and test_fwd_blockwisev2_vs_einsum or TestDev150bInteg and test_fwdbwd_blockwisev2_vs_einsum'
+fi

@@ -52,7 +52,7 @@ from axlearn.common.utils import (
     NestedTensor,
     NestedTree,
     Tensor,
-    as_tensor,
+    as_tensor, 
     as_numpy_array,
     complete_partition_spec_tree,
     flatten_items,
@@ -71,7 +71,7 @@ _PYTEST_OPT_REGISTERED = {}
 def assert_allclose(actual, desired, atol=1e-6, rtol=1e-3, err_msg=""):
     # actual = jnp.asarray(actual).astype(np.float32)
     # desired = jnp.asarray(desired).astype(np.float32)
-    # temp workaround for seg-fault, OOM
+    # temp workaround for seg-fault
     actual = np.asarray(actual).astype(np.float32)
     desired = np.asarray(desired).astype(np.float32)
     # Checks if 'actual' and 'desired' are within (atol + rtol * abs(desired)).
@@ -245,7 +245,6 @@ class TestCase(parameterized.TestCase):
                 assert_allclose(a_value, b_value, atol=atol, rtol=rtol, err_msg=f"{a_name}")
             else:
                 self.assertAlmostEqual(a_value, b_value, msg=f"{a_name}")
-
     def assertNestedEqual(self, a, b):
         a_kv = flatten_items(a)
         b_kv = flatten_items(b)
