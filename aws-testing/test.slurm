@@ -10,7 +10,7 @@ srun -l setup_node.sh /fsx/huilgolr/jun-artifacts/
 
 SUITE_ARG=${1:-"presubmit"}
 TEST_LOGDIR=${2:-"test_logs/$SLURM_JOB_ID"}
-GOLDENS_DIR=${3:-"test_goldens"}
+GOLDENS_DIR=${3:-"/fsx/huilgolr/axlearn/test_goldens"}
 JAX_CC_DIR=${4:-"test_jax_cc"}
 
 if [ -z "$SUITE_ARG" ]; then

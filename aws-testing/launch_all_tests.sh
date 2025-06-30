@@ -1,7 +1,7 @@
 id=$(date +"%Y%m%d_%H%M%S")
 
 TEST_LOGDIR=test_artifacts/$id
-GOLDENS_DIR="test_goldens"
+GOLDENS_DIR="/fsx/huilgolr/axlearn/test_goldens"
 # JAX_CC_DIR="test_artifacts/jax_cc_cache_$id"
 JAX_CC_DIR=""
 
