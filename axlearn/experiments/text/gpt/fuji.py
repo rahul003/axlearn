@@ -228,14 +228,17 @@ def _generate_trn2_custom_configs(
         A _Trn2CustomConfig object that contains the generated modifications.
     """
     # TRN2 specific model config modifications.
-    trn2_module_modifications = [
-        # Neuron compiler has a module to detect repeating blocks and reuse them during compilation.
-        # So compile time does not grow with the number of layers.
-        ModuleConfigModifier.default_config().set(
-            target_config="model.decoder.transformer",
-            modification=StackedTransformerLayer.default_config(),
-        )
-    ]
+    if int(os.getenv("NEURON_FSDP_REPEATED", 0)) == 0:
+        trn2_module_modifications = [
+            # Neuron compiler has a module to detect repeating blocks and reuse them during compilation.
+            # So compile time does not grow with the number of layers.
+            ModuleConfigModifier.default_config().set(
+                target_config="model.decoder.transformer",
+                modification=StackedTransformerLayer.default_config(),
+            )
+        ]
+    else:
+        trn2_module_modifications = []
     # Grouped QKV is only used in fuji-v3 except in fuji-v2 if model is 70B.
     if version == Version.V3 or (model_size == "70B" and version != Version.V1):
         trn2_module_modifications.append(
