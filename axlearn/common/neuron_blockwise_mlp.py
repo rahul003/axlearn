@@ -19,12 +19,17 @@ from neuronxcc.nki._private_kernels.blockwise_mm_bwd import (
 )
 from neuronxcc.nki.compiler.backends.neuron.dimensions import VNC
 import neuronxcc.nki as nki
+from dataclasses import dataclass
 
 from jax.ad_checkpoint import checkpoint_name
 
 _blockwise_mm_nki_call = nki.jit(show_compiler_tb=True)(blockwise_mm_nki)
 _blockwise_mm_bwd_nki_call = nki.jit(show_compiler_tb=True)(blockwise_mm_bwd_nki)
 
+@dataclass(frozen=True)
+class SkipMode:
+  skip_token: bool
+  skip_weight: bool
 
 Tensor = jax.Array
 lnc = 2 if jax.devices()[0].device_kind == "NC_v3d" else 1
@@ -117,6 +122,7 @@ def _blockwise_mm_fwd(
         token_position_to_id,
         block_to_expert,
         block_size=block_size,
+        skip_dma=SkipMode(False, False)
     )
 
     down_activations = checkpoint_name(down_activations, "blockwise.down_activations")
@@ -154,7 +160,8 @@ def _blockwise_mm_bwd(
             block_to_expert.astype(jnp.int32),
             grad_output,
             block_size=block_size,
-            # ktype=2 if block_to_expert.shape[-1] == down_proj_weight.shape[0] else 1,
+            skip_dma=SkipMode(False, False),
+            ktype=0,
             # need new compiler for this line
         )
         
