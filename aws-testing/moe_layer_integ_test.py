@@ -20,7 +20,7 @@ from jax.sharding import Sharding
 from jax_neuronx.experimental import debug_callback
 from axlearn.common.utils import PartitionSpec
 from absl.testing import absltest, parameterized
-from axlearn.common.mixture_of_experts import TopKGatingGather, TopKGating, TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2
+from axlearn.common.mixture_of_experts import TopKGatingGather, TopKGating, TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2, TopKGatingGatherBlockwiseEP
 from axlearn.common.test_utils import TestCase
 from test_cases import LayerTestCase
 from utils_neuron import ExperimentConfig, create_test_config, get_training_configs, get_gating_configs, TEST_SUITE
@@ -115,6 +115,37 @@ class TestDev150bInteg(LayerTestCase):
     def test_fwdbwd_gather(self):
         jax.config.update('jax_platform_name', 'neuron')
         self.helper_bwd(self.create_cfg(test=TopKGatingGather))    
+
+class TestDevSwitchBaseInteg(LayerTestCase):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.test_device = 'neuron'
+        self.golden_device = 'cpu'
+        self.golden = TopKGating
+    
+    def create_cfg(self, test, golden=None, layer="moe"):
+        golden = self.golden if golden is None else golden
+        return create_test_config(
+            layer=layer,
+            test=test,
+            golden=golden,
+            test_device=self.test_device,
+            golden_device=self.golden_device,
+            input_dim=1024,
+            hidden_dim=4096,
+            n_experts=128,
+            n_groups=64,
+            top_k=2,
+            capacity_factor=2,
+            mesh_spec={"expert": 64, "model": 1, "fsdp": 1},
+            batch=64,
+            seq=512,
+            dtype=jnp.bfloat16,
+        )[1]
+    
+    def test_fwdbwd_blockwise(self):
+        jax.config.update('jax_platform_name', 'neuron')
+        self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwiseEP))
 
 if __name__ == "__main__":
     absltest.main()

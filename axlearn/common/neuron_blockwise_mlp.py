@@ -121,7 +121,7 @@ def _blockwise_mm_fwd(
 
     down_activations = checkpoint_name(down_activations, "blockwise.down_activations")
     gate_up_activations_T = checkpoint_name(gate_up_activations_T, "blockwise.gate_up_activations_T")
-
+    
     return out[None, None, None, :-1, :], (hidden_states, expert_affinities_masked, gate_up_weight, 
                 down_proj_weight, down_activations, gate_up_activations_T, 
                 token_position_to_id, block_to_expert)
@@ -139,7 +139,10 @@ def _blockwise_mm_bwd(
     E, _, _, _ = gate_up_proj_weight.shape
 
     with jax.named_scope("blockwise_backward"):
-        grad_output =  jnp.squeeze(grad_output, axis=(0,1,2))
+        if grad_output.ndim==6:
+            grad_output =  jnp.squeeze(grad_output, axis=(0,1,2,3))
+        else:
+            grad_output =  jnp.squeeze(grad_output, axis=(0,1,2))
         padding_h = jnp.zeros((1, hidden_states.shape[1]), dtype=hidden_states.dtype)
         grad_output = jnp.concat([grad_output, padding_h], axis=0)
         # Compute gradients

@@ -125,6 +125,11 @@ def blockwise_mlp(
     block_size, activation_fns):
     O = hidden_states.shape[0]
     G = hidden_states.shape[1]
+    is_ep_sharded = expert_affinities_masked.ndim==5
+    if is_ep_sharded: 
+        expert_affinities_masked = jax.lax.squeeze(expert_affinities_masked, dimensions=(0,))
+        token_position_to_id = jax.lax.squeeze(token_position_to_id, dimensions=(0,))
+        block_to_expert = jax.lax.squeeze(block_to_expert, dimensions=(0,))
     # nki doesn't support batching 'E   NotImplementedError: Batching rule for 'nki_call' not implemented'
     use_vmap = False
     if use_vmap:
@@ -157,6 +162,8 @@ def blockwise_mlp(
                 token_position_to_id_og = token_position_to_id[o:o+1, g:g+1]
                 block_to_expert_og = block_to_expert[o:o+1, g:g+1]
                 output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+                if is_ep_sharded: 
+                    output = output[None, :,:,:,:,:]
                 g_outputs.append(output)
             outputs.append(jnp.concatenate(g_outputs, axis=1))
         return jnp.concatenate(outputs, axis=0)
@@ -167,6 +174,9 @@ def calculate_token_position_to_id(block_position_indices, tokens_indices,
         """
         Invert block_position_indices to obtain token_position_to_id.
         """
+        if block_position_indices.ndim==5: 
+            block_position_indices = jax.lax.squeeze(block_position_indices, dimensions=(0,))
+            tokens_indices = jax.lax.squeeze(tokens_indices, dimensions=(0,))
         O, G, num_tokens, E = block_position_indices.shape
 
         # Create batch and group indices
@@ -1383,6 +1393,114 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
             router_z_loss=router_z_loss,
         )
 
+class TopKGatingGatherBlockwiseEP(TopKGatingGatherBlockwise):    
+    def compute_local_num_blocks(self, expert_capacity, num_experts):
+        #TODO make block size == expert cap
+        num_blocks = math.ceil(expert_capacity / self.config.block_size) * num_experts
+        # num_blocks = min(num_blocks, num_tokens * self.config.top_k)
+        logging.info("Setting number of blocks as %d", num_blocks)
+        return num_blocks
+
+    @partial(jax.jit, static_argnums=(0,2,3,))
+    def calculate_block_position_ids_ep(self, expert_mask_after_dropping, expert_capacity, block_size):
+        expert_mask_after_dropping = jax.lax.squeeze(expert_mask_after_dropping, dimensions=(0,))
+        mesh = thread_resources.env.physical_mesh 
+        local_num_experts = int(self.config.num_experts / mesh.shape["expert"])
+        O, G, S, e = expert_mask_after_dropping.shape
+        expert_mask_after_dropping = jnp.reshape(expert_mask_after_dropping, (O, G, -1, S, e))
+        expert_mask_after_dropping = jnp.sum(expert_mask_after_dropping, axis=2)
+        num_blocks = self.compute_local_num_blocks(expert_capacity, local_num_experts)
+        # blocks_per_expert: (O, G, e)
+        blocks_per_expert = jnp.repeat(math.ceil(expert_capacity/block_size), local_num_experts, axis=0)
+        blocks_per_expert = jnp.expand_dims(blocks_per_expert, (0, 1))
+        blocks_ids = jnp.arange(num_blocks, dtype=jnp.int32)
+        # num_blocks_idx_expanded: (1, 1, num_blocks, 1)
+        num_blocks_idx_expanded = jnp.expand_dims(blocks_ids, (0, 1, 3))
+        # num_blocks_idx_expanded: (O, G, num_blocks, e)
+        num_blocks_idx_expanded = jnp.broadcast_to(num_blocks_idx_expanded, (O, G, num_blocks, 1))
+
+        # cumulative_blocks_per_expert: (O, G, e)
+        cumulative_blocks_per_expert = jnp.cumsum(blocks_per_expert, axis=2, dtype=jnp.int32)
+        # block_to_expert: (O, G, N)
+        block_to_expert = jnp.sum(
+            num_blocks_idx_expanded >=  jnp.expand_dims(cumulative_blocks_per_expert, 2)[:,:,:,:-1], 
+            axis=3
+        )
+        # (O, G, S, e)
+        # after masking this represents for each token, 
+        # the position in blocks if all tokens in blocks were laid out in a linear array
+        # b0t0, b0t1,..., b1t0, b1t1,...
+        block_position_indices = _cum_sum(expert_mask_after_dropping.astype(jnp.int32), axis=-2).astype(jnp.int32)  #constrain shapes around cum_sum to avoid collective-permutes for index-sharding
+
+        # O G 1 e
+        expert_block_offsets = jnp.expand_dims(cumulative_blocks_per_expert * block_size, 2)
+        
+        block_position_indices = block_position_indices.at[:,:,:,1:].set(block_position_indices[:,:,:,1:] + expert_block_offsets[:,:,:,:-1])
+        block_position_indices = jnp.where(expert_mask_after_dropping==0, 0, block_position_indices)
+        block_position_indices = jnp.expand_dims(block_position_indices, axis=0) # (1, O, G, N)
+        block_to_expert = jnp.expand_dims(block_to_expert, axis=0) # (1, O, G, N)
+        return block_position_indices, block_to_expert
+    
+    def forward(self, logits):
+        cfg = self.config
+        O, G, S, E = logits.shape 
+        raw_gates = self.router(cfg, logits)
+        expert_capacity = self.compute_expert_capacity(cfg, logits)
+        # expert_index: (O, G, S*top_k)
+        expert_index = self.compute_expert_index(cfg, raw_gates)
+        # expert_mask: (O, G, S*topk, E)
+        expert_mask = self.compute_expert_mask(cfg, expert_index, cfg.num_experts)
+        # Only use top 1 tokens for calculationg aux loss.
+        aux_loss = self.compute_aux_loss(self.config, expert_mask[:, :, :S, :], raw_gates)
+        expert_mask = with_sharding_constraint(expert_mask, PartitionSpec(None, None, None, None))
+        raw_gates = with_sharding_constraint(raw_gates, PartitionSpec(None, None, None, None))
+        _, expert_mask_after_dropping, expert_affinities_masked = self.compute_positions_and_drop(
+            expert_mask, raw_gates, expert_capacity, cfg
+        )
+        expert_mask_after_dropping = jnp.reshape(expert_mask_after_dropping, (O, G, -1, S, E))
+        expert_mask_after_dropping = jnp.sum(expert_mask_after_dropping, axis=2)
+        # separate out EP component for index computation 
+        mesh = thread_resources.env.physical_mesh 
+        local_num_experts = int(self.config.num_experts / mesh.shape["expert"])
+        expert_mask_after_dropping = jnp.reshape(expert_mask_after_dropping, (mesh.shape["expert"],O, G, -1, local_num_experts))
+        expert_affinities_masked = jnp.reshape(expert_affinities_masked, (mesh.shape["expert"],O, G, -1, local_num_experts))
+        expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, PartitionSpec("expert", None, None, None, None))
+        block_position_indices_sm = shard_map(self.calculate_block_position_ids_ep, mesh=mesh, 
+                                              in_specs=(PartitionSpec("expert", None, None, None, None), 
+                                                        None, None), 
+                                              out_specs=(PartitionSpec("expert", None, None, None, None),
+                                                         PartitionSpec("expert", None, None, None)
+                                                         ), check_rep=False)
+        # [EP,O,G,S,e] [EP,O,G,N]
+        block_position_indices, block_to_expert = block_position_indices_sm(expert_mask_after_dropping, expert_capacity, cfg.block_size)
+        num_blocks = self.compute_local_num_blocks(expert_capacity, local_num_experts)
+        output = jnp.zeros((mesh.shape["expert"], O, G, num_blocks*cfg.block_size), dtype=jnp.int32)
+        tokens_indices = jnp.arange(S, dtype=jnp.int32)[None, None, :, None]
+        tokens_indices = jnp.broadcast_to(tokens_indices, (mesh.shape["expert"], O, G, S, local_num_experts))
+        token_position_to_id_sm = shard_map(
+            calculate_token_position_to_id,
+            mesh=thread_resources.env.physical_mesh,
+            in_specs=(
+                PartitionSpec("expert", None, None, None, None), 
+                PartitionSpec("expert", None, None, None, None), 
+                None,
+                None,
+                None,
+                PartitionSpec("expert", None, None, None),
+            ),
+            out_specs=PartitionSpec("expert", None, None, None),
+            check_rep=False
+            )
+        output = token_position_to_id_sm(block_position_indices, tokens_indices, num_blocks, cfg.block_size, S, output)
+        token_position_to_id = output
+        router_z_loss = _router_z_loss(logits)
+        return self.Output(
+            dispatch_tensor=block_to_expert, #[EP,O,G,N]
+            combine_tensor=(token_position_to_id, expert_affinities_masked), #[EP,O,G,N*B], [EP,O,G,S,e]
+            load_balance_loss=aux_loss,
+            router_z_loss=router_z_loss,
+        )
+
 class TopKGatingGatherBlockwiseV2(TopKGatingGather):
     def forward(self, logits):
         cfg = self.config
@@ -1826,7 +1944,59 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
         )
         outputs = jnp.sum(outputs, axis=2, dtype=outputs.dtype)
         return outputs
+    def _dispatch_and_combine_with_gather_blockwise_gating_ep(self, cfg, gating, hidden_states):
+        """
+        Args
+        - cfg: Config
+        - gating: Output of the gating function
+          - combine_tensor: 
+            - token_position_to_id (O, G, N*B)
+            - expert_affinities_masked (O, G, S, E)
+          - dispatch_tensor: 
+            - block_to_expert (O, G, N)
+        - hidden_states: (O, G, S, M)
+        """
+        mesh = thread_resources.env.physical_mesh
+        expert_affinities_masked = gating.combine_tensor[1] #(EP,O,G,S,e)
+        token_position_to_id = gating.combine_tensor[0] #(EP,O,G,N*B)
+        block_to_expert = gating.dispatch_tensor #(EP,O,G,N)
+        num_blocks = block_to_expert.shape[-1]
+        block_size = token_position_to_id.shape[-1] // num_blocks
+        gate_up_weight = jnp.stack([self.parameters["wi_0_weight"],self.parameters["wi_1_weight"],], axis=2)
+        gate_up_weight = with_sharding_constraint(gate_up_weight, PartitionSpec("expert", None, None, "model"))
 
+        partitioned_blockwise_mm = shard_map(
+            blockwise_mlp,
+            mesh=mesh,
+            in_specs=(
+                PartitionSpec(None, None, None, None), # hidden_states
+                PartitionSpec("expert", None, None, None, None), # expert_affinities_masked
+                PartitionSpec("expert", None, None, "model"), # gate_up_proj weight
+                PartitionSpec("expert", "model", None), # down_proj weight
+                PartitionSpec("expert",None, None, None), # token_position_to_id
+                PartitionSpec("expert",None, None, None), # block_to_expert
+                None, # block size
+                None, # activation_fns
+            ),
+            out_specs=(
+                PartitionSpec(None, None, "model", "expert", None, None)
+            ),
+            check_rep=False
+        )
+        outputs = partitioned_blockwise_mm(
+            hidden_states,
+            expert_affinities_masked,
+            gate_up_weight,
+            self.parameters["wo_weight"], 
+            token_position_to_id, 
+            block_to_expert, 
+            block_size,
+            cfg.activation
+        )
+        outputs = jnp.sum(outputs, axis=2, dtype=outputs.dtype)
+        outputs = jnp.sum(outputs, axis=2, dtype=outputs.dtype)
+        return outputs
+    
     # pylint: disable-next=too-many-statements
     def _dispatch_and_combine(self, x: Tensor) -> Tensor:
         """Runs forward pass on the linear layers and dispatching and combining."""
@@ -1849,11 +2019,15 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
                 f" = {num_tokens} must be divisible by num_groups({num_groups})."
             )
         group_len = num_tokens // num_groups
-        x = x.reshape([outer_batch, num_groups, group_len, cfg.input_dim])
+        if isinstance(self.gating, TopKGatingGatherBlockwiseEP):
+            x = x.reshape([1, 1, -1, cfg.input_dim])
+            x = with_sharding_constraint(x, PartitionSpec(None, None, None, None)) #all-gather
+        else: 
+            x = x.reshape([outer_batch, num_groups, group_len, cfg.input_dim])
+            x = with_sharding_constraint(x, PartitionSpec(("data", "fsdp"), "expert", None))
         # O may be lower than fsdp axis
         # TODO(huilgolr): what to do here
 
-        x = with_sharding_constraint(x, PartitionSpec(("data", "fsdp"), "expert", None))
         with jax.named_scope("router"):
             x_fp32 = x.astype(jnp.float32)
             logits = jnp.einsum("ogsm,me->ogse", x_fp32, self.parameters["gate_weight"])
@@ -1869,7 +2043,9 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
             + gating.router_z_loss * cfg.router_z_loss_weight
         )
         self.add_module_output("aux_loss", aux_loss)
-        if isinstance(self.gating, (TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2)):
+        if isinstance(self.gating, TopKGatingGatherBlockwiseEP):
+            x = self._dispatch_and_combine_with_gather_blockwise_gating_ep(cfg, gating, x)
+        elif isinstance(self.gating, (TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2)):
             x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
         elif isinstance(self.gating, TopKGatingGather):
             x = self._dispatch_and_combine_with_gather_gating(cfg, group_len, gating, x)
@@ -1895,8 +2071,9 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
             x = jnp.einsum("ogecm,ogsec->ogsm", x, combine_tensor)
             x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["ogsm"])
             # (batch, seq_len, input_dim)
-
         out = x.reshape(token_shape + (cfg.input_dim,))
+        if isinstance(self.gating, TopKGatingGatherBlockwiseEP):
+            out = with_sharding_constraint(out, PartitionSpec("expert", None, None))
         return out
 
     def _wi_activation(self, x: Tensor) -> Tensor:
