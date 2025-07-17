@@ -359,7 +359,7 @@ def _generate_trn2_custom_configs(
             }
     elif len(ffn_layer_types) == 2:
         for i in range(2):
-            target_config=f"model.decoder.transformer.layer.layer[{i}].self_attention.attention.input_linear.input_linear"
+            target_config=f"model.decoder.transformer.layer.layer.{i}.self_attention.attention.input_linear.input_linear"
             mcm = ModuleConfigModifier.default_config().set(
                 target_config=target_config,
                 modification=GroupedQKVLinear.default_config(),
@@ -369,11 +369,11 @@ def _generate_trn2_custom_configs(
                 PartitionSpecModifier.default_config().set( 
                     partition_specs={
                         # Sequence parallel shardings for norms.
-                        f"model.decoder.transformer.layer.layer[{i}].self_attention.norm": {
+                        f"model.decoder.transformer.layer.layer.{i}.self_attention.norm": {
                             "input_partition_spec": (("data", "fsdp"), "model", None),
                             "output_partition_spec": (("data", "fsdp"), None, None),
                         },
-                        f"model.decoder.transformer.layer.layer[{i}].feed_forward.norm": {
+                        f"model.decoder.transformer.layer.layer.{i}.feed_forward.norm": {
                             "input_partition_spec": (("data", "fsdp"), "model", None),
                             "output_partition_spec": (("data", "fsdp"), None, None),
                         },
@@ -382,7 +382,7 @@ def _generate_trn2_custom_configs(
             )
 
             if ffn_layer_types[i] == "dense":
-                trn2_partition_spec_modifications[-1].partition_specs[f"model.decoder.transformer.layer.layer[{i}].feed_forward.linear2"] = {
+                trn2_partition_spec_modifications[-1].partition_specs[f"model.decoder.transformer.layer.layer.{i}.feed_forward.linear2"] = {
                     "output_partition_spec": (("data", "fsdp"), None, None),
                 }
     

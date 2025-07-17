@@ -2,10 +2,12 @@ import os
 import unittest
 from functools import partial
 import jax
+import math
 from axlearn.common.test_utils import TestCase
 from utils_neuron import ExperimentConfig
 from axlearn.common.module import functional as F
 import numpy as np
+from axlearn.common.mixture_of_experts import TopKGatingGatherBlockwise
 import jax.numpy as jnp
 
 class LayerTestCase(TestCase):
