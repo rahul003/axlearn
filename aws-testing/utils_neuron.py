@@ -823,14 +823,14 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
     elif test_suite == 'switch-base':
         tests = builder.build_grid_space_input_hidden(input_dim=1536, hidden_dim=6144, max_tp=16)
     elif test_suite == 'switch-large':
-        tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16)
+        tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16, max_E=128)
     elif test_suite == 'mixtral-50b':
         tests = builder.build_grid_space_input_hidden(input_dim=4096, hidden_dim=14336, max_E=16, max_tp=16)
     elif test_suite == 'llama4-scout':
         # llama4 scout (topk=1, E=16)
         tests = builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=8192, max_E=64, max_tp=16)
     elif test_suite == 'deepseek-v3':
-        tests = builder.build_grid_space_input_hidden(input_dim=7168, hidden_dim=2048, max_tp=16)
+        tests = builder.build_grid_space_input_hidden(input_dim=7168, hidden_dim=2048, max_E=128, max_tp=16)
     # below are too big, takes too long to run, and many tests go CPU OOM if we do grid like for above configs
     elif test_suite == 'qwen3-235b':
         tests = builder.build_grid_space_qwen3_235b()
