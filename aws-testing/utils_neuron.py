@@ -227,7 +227,7 @@ class ModuleConfig():
             "name": testname,
             "hlo_generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "submitter_alias": "huilgolr",
-            "compiler_flags": os.environ["NEURON_CC_FLAGS"],
+            "compiler_flags": prev_flags,
             "target_instance_type": "trn2.48xl",
             "model_info": {
                 "name": testname,

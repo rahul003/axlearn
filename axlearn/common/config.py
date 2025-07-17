@@ -411,7 +411,10 @@ class ConfigBase:
 
         for key in path:
             # TODO(markblee): Maybe use cfg.visit instead of getattr.
-            current = getattr(current, key)
+            if isinstance(current, list):
+                current = current[int(key)]
+            else:
+                current = getattr(current, key)
 
         return current
 
