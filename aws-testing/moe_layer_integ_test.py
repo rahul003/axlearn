@@ -139,7 +139,7 @@ class TestDevSwitchBaseInteg(LayerTestCase):
             capacity_factor=2,
             mesh_spec={"expert": 64, "model": 1, "fsdp": 1},
             batch=64,
-            seq=512,
+            seq=1024,
             dtype=jnp.bfloat16,
         )[1]
     
