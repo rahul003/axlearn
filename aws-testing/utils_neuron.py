@@ -551,7 +551,7 @@ class GridSpaceBuilder:
             'hidden_dim': 20480,
             'n_experts': 64,
             'dtype': jnp.bfloat16,
-            'seq': 2048,
+            'seq': 1024,
             'capacity_factor': 2,
             'n_groups': 1,
         }

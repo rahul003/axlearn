@@ -51,14 +51,14 @@ class TestLayerOnTrn(LayerTestCase):
     # def test_fwdbwd_gather(self, cfg: ExperimentConfig):
     #     self.helper_bwd(cfg)
 
+    @unittest.skip("skip v1 tests as v2 is the focus")
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
     def test_fwdbwd_blockwisegather(self, cfg: ExperimentConfig):
         self.helper_bwd(cfg)
 
-    # @unittest.skip("skip till change merged to compiler")
-    # @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
-    # def test_fwdbwd_blockwisev2(self, cfg: ExperimentConfig):
-    #     self.helper_bwd(cfg)
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+    def test_fwdbwd_blockwisev2(self, cfg: ExperimentConfig):
+        self.helper_bwd(cfg)
 
 class TestDev150bInteg(LayerTestCase):
     def __init__(self, *args, **kwargs):
@@ -106,7 +106,6 @@ class TestDev150bInteg(LayerTestCase):
         jax.config.update('jax_platform_name', 'neuron')
         self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwise))
 
-    @unittest.skip("skip till change merged to compiler")
     def test_fwdbwd_blockwisev2(self):
         jax.config.update('jax_platform_name', 'neuron')
         self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwiseV2))
