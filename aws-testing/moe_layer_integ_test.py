@@ -20,7 +20,7 @@ from jax.sharding import Sharding
 from jax_neuronx.experimental import debug_callback
 from axlearn.common.utils import PartitionSpec
 from absl.testing import absltest, parameterized
-from axlearn.common.mixture_of_experts import TopKGatingGather, TopKGating, TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2, TopKGatingGatherBlockwiseEP
+from axlearn.common.mixture_of_experts import TopKGatingGather, TopKGating, TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2
 from axlearn.common.test_utils import TestCase
 from test_cases import LayerTestCase
 from utils_neuron import ExperimentConfig, create_test_config, get_training_configs, get_gating_configs, TEST_SUITE
@@ -145,7 +145,7 @@ class TestDevSwitchBaseInteg(LayerTestCase):
     
     def test_fwdbwd_blockwise(self):
         jax.config.update('jax_platform_name', 'neuron')
-        self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwiseEP))
+        self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwise))
 
 if __name__ == "__main__":
     absltest.main()
