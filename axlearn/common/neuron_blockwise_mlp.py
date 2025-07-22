@@ -139,10 +139,7 @@ def _blockwise_mm_bwd(
     E, _, _, _ = gate_up_proj_weight.shape
 
     with jax.named_scope("blockwise_backward"):
-        if grad_output.ndim==6:
-            grad_output =  jnp.squeeze(grad_output, axis=(0,1,2,3))
-        else:
-            grad_output =  jnp.squeeze(grad_output, axis=(0,1,2))
+        grad_output =  jnp.squeeze(grad_output, axis=(0,1,2))
         padding_h = jnp.zeros((1, hidden_states.shape[1]), dtype=hidden_states.dtype)
         grad_output = jnp.concat([grad_output, padding_h], axis=0)
         # Compute gradients
