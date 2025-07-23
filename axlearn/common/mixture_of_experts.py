@@ -167,9 +167,6 @@ def calculate_token_position_to_id(block_position_indices, tokens_indices,
         """
         Invert block_position_indices to obtain token_position_to_id.
         """
-        if block_position_indices.ndim==5: 
-            block_position_indices = jax.lax.squeeze(block_position_indices, dimensions=(0,))
-            tokens_indices = jax.lax.squeeze(tokens_indices, dimensions=(0,))
         O, G, num_tokens, E = block_position_indices.shape
 
         # Create batch and group indices
