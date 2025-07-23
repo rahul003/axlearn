@@ -29,6 +29,7 @@ def parse_pytest_xml(xml_file):
     skipped = 0
     errors = 0
     failures = []
+    all_tests = []
     
     # Find all testcase elements
     testcases = root.findall('.//testcase')
@@ -39,10 +40,12 @@ def parse_pytest_xml(xml_file):
         classname = testcase.get('classname', '')
         full_name = f"{classname}::{test_name}" if classname else test_name
 
-        # if 'v2' not in full_name:
-        #     continue
-        # total_filtered += 1
-        
+        skipped_elem = testcase.find('skipped')
+        if skipped_elem is not None:
+            skipped += 1
+            continue
+
+        all_tests.append(full_name)
         # Check for failure
         failure = testcase.find('failure')
         if failure is not None:
@@ -64,13 +67,7 @@ def parse_pytest_xml(xml_file):
                 error_msg = error.text.strip().split('\n')[0]
             failures.append((full_name, f"ERROR: {error_msg}"))
             continue
-        
-        # Check for skipped
-        skipped_elem = testcase.find('skipped')
-        if skipped_elem is not None:
-            skipped += 1
-            continue
-        
+
         # If no failure, error, or skip, it passed
         passed += 1
     
@@ -80,7 +77,8 @@ def parse_pytest_xml(xml_file):
         'errors': errors,
         'skipped': skipped,
         'failures': failures,
-        'total': len(testcases)
+        'all_tests': all_tests,
+        'total': len(all_tests)
     }
 
 def compare_known_failures(args, cur_failures, suites):
@@ -154,11 +152,12 @@ def main():
     parser = argparse.ArgumentParser(description='Parse pytest XML output')
     parser.add_argument('--artifacts_dir', help='Path to pytest artifacts dir', required=True)
     parser.add_argument('--load_known_failures', help='Path to txt file containing known failures to compare and xfail', default=None)
-    parser.add_argument('--save_failures', help='Path to txt file to save current failures for future runs', action='store_true')
+    parser.add_argument('--print_exceptions', help='Path to txt file to save current failures for future runs', action='store_true')
     args = parser.parse_args()
     suites = [d for d in os.listdir(args.artifacts_dir) if os.path.isdir(os.path.join(args.artifacts_dir, d))]
-
+    suites = sorted(suites)
     cur_failures = {}
+    all_tests = {}
     some_suite_killed = False
     num_tests, num_passed, num_failed = 0, 0, 0
     for suite in suites:
@@ -179,13 +178,21 @@ def main():
                         results[k] = v
                     else:
                         results[k] += v
+                if suite not in all_tests:
+                    # TODO why were these duplicates in this list?, used set to get
+                    # may no longer be an issue once we removed skipped tests from the list
+                    all_tests[suite] = set(m_result['all_tests'])
+                else:
+                    all_tests[suite].update(set(m_result['all_tests']))
 
-                for test_name, _ in m_result.get('failures', []):
+                for test_name, exception in m_result.get('failures', []):
                     if suite not in cur_failures:
-                        cur_failures[suite] = [test_name]
+                        cur_failures[suite] = [(test_name, exception)]
                     else:
-                        cur_failures[suite].append(test_name)
-            print_results(results, suite, matches, job_killed=job_killed, print_exception=False)
+                        cur_failures[suite].append((test_name, exception))
+            cur_failures = {suite: sorted(tests) for suite, tests in cur_failures.items()}
+            all_tests = {suite: sorted(list(tests)) for suite, tests in all_tests.items()}
+            print_results(results, suite, matches, job_killed=job_killed, print_exception=args.print_exceptions)
         else:
             print("=" * 60)
             print(f"Results summary for {suite.upper()}")
@@ -200,10 +207,15 @@ def main():
     print(f"Passed: {num_passed}")
     print(f"Failed: {num_failed}")
 
-    if args.save_failures:
-        # Save current failures to file
-        with open(os.path.join(args.artifacts_dir, 'failures.txt'), 'w') as f:
-            json.dump(cur_failures, f, indent=2)
+    # Save current failures to file
+    with open(os.path.join(args.artifacts_dir, 'failures_with_exceptions.txt'), 'w') as f:
+        json.dump(cur_failures, f, indent=2)
+    with open(os.path.join(args.artifacts_dir, 'failures.txt'), 'w') as f:
+        cur_failures = {suite: [test[0] for test in tests] for suite, tests in cur_failures.items()}
+        json.dump(cur_failures, f, indent=2)
+    with open(os.path.join(args.artifacts_dir, 'all_tests.txt'), 'w') as f:
+        json.dump(all_tests, f, indent=2)
+
     if args.load_known_failures:
         compare_known_failures(args, cur_failures, suites)
     if some_suite_killed:

@@ -141,9 +141,12 @@ class ModuleConfig():
     def matches_cached_config(self):
         # with open(os.path.join(self.golden_dump_path, 'golden_config_new.txt'), 'w') as f:
         #     f.write(f"{self.to_dict()}")
-        with open(os.path.join(self.golden_dump_path, 'golden_config.txt'), 'r') as f:
-            loaded_cfg = f.read()
-        return f"{self.to_dict()}" == loaded_cfg
+        try:
+            with open(os.path.join(self.golden_dump_path, 'golden_config.txt'), 'r') as f:
+                loaded_cfg = f.read()
+            return f"{self.to_dict()}" == loaded_cfg
+        except FileNotFoundError:
+            return False
 
     @property
     def golden_dump_path(self):
@@ -549,9 +552,9 @@ class GridSpaceBuilder:
             'dtype': jnp.bfloat16,
             'input_dim': 8192,
             'hidden_dim': 20480,
-            'n_experts': 64,
+            'n_experts': 32,
             'dtype': jnp.bfloat16,
-            'seq': 1024,
+            'seq': 4096,
             'capacity_factor': 2,
             'n_groups': 1,
         }
@@ -846,25 +849,26 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
     part_size = len(tests)//test_suite_parts
     tests = tests[part_size*test_suite_part:part_size*(test_suite_part+1)]
     print('Candidate tests', [x[0] for x in tests])
-    RESUME_TESTS_PATH=os.getenv('RESUME_TESTS_PATH', None)
-    if RESUME_TESTS_PATH:
-        matches = glob.glob(os.path.join(RESUME_TESTS_PATH, test_suite, "integ_*.xml"))
-        if matches:
-            tests_to_resume = []
-            failed_tests = set()
-            for m in matches:
-                # load each xml result and list test names
-                results = parse_pytest_xml(m)
-                for r in results['failures']:
-                    failed_tests.add('MoE' + r[0].split('_MoE')[1])
-            print('Failed tests', failed_tests)
-            for t in tests:
-                if t[0] in failed_tests:
-                    tests_to_resume.append(t)
-            tests = tests_to_resume
-            print('Filtered tests', tests)
-        else:
-            print(f"No previous results found in {RESUME_TESTS_PATH} for {test_suite}, running all tests")
+    TEST_LOG_DIR = os.getenv('TEST_LOG_DIR', None)
+    # check if we need to resume tests
+    # by looking for any xmls in path
+    matches = glob.glob(os.path.join(TEST_LOG_DIR, test_suite, "integ_*.xml"))
+    if matches:
+        tests_to_resume = []
+        failed_tests = set()
+        for m in matches:
+            # load each xml result and list test names
+            results = parse_pytest_xml(m)
+            for r in results['failures']:
+                failed_tests.add('MoE' + r[0].split('_MoE')[1])
+        print('Failed tests', failed_tests)
+        for t in tests:
+            if t[0] in failed_tests:
+                tests_to_resume.append(t)
+        tests = tests_to_resume
+        print('Filtered tests', tests)
+    else:
+        print(f"No previous results found in {TEST_LOG_DIR} for {test_suite}, running all tests")
     if tests:
         return tests
     else:

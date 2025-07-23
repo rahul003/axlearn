@@ -1,11 +1,17 @@
-id=$(date +"%Y%m%d_%H%M%S")
 
 SUITE_ARG=${1:-"all"}
 PUSH_ARTIFACTS_TO_S3_FOR_SPECTOMETER=${2:-"0"}
 XFAIL_KNOWN_FAILURES=${3:-"1"}
+RESUME_TESTS_ID=${4:-""}
+
+if [ -z "$RESUME_TESTS_ID" ]; then
+    id=$(date +"%Y%m%d_%H%M%S")
+else
+    id=$RESUME_TESTS_ID
+fi
 
 function run_suite() {
-    sbatch -W --exclusive -J rh_test_$1 --output=test_artifacts/$id/%x_%j.out ./aws-testing/test.slurm $1 $TEST_LOGDIR $GOLDENS_DIR $JAX_CC_DIR &
+    sbatch -W --exclusive -J pipeline_test_$1 --output=test_artifacts/$id/%x_%j.out ./aws-testing/test.slurm $1 $TEST_LOGDIR $GOLDENS_DIR $JAX_CC_DIR &
 }
 
 
