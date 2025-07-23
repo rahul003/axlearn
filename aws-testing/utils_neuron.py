@@ -845,7 +845,7 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
         raise ValueError(f"Unknown test suite: {test_suite}")
 
     test_suite_part = int(os.getenv('TEST_SUITE_PART', 0))
-    test_suite_parts = int(os.getenv('TEST_SUITE_PARTS', 4))
+    test_suite_parts = int(os.getenv('TEST_SUITE_PARTS', 1))
     part_size = len(tests)//test_suite_parts
     tests = tests[part_size*test_suite_part:part_size*(test_suite_part+1)]
     print('Candidate tests', [x[0] for x in tests])
