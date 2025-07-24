@@ -56,6 +56,7 @@ class TestLayerOnTrn(LayerTestCase):
     def test_fwdbwd_blockwisegather(self, cfg: ExperimentConfig):
         self.helper_bwd(cfg)
 
+    @unittest.skipIf(not get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"), reason='empty parameters')
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
     def test_fwdbwd_blockwisev2(self, cfg: ExperimentConfig):
         self.helper_bwd(cfg)

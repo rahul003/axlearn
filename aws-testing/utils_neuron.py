@@ -846,6 +846,7 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
 
     test_suite_part = int(os.getenv('TEST_SUITE_PART', 0))
     test_suite_parts = int(os.getenv('TEST_SUITE_PARTS', 1))
+    print(f'Part[{test_suite_part}/{test_suite_parts}] of test suite {test_suite} with {len(tests)} tests')
     part_size = len(tests)//test_suite_parts
     tests = tests[part_size*test_suite_part:part_size*(test_suite_part+1)]
     print('Candidate tests', [x[0] for x in tests])
@@ -856,14 +857,17 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
     if matches:
         tests_to_resume = []
         failed_tests = set()
+        all_tests = set()
         for m in matches:
             # load each xml result and list test names
             results = parse_pytest_xml(m)
             for r in results['failures']:
                 failed_tests.add('MoE' + r[0].split('_MoE')[1])
+            for r in results['all_tests']:
+                all_tests.add('MoE' + r.split('_MoE')[1])
         print('Failed tests', failed_tests)
         for t in tests:
-            if t[0] in failed_tests:
+            if t[0] in failed_tests or t[0] not in all_tests:
                 tests_to_resume.append(t)
         tests = tests_to_resume
         print('Filtered tests', tests)
@@ -873,4 +877,4 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
         return tests
     else:
         # dummy test as we can't return no test
-        return builder.build_toy_grid_space()
+        return []
