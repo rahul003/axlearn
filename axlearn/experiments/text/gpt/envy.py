@@ -337,18 +337,36 @@ def _generate_trn2_custom_configs(
             )
             trn2_module_modifications.append(mcm)
 
+        tp_degree=int(os.getenv("AXLEARN_TP_DEGREE", 4))
+        seq_degree=int(os.getenv("AXLEARN_SEQ_DEGREE", 1))
+
+        input_norm_partition = "model" if tp_degree >= seq_degree else "seq"
+        output_norm_partition = None if tp_degree >= seq_degree else "seq"
+
         trn2_partition_spec_modifications.append(
             PartitionSpecModifier.default_config().set(
                 partition_specs={
-                    # Sequence parallel shardings for norms.
+                    # Sequence parallel shardings for normalization layers
                     "model.decoder.transformer.layer.self_attention.norm": {
-                        "input_partition_spec": (("data", "fsdp"), "model", None),
-                        "output_partition_spec": (("data", "fsdp"), None, None),
+                        "input_partition_spec": (("data", "fsdp"), input_norm_partition, None),
+                        "output_partition_spec": (("data", "fsdp"), output_norm_partition, None),
                     },
                     "model.decoder.transformer.layer.feed_forward.norm": {
-                        "input_partition_spec": (("data", "fsdp"), "model", None),
+                        "input_partition_spec": (("data", "fsdp"), input_norm_partition, None),
+                        "output_partition_spec": (("data", "fsdp"), output_norm_partition, None),
+                    },
+                    "model.decoder.output_norm": {
+                        "input_partition_spec": (("data", "fsdp"), input_norm_partition, None),
                         "output_partition_spec": (("data", "fsdp"), None, None),
                     },
+                    "input.input_partitioner": {
+                        "path_rank_to_partition": {
+                            # Originally be partitioned using sequence degree that would introduce
+                            # all-to-alls
+                            (None, 1): PartitionSpec(("data", "expert", "fsdp")),
+                            (None, 2): PartitionSpec(("data", "expert", "fsdp"), None),
+                        }
+                    }
                 },
             )
         )
@@ -424,7 +442,8 @@ def get_trainer_kwargs(
     fsdp_degree=int(os.getenv("AXLEARN_FSDP_DEGREE", -1))
     tp_degree=int(os.getenv("AXLEARN_TP_DEGREE", 4))
     ep_degree=int(os.getenv("AXLEARN_EP_DEGREE", 1))
-    neuron_mesh = mesh_shape_from_axes(fsdp=fsdp_degree, model=tp_degree, expert=ep_degree)
+    seq_degree=int(os.getenv("AXLEARN_SEQ_DEGREE", 1))
+    neuron_mesh = mesh_shape_from_axes(fsdp=fsdp_degree, model=tp_degree, expert=ep_degree, seq=seq_degree)
     # check_env_vars()
     # pylint: disable=use-dict-literal
     if model_size == "test":
@@ -872,6 +891,8 @@ def trainer_configs(
     arch = "envy"
     config_map = {}
     vocab_size = VOCAB_SIZE
+    flash_attention = bool(int(os.getenv("AXLEARN_FLASH_ATTENTION", 1)))
+
     for model_size in MODEL_SIZES:
         seq_len = MAX_SEQUENCE_LENGTH[model_size]
         config_name = make_config_name(arch=arch, model_size=model_size)
@@ -879,7 +900,7 @@ def trainer_configs(
             model_size,
             vocab_size=vocab_size,
             # Use default flash attention.
-            flash_attention=True,
+            flash_attention=flash_attention,
             max_sequence_length=seq_len,
         )
 
