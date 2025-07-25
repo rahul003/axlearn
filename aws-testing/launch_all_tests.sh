@@ -47,7 +47,10 @@ else
     echo "Skipping pushing artifacts to S3 for spectometer"
 fi
 
-# XFAIL like behavior
-# Fetch prev results, and ensure no new failure.
-# If there's a new failure, we will fail this test stage in pipeline.
-python ./aws-testing/parse_pytest_results.py --artifacts_dir $TEST_LOGDIR --load_known_failures /fsx/huilgolr/axlearn/test_artifacts/pipeline-failures/jul-17-failures.txt --save_failures
+if [ "$XFAIL_KNOWN_FAILURES" = "1" ]; then
+    # XFAIL like behavior
+    # Fetch prev results, and ensure no new failure.
+    # If there's a new failure, we will fail this test stage in pipeline.
+    python ./aws-testing/parse_pytest_results.py --artifacts_dir $TEST_LOGDIR --load_known_failures /fsx/huilgolr/axlearn/test_artifacts/pipeline-failures/jul-17-failures.txt
+fi
+

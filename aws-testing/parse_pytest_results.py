@@ -84,7 +84,7 @@ def parse_pytest_xml(xml_file):
 def compare_known_failures(args, cur_failures, suites):
     print("=" * 60)
     print("NEW FAILURES")
-    have_new_failures = False
+    total_new_failures = 0
     with open(args.load_known_failures, 'r') as f:
         prev_failures = json.load(f)
     for suite in suites:
@@ -92,18 +92,18 @@ def compare_known_failures(args, cur_failures, suites):
             prev_suite_failures = set(prev_failures[suite])
             cur_suite_failures = set(cur_failures.get(suite, []))
             new_failures = cur_suite_failures - prev_suite_failures
-            have_new_failures = have_new_failures or bool(new_failures)
+            total_new_failures += len(new_failures)
             if new_failures:
                 print(f"New failures in {suite}:")
                 for f in new_failures:
-                    print(f"• {f}")
+                    print(f" • {f}")
             else:
                 print(f"No new failures in {suite}.")
         else:
             print(f"No previous failures recorded for {suite}.")
-    if have_new_failures:
+    if total_new_failures:
         print("=" * 60)
-        print("There are new failures, please check the logs for details.")
+        print(f"There are {total_new_failures} new failures, please check the logs for details.")
         sys.exit(1)
 
 def print_results(results, fname, matches, job_killed=False, print_exception=True):
