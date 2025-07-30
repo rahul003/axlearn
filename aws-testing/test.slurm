@@ -6,7 +6,7 @@
 
 set -ex
 
-srun -l setup_node.sh /fsx/aahila/jul-artifacts/
+srun -l setup_node.sh /fsx/huilgolr/jul-end-artifacts/
 
 SUITE_ARG=${1:-"presubmit"}
 TEST_LOGDIR=${2:-"test_logs/$SLURM_JOB_ID"}

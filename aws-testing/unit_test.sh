@@ -84,6 +84,8 @@ elif [ "$1" = "integ" ]; then
     # breaking them up as we seem to leak memory across tests
     if [ "$2" = "12b" ] || [ "$2" = "50b" ] || [ "$2" = "switch-xxl" ] || [ "$2" = "llama4-maverick" ] || [ "$2" = "qwen3-235b" ]; then
         export TEST_SUITE_PARTS=1
+    elif [ "$2" = "deepseek-v3" ] || [ "$2" = "qwen3-30b" ] || [ "$2" = "switch-base"]; then
+        export TEST_SUITE_PARTS=15
     else
         export TEST_SUITE_PARTS=10
     fi

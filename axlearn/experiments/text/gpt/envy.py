@@ -523,9 +523,10 @@ def get_trainer_kwargs(
         )
     elif model_size == "Switch-Large":
         # Num of parameters: 104B.
+        num_layers=int(os.getenv("AXLEARN_NUM_LAYERS", 24))
         trainer_kwargs = dict(
             model_kwargs=dict(
-                num_layers=24,
+                num_layers=num_layers,
                 hidden_dim=16 * 128,
                 ffn_dim=scaled_hidden_dim(scale=4, round_up_to_multiples_of=128),
                 num_heads=16,
@@ -535,10 +536,8 @@ def get_trainer_kwargs(
                 num_groups=2,
                 ffn_structure="hybridnorm",
                 # MoE layer every 2 layers.
-                ffn_layer_types=[
-                    "dense",
-                    "sparse",
-                ],
+                ffn_layer_types=get_ffn_layer_types(),
+                outer_batch_size=get_outer_batch_from_mesh(MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, neuron_mesh),
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
             max_sequence_length=max_sequence_length,
@@ -596,9 +595,10 @@ def get_trainer_kwargs(
         )
     elif model_size == "Switch-XXL":
         # Num of parameters: 520B.
+        num_layers=int(os.getenv("AXLEARN_NUM_LAYERS", 24))
         trainer_kwargs = dict(
             model_kwargs=dict(
-                num_layers=24,
+                num_layers=num_layers,
                 hidden_dim=64 * 128,
                 ffn_dim=scaled_hidden_dim(scale=2.5, round_up_to_multiples_of=128),
                 num_heads=64,
@@ -612,6 +612,7 @@ def get_trainer_kwargs(
                     "dense",
                     "sparse",
                 ],
+                outer_batch_size=get_outer_batch_from_mesh(MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, neuron_mesh),
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
             max_sequence_length=max_sequence_length,
@@ -619,6 +620,23 @@ def get_trainer_kwargs(
             max_step=250_000,  # Most of the evals were done at 100k steps in the paper.
             # TODO(kelvin-zou): not verified with real job.
             mesh_shape=mesh_shape_from_axes(fsdp=-1, expert=16, model=8),
+            mesh_rules=(
+                (
+                    "neuron-(trn2|trn2n).48xlarge-64",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                # TP within the chip, FSDP across chips.
+                                # Each TRN2 chip has 4 XLA cores.
+                                mesh_shape=neuron_mesh
+                            ),
+                            *trn2_config.module_modifications,
+                            *trn2_config.partition_spec_modifications,
+                            remat_policy,
+                        ],
+                    ),
+                ),
+            ),
         )
     elif "Mistral" in model_size:
         num_layers=int(os.getenv("AXLEARN_NUM_LAYERS", 4))
