@@ -10,6 +10,7 @@ T = 512  # num tokens
 H = 16384 # hidden dimension
 EP_DEGREE=8
 SKIP_DMA=True
+LNC = 2
 
 
 def get_random_ep_mask(num_tokens=T, ep=EP_DEGREE):
@@ -90,6 +91,11 @@ def shuffle_tokens_nki(tokens, mapping, skip_dma=SKIP_DMA):
 
     shuffled_buffer = nl.ndarray((T*EP, H), dtype=tokens.dtype, buffer=nl.shared_hbm) 
 
+    num_shards = nl.num_programs(axes=0)
+    stride_h = H // num_shards
+    start_h = nl.program_id(0) * stride_h
+    end_h =  start_h + stride_h
+
     #load tokens into SBUF per EP group
     for i in nl.affine_range(EP):
         # load tiles of T for each EP group
@@ -98,13 +104,13 @@ def shuffle_tokens_nki(tokens, mapping, skip_dma=SKIP_DMA):
             end  =  i*T + (j+1)*128
             local_map = nl.load(mapping[start:end])
 
-            load_p, load_f = nl.mgrid[0:128, 0:H] 
-            local_tokens = nl.ndarray((128, H), dtype=tokens.dtype, buffer=nl.sbuf)
+            load_p, load_f = nl.mgrid[0:128, 0:stride_h]
+            local_tokens = nl.ndarray((128, stride_h), dtype=tokens.dtype, buffer=nl.sbuf)
             if skip_dma:
-                local_tokens[load_p, load_f] = nisa.memset((128, H), value=0, dtype=tokens.dtype) # required for checking correctness with NP golden. skip for workload runs ?
+                local_tokens[load_p, load_f] = nisa.memset((128, stride_h), value=0, dtype=tokens.dtype) # required for checking correctness with NP golden. skip for workload runs ?
             
-            local_tokens[load_p, load_f] = nl.load(tokens[local_map, load_f], dtype=tokens.dtype, mode=oob_mode.skip)
-            nl.store(shuffled_buffer[start:end, :], local_tokens) # how to avoid write DMA for skipped tokens
+            local_tokens[load_p, load_f] = nl.load(tokens[local_map, load_f + start_h], dtype=tokens.dtype, mode=oob_mode.skip)
+            nl.store(shuffled_buffer[start:end, start_h:end_h], local_tokens) # how to avoid write DMA for skipped tokens
 
     return shuffled_buffer
     
@@ -117,7 +123,7 @@ if __name__ == "__main__":
 
     tokens = np.random.rand(T,H).astype(bfloat16)
     golden_buffer = shuffle_tokens_numpy(tokens, mapping, skip_dma=SKIP_DMA)
-    nki_buffer = shuffle_tokens_nki(tokens, mapping, skip_dma=SKIP_DMA)
+    nki_buffer = shuffle_tokens_nki[nl.nc(LNC)](tokens, mapping, skip_dma=SKIP_DMA)
     
     assert np.array_equal(golden_buffer.astype(np.float32), nki_buffer.astype(np.float32)), "Buffers are not equal"
     print("Buffers are equal")
