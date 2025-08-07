@@ -9,14 +9,13 @@ set -e
 #    - JOB_ID overwrites SLURM_JOB_ID to resume a CKPT from prior SLURM JOB_ID
 # 4. Command line : run_trainer.sh env_name testname test_setup
 #
-#
-JOB_ID=8292
+# JOB_ID=23
 
 CONDA_ENV_NAME=$1 #source your base conda env first
 TESTNAME=$2
 TEST_SETUP=$3
 : ${OUTROOT:=${PWD}}
-#: ${JOB_ID:=${SLURM_JOB_ID}} 
+: ${JOB_ID:=${SLURM_JOB_ID}} 
 
 #
 # See OFI installation instructions here 
@@ -50,8 +49,8 @@ export DATA_SEED=42
 # Source CONDA environment
 # Job must be launched from (base) conda environment 
 which conda
-source activate base
-conda activate ${CONDA_ENV_NAME}
+#source activate base
+#conda activate ${CONDA_ENV_NAME}
 
 echo "Nvidia SMI"
 nvidia-smi
@@ -67,7 +66,7 @@ JAX_COORDINATOR_PORT=41001
 export NEURON_RT_ROOT_COMM_ID="${MASTER_ADDR}:${MASTER_PORT}"
 export NEURON_PJRT_PROCESS_INDEX=${SLURM_NODEID}
 export LD_LIBRARY_PATH="/opt/amazon/efa/lib/"
-export LD_LIBRARY_PATH="$OFI_PATH:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="/usr/local/cuda-12.4/lib:/opt/nccl/build/lib/:/usr/local/cuda/lib64:/opt/libfabric:/opt/amazon/openmpi/lib::$LD_LIBRARY_PATH"
 export FI_LOG_LEVEL="warn"
 export FI_EFA_USE_DEVICE_RDMA="1"
 export FI_PROVIDER="efa"

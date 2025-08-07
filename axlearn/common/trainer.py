@@ -1115,7 +1115,7 @@ class SpmdTrainer(Module):
             # Run the compiled function.
             self._trainer_state, outputs = compiled_train_step_fn(self.trainer_state, input_batch)
 
-        if self.step % 1 == 0 or 0 <= self.step <= 5:
+        if self.step % 10 == 0 or 0 <= self.step <= 5:
             self._step_log(
                 "loss=%s aux=%s",
                 outputs["loss"],
@@ -1214,10 +1214,20 @@ class SpmdTrainer(Module):
                 input_batch = self.input.element_spec()
             # Rely on the instance handle to ensure that we hit the compilation cache if possible.
             jit_train_step = self._jit_train_step or self._pjit_train_step()
-            # Note(Jan 2022):
-            # pjit currently requires all parameters to be specified as positional args.
+            # Add timing for lowering
+            start_time = time.time()
             lowered_train_step = jit_train_step.lower(trainer_state, input_batch)
+            lower_time = time.time() - start_time
+            
+            # Add timing for compilation
+            start_time = time.time()
             compiled = lowered_train_step.compile(compiler_options=compiler_options)
+            compile_time = time.time() - start_time
+            
+            logging.info(f"Lowering time: {lower_time:.2f} seconds")
+            logging.info(f"Compilation time: {compile_time:.2f} seconds")
+            logging.info(f"Total compilation time: {lower_time + compile_time:.2f} seconds")
+            
             logging.log_first_n(logging.INFO, aot_model_analysis(compiled), 1)
             return compiled
 
