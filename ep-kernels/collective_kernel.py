@@ -25,7 +25,7 @@ def nki_all_to_all(send_buffer, recv_buffer: nt.mutable_tensor):
     '''
     send_buffer_list = [send_buffer] 
     recv_buffer_list = [recv_buffer]
-    nccl.all_to_all(np.add, send_buffer_list, recv_buffer_list, list(range(NUM_CORES)), 1, 1) 
+    nccl.all_to_all(np.add, send_buffer_list, recv_buffer_list, [list(range(NUM_CORES))], 1, 1) 
 
     return recv_buffer_list[0]
 
