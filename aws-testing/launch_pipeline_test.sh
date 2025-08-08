@@ -53,12 +53,5 @@ done
 
 echo "All tests finished"
 
-# Push results to spectometer
-./aws-testing/push_to_spectometer.sh $TEST_LOGDIR 0 > $TEST_LOGDIR/push_to_spectometer.log
-
-# Count number of pushed artifacts
-num_pushed=$(grep -e 'Pushing' $TEST_LOGDIR/push_to_spectometer.log | wc -l)
-echo "Pushed $num_pushed test artifacts to spectometer, log saved to $TEST_LOGDIR/push_to_spectometer.log"
-
 # Parse results
-python ./aws-testing/parse_pytest_results.py $TEST_LOGDIR
+python ./aws-testing/parse_pytest_results.py --artifacts_dir $TEST_LOGDIR --load_known_failures /fsx/huilgolr/axlearn/test_artifacts/pipeline-failures/jul-25-failures.txt
