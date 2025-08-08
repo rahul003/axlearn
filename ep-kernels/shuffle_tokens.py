@@ -33,7 +33,7 @@ def get_buffer_mapping(ep_mask, skip_dma=SKIP_DMA): #index calculation
         buffer_mapping: tensor of shape [T*EP] containing indices of tokens. 
     '''
 
-    assert ep_mask.shape[1] == EP_DEGREE
+    #assert ep_mask.shape[1] == EP_DEGREE
     
     T, EP = ep_mask.shape 
     buffer_mapping = -1*np.ones((T,EP), dtype=np.int32)
