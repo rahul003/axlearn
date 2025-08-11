@@ -11,6 +11,7 @@ from shuffle_tokens import get_random_ep_mask, get_buffer_mapping, shuffle_token
 T = 512  # num tokens
 H = 16384  # hidden dimension
 EP_DEGREE=8
+LNC = 2
 
 def get_reduction_indices(ep_mask):
     '''
@@ -21,6 +22,7 @@ def get_reduction_indices(ep_mask):
         positions: indices of shape [T, EP] where ith row represents the locations of 
             the ith token in the shuffle_buffer of length T*EP. -1 indicates token was not 
             assigned to the EP bucket.
+    TODO: optimize by returning [T, topk] instead of [T, EP]
     '''
 
     T, EP = ep_mask.shape 
@@ -39,7 +41,7 @@ def reduce_acros_ep_numpy(shuffled_tokens, positions):
     Gathers tokens from EP buckets and sums them up according to given indices 
     Args: 
         shuffled_tokens: shape [T*EP, H] 
-        positions: indices of shape [T, H] where ith row gives the positions of the ith token 
+        positions: indices of shape [T, EP] where ith row gives the positions of the ith token
                    in the shuffled_tokens buffer. -1 indicates invalid position. 
     Returns: 
         reduced_tokens: shape [T,H] containing the summed up result for each token
@@ -51,7 +53,7 @@ def reduce_acros_ep_numpy(shuffled_tokens, positions):
 
     # sum up tokens across EP buckets in shuffled buffer 
     take = np.take(shuffled_tokens, positions, axis=0) # shape [T, EP, H]
-    reduced_tokens = np.sum(take, axis=1)   # shape [T, H]
+    reduced_tokens = np.sum(take, axis=1, dtype=np.float32).astype(bfloat16)   # shape [T, H], fp32 accumulate
 
     return reduced_tokens
 
@@ -61,7 +63,7 @@ def reduce_across_ep_nki(shuffled_tokens, positions):
     Gathers tokens from EP buckets and sums them up according to given indices 
     Args: 
         shuffled_tokens: shape [T*EP, H] 
-        positions: indices of shape [T, H] where ith row gives the positions of the ith token 
+        positions: indices of shape [T, EP] where ith row gives the positions of the ith token
                    in the shuffled_tokens buffer. -1 indicates invalid position. 
     Returns: 
         reduced_tokens: shape [T,H] containing the summed up result for each token
@@ -73,22 +75,28 @@ def reduce_across_ep_nki(shuffled_tokens, positions):
 
     reduced_tokens = nl.ndarray((T, H), dtype=shuffled_tokens.dtype, buffer=nl.shared_hbm) 
 
+    # Setup LNC sharding on hidden dimension
+    num_shards = nl.num_programs(axes=0)
+    stride_h = H // num_shards
+    start_h = nl.program_id(0) * stride_h
+    end_h =  start_h + stride_h
+
     # process one token at a time 
     for i in nl.affine_range(T): 
 
         indices = nl.load(positions[i]) 
-        load_p, load_f = nl.mgrid[0:EP, 0:H]   
+        load_p, load_f = nl.mgrid[0:EP, 0:stride_h]
 
         # create and initialize buffer to load token from EP buckets
-        local_tokens = nl.ndarray((EP, H), dtype=shuffled_tokens.dtype, buffer=nl.sbuf) 
-        local_tokens[load_p, load_f] = nisa.memset((EP,H), value=0, dtype=shuffled_tokens.dtype) 
+        local_tokens = nl.ndarray((EP, stride_h), dtype=shuffled_tokens.dtype, buffer=nl.sbuf)
+        local_tokens[load_p, load_f] = nisa.memset((EP,stride_h), value=0, dtype=shuffled_tokens.dtype)
         
         # load with skip_dma
-        local_tokens[load_p, load_f] = nl.load(shuffled_tokens[indices, load_f], dtype=shuffled_tokens.dtype, mode=oob_mode.skip)
+        local_tokens[load_p, load_f] = nl.load(shuffled_tokens[indices, load_f + start_h], dtype=shuffled_tokens.dtype, mode=oob_mode.skip)
         
         # reduce and store
         reduced_local_tokens = nki.isa.tensor_partition_reduce(np.add, local_tokens) 
-        nl.store(reduced_tokens[i:(i+1), 0:H], reduced_local_tokens) 
+        nl.store(reduced_tokens[i:(i+1), start_h:end_h], reduced_local_tokens)
 
     return reduced_tokens
 
@@ -105,7 +113,7 @@ if __name__ == "__main__":
     # EP reduction
     positions = get_reduction_indices(ep_mask)
     result_np = reduce_acros_ep_numpy(shuffled_tokens, positions)    
-    result_nki = reduce_across_ep_nki(shuffled_tokens, positions)
+    result_nki = reduce_across_ep_nki[nl.nc(LNC)](shuffled_tokens, positions)
 
     assert np.allclose(result_np.astype(np.float32), result_nki.astype(np.float32)), "Reduction results are not equal"
     print("Reduction results are equal")
