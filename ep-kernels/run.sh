@@ -12,7 +12,7 @@ if [ -z "$SLURM_JOB_NODELIST" ]; then
 fi
 
 num_nodes=$(echo "$nodes" | wc -l)
-LNC=${LNC:=1}
+LNC=${LNC:=2}
 devices_per_node=$((128 / $LNC))
 MASTER_ADDR=$(echo "$nodes" | head -n 1)
 MASTER_PORT=41000
@@ -43,7 +43,7 @@ export NEURON_RT_IO_RING_CACHE_SIZE=0
 export NEURON_RT_ENABLE_MEMORY_METRICS=0
 export NEURON_RT_VIRTUAL_CORE_SIZE=$LNC
 export NEURON_RT_RESET_CORES=1
-export NEURON_RT_LOG_LEVEL="WARNING"
+export NEURON_RT_LOG_LEVEL="ERROR"
 export NEURON_RT_ENABLE_INTERNODE_EXECUTION_BARRIER=1
 
 # Neuron collectives flag
@@ -94,4 +94,3 @@ fi
 
 set -ex
 python collective_kernel.py
-	

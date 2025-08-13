@@ -11,17 +11,19 @@ import neuronxcc.nki.isa as nisa
 import neuronxcc.nki.nccl as nccl
 import neuronxcc.nki.typing as nt
 
-NUM_CORES = 128 # LNC1
+NUM_CORES = 64 # LNC2, EP degree
+H = 1024 # hidden
+T = 128  # num tokens
 
 @nki.jit
 def nki_all_to_all(send_buffer, recv_buffer: nt.mutable_tensor): 
     '''
     All to all collective call
     Args:
-        send_buffer: [1, N] tensor 
-        recv_buffer: [1, N] tensor
+        send_buffer: [1, T*EP, H] tensor
+        recv_buffer: [1, T*EP, H] tensor
     Returns:
-        recv_buffer: [1, N] tensor
+        recv_buffer: [1, T*EP, H] tensor
     '''
     send_buffer_list = [send_buffer] 
     recv_buffer_list = [recv_buffer]
@@ -35,9 +37,9 @@ def global_permute(x):
     '''
     Global permutation of the input tensor
     Args:
-        x: [1, N] tensor
+        x: [1, T*EP, H] tensor
     Returns:
-        y: [1, N] tensor
+        y: [1, T*EP, H] tensor
     '''
     y = jnp.zeros_like(x)
     y = nki_all_to_all(x, y)
@@ -45,9 +47,16 @@ def global_permute(x):
 
 def setup():
     with jax.default_device(jax.devices("cpu")[0]):
-        a = jnp.arange(NUM_CORES).reshape(-1, 1)
-        a = jnp.broadcast_to(a, (NUM_CORES, NUM_CORES))
+       a = jax.random.normal(jax.random.PRNGKey(0), shape=(NUM_CORES, NUM_CORES*T, H), dtype=jnp.bfloat16) #[EP, EP*T, H]
     return a
+
+def setup_toy():
+    with jax.default_device(jax.devices("cpu")[0]):
+        a = jnp.arange(NUM_CORES)
+        a = jnp.repeat(a, H)
+        a = a.reshape(NUM_CORES, -1, H)
+        a = jnp.broadcast_to(a, (NUM_CORES, NUM_CORES*T, H))
+    return a.astype(jnp.int16)
 
 if __name__ == "__main__":
 
@@ -67,8 +76,10 @@ if __name__ == "__main__":
         check_rep=False
     )
  
-    output_sharded = global_permute_sm(input_sharded)
-    print(output_sharded)
-    jax.debug.visualize_array_sharding(output_sharded)
+    perm_sharded = global_permute_sm(input_sharded)
+    unperm_sharded = global_permute_sm(perm_sharded)
+
+    assert jnp.array_equal(unperm_sharded, input_sharded), "unperm and input differ"
+    print("Unperm and input match")
 
  
