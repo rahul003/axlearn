@@ -1403,13 +1403,16 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
             router_z_loss=router_z_loss,
         )
 
-class TopKGatingGatherBlockwiseV2(TopKGatingGather):
+class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
     def forward(self, logits):
         cfg = self.config
         O, G, S, E = logits.shape
         k = cfg.top_k
         raw_gates = self.router(cfg, logits)
         expert_capacity = self.compute_expert_capacity(cfg, logits)
+        # we compute capacity for dropping before group all-gather in EP case
+        # effective capacity to compute local num_blocks needs to be adjusted 
+        effective_capacity = expert_capacity*G
 
         # expert_index: (O, G, S*top_k)
         expert_index = self.compute_expert_index(cfg, raw_gates)
@@ -1440,20 +1443,37 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGather):
         expert_mask_k = expert_mask.reshape(O, G, k, S, E)
         expert_mask_k = jnp.sum(expert_mask_k, axis=2)
         expert_affinities_masked = jnp.where(expert_mask_k == 0, 0, expert_affinities_masked)
-        expert_mask_k = with_sharding_constraint(expert_mask_k, PartitionSpec(("fsdp", "data"), "expert", None, None))
-        
+
+        expert_mask_k = with_sharding_constraint(expert_mask_k, PartitionSpec(("fsdp", "data"), None, None, None))
+        expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, PartitionSpec(("fsdp", "data"), None, None, None))
+        # expert_mask_k = jnp.reshape(expert_mask_k, (O, 1, -1, E))
+        # expert_affinities_masked = jnp.reshape(expert_affinities_masked, (O,1,-1,E))
+
+        # separate out EP component for index computation 
+        mesh = thread_resources.env.physical_mesh 
+        ep_size = mesh.shape["expert"]
+        local_num_experts = int(self.config.num_experts / ep_size)
+
+        expert_mask_k = jnp.reshape(expert_mask_k, (O ,1, -1, ep_size, local_num_experts))
+        expert_mask_k = jnp.transpose(expert_mask_k, (0, 1, 3, 2, 4)).squeeze(axis=1)
+        expert_affinities_masked = jnp.reshape(expert_affinities_masked, (O ,1, -1, ep_size, local_num_experts))
+        expert_affinities_masked = jnp.transpose(expert_affinities_masked, (0, 1, 3, 2, 4)).squeeze(axis=1)
+
+        expert_mask_k = with_sharding_constraint(expert_mask_k, PartitionSpec(("data", "fsdp"), "expert", None, None))
+        expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, PartitionSpec(("data", "fsdp"), "expert", None, None))
+
         position_in_expert = _cum_sum(expert_mask_k.astype(jnp.int32), axis=-2).astype(jnp.int32)
         position_in_expert = with_sharding_constraint(position_in_expert, PartitionSpec(("fsdp", "data"), "expert", None, None))
 
         # Add expert offset to the position_in_expert
-        # expert_index_offsets: [E,]
+        # expert_index_offsets: [e,]
         expert_index_offsets = (
-            jnp.arange(cfg.num_experts, dtype=jnp.int32) * expert_capacity
+            jnp.arange(local_num_experts, dtype=jnp.int32) * effective_capacity
         )
-        block_to_expert = jnp.arange(E, dtype=jnp.int32)[None, None, :]
-        block_to_expert = jnp.broadcast_to(block_to_expert, (O, G, E))
+        block_to_expert = jnp.arange(local_num_experts, dtype=jnp.int32)[None, None, :]
+        block_to_expert = jnp.broadcast_to(block_to_expert, (O, G, local_num_experts))
 
-        # position_in_expert_with_offset: [O, G, S*topk, E]
+        # position_in_expert_with_offset: [O, 1, G*S*topk, e]
         position_in_expert_with_offset = position_in_expert + expert_index_offsets
 
         # Apply expert_mask and sum along S*topk axis to get tokens to index for each S.
@@ -1463,11 +1483,11 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGather):
         # for every position in the block, gets the token id in sequence
         mesh = thread_resources.env.physical_mesh
         T = mesh.shape["model"]
-        output = jnp.zeros((T, O, G, E*expert_capacity), dtype=jnp.int32)
+        output = jnp.zeros((T, O, G, local_num_experts*effective_capacity), dtype=jnp.int32)
 
         # create full tokens_indices and then shard within TP
-        tokens_indices = jnp.arange(S, dtype=jnp.int32)[None, None, :, None]
-        tokens_indices = jnp.broadcast_to(tokens_indices, (O, G, S, E))
+        tokens_indices = jnp.arange(G*S, dtype=jnp.int32)[None, None, :, None]
+        tokens_indices = jnp.broadcast_to(tokens_indices, (O, ep_size, G*S, local_num_experts))
         token_position_to_id_sm = shard_map(
             calculate_token_position_to_id,
             mesh=thread_resources.env.physical_mesh,
@@ -1481,7 +1501,7 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGather):
             check_rep=False
             )
         # (TP, O, G, N*B)
-        output = token_position_to_id_sm(position_in_expert_with_offset, tokens_indices, E, expert_capacity, S, output)
+        output = token_position_to_id_sm(position_in_expert_with_offset, tokens_indices, local_num_experts, effective_capacity, G*S, output)
         # allreduce to get (O, G, N*B)
         token_position_to_id  = jnp.min(output, axis=0)
         router_z_loss = _router_z_loss(logits)
