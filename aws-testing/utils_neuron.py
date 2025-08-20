@@ -862,9 +862,16 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
             # load each xml result and list test names
             results = parse_pytest_xml(m)
             for r in results['failures']:
-                failed_tests.add('MoE' + r[0].split('_MoE')[1])
+                if len(r[0].split('_MoE')) > 1:
+                    failed_tests.add('MoE' + r[0].split('_MoE')[1])
+                else:
+                    failed_tests.add('MoE' + r[0])
             for r in results['all_tests']:
-                all_tests.add('MoE' + r.split('_MoE')[1])
+                if len(r[0].split('_MoE')) > 1:
+                    all_tests.add('MoE' + r.split('_MoE')[1])
+                else:
+                    all_tests.add('MoE' + r)
+
         print('Failed tests', failed_tests)
         for t in tests:
             if t[0] in failed_tests or t[0] not in all_tests:
