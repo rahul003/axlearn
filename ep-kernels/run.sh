@@ -30,6 +30,7 @@ HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
 
 
 # PJRT Flags 
+#export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1
 export NEURON_HLO_ANALYZER=1
 export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_as_text --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
 
@@ -93,4 +94,5 @@ else
 fi
 
 set -ex
-python collective_kernel.py
+export PYTHON_EXEC=${1:-"dummy_fwd.py"}
+python $PYTHON_EXEC

@@ -29,7 +29,7 @@ def get_reduction_indices(ep_mask):
 
     # calculate positions of tokens in shuffled buffer
     mask_cumsum = np.cumsum(ep_mask, axis=0) 
-    offsets = T*np.arange(EP_DEGREE).reshape(1,-1)
+    offsets = T*np.arange(EP).reshape(1,-1)
     positions = mask_cumsum + offsets     # 1-indexed 
     positions = positions*ep_mask         # 0 at (i,j) indicates ith token did not go into jth EP bucket 
     positions = positions - 1             # 0-indexed, -1 at (i,j) indicates ith token did not go into jth EP bucket
