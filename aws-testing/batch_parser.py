@@ -399,13 +399,12 @@ class BatchIntegLogParser:
                                 "Implementation": test_params.get('implementation', 'unknown'),
                                 "MeshStrategy": test_params.get('mesh_strategy', 'unknown'),
                                 "TensorParallel": int(test_params.get('tensor_parallel', 0)),
-                                "DataParallel": int(test_params.get('data_parallel', 0)),
-                                "EventId": self.event_id
+                                "DataParallel": int(test_params.get('data_parallel', 0))
                             }
                         },
                         "TestOpt": {"BatchSize": int(test_params.get('batch_size', 1))},
                         "Hardware": {"InstanceType": "trn2.48xlarge"},
-                        "Software": {"VersionSet": "unknown"}
+                        "Software": {"VersionSet": self.event_id}
                     },
                     "kpi": {
                         "E2ETime": result.duration or 0.0,
