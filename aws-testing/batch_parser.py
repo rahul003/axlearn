@@ -400,7 +400,7 @@ class BatchIntegLogParser:
                                 "MeshStrategy": test_params.get('mesh_strategy', 'unknown'),
                                 "TensorParallel": int(test_params.get('tensor_parallel', 0)),
                                 "DataParallel": int(test_params.get('data_parallel', 0)),
-                                "Event_id": self.event_id
+                                "EventId": self.event_id
                             }
                         },
                         "TestOpt": {"BatchSize": int(test_params.get('batch_size', 1))},
