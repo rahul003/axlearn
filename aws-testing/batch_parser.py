@@ -1,3 +1,7 @@
+<<<<<<< HEAD
+=======
+#!/usr/bin/env python3
+>>>>>>> efc2c09 (Add comprehensive documentation to batch_parser.py)
 """
 Batch Test Result Parser for Model Testing
 
