@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Batch Test Result Parser for Model Testing
 
