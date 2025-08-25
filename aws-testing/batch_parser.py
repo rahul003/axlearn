@@ -1,4 +1,25 @@
 #!/usr/bin/env python3
+"""
+Batch Test Result Parser for Model Testing
+
+This module parses pytest XML output files from model tests,
+It categorizes test failures, extracts model configurations, and uploads metrics to Scuba database
+for monitoring and analysis.
+
+Author: @yoamol
+Created: 2025
+Last Modified: 2025
+Version: 1.0
+
+Usage:
+    python batch_parser.py --test_directory /path/to/tests --event_id VERSION_SET_ID
+
+Dependencies:
+    - xml.etree.ElementTree: XML parsing
+    - kaena_scuba_data_api: Metrics upload to Scuba
+    - Standard library modules: os, json, re, datetime, typing, dataclasses
+"""
+
 import os
 import json
 import re
@@ -10,6 +31,17 @@ from kaena_scuba_data_api import ScubaHeartbeat
 
 @dataclass
 class TestResult:
+    """Data class representing a single test result.
+    
+    Attributes:
+        test_name: Name of the test method
+        model_type: Type and configuration of the model being tested
+        status: Test status ("PASS" or "FAIL")
+        duration: Test execution time in seconds
+        error_message: Error message if test failed
+        error_category: Categorized error type
+        error_categories: List of error categories for multiple errors
+    """
     test_name: str
     model_type: str
     status: str
@@ -19,7 +51,20 @@ class TestResult:
     error_categories: Optional[List[str]] = None
 
 class BatchIntegLogParser:
+    """Parser for batch processing of pytest XML test results.
+    
+    This class handles parsing XML test results from multiple test suites,
+    categorizing failures, and uploading metrics to Scuba database.
+    """
+    
     def __init__(self, base_folder: str, event_id: str = "unknown", dry_run: bool = True):
+        """Initialize the batch parser.
+        
+        Args:
+            base_folder: Root directory containing test suite folders
+            event_id: Version set identifier for tracking
+            dry_run: If True, don't actually upload to Scuba
+        """
         self.base_folder = base_folder
         self.event_id = event_id
         self.dry_run = dry_run
@@ -33,7 +78,14 @@ class BatchIntegLogParser:
             self.scuba_available = False
         
     def find_test_suites(self) -> List[str]:
-        """Find all test suite folders containing XML files"""
+        """Find all test suite folders containing XML files.
+        
+        Scans the base folder for subdirectories that contain .xml files,
+        which are assumed to be pytest result files.
+        
+        Returns:
+            List of test suite folder names (sorted alphabetically)
+        """
         test_suites = []
         for item in os.listdir(self.base_folder):
             suite_path = os.path.join(self.base_folder, item)
@@ -45,7 +97,24 @@ class BatchIntegLogParser:
         return sorted(test_suites)
     
     def parse_pytest_xml(self, xml_file):
-        """Parse pytest XML file and extract test results."""
+        """Parse pytest XML file and extract test results.
+        
+        Parses a single pytest XML file to extract test statistics and failure information.
+        
+        Args:
+            xml_file: Path to the XML file to parse
+            
+        Returns:
+            Dict containing test statistics:
+                - passed: Number of passed tests
+                - failed: Number of failed tests
+                - errors: Number of tests with errors
+                - skipped: Number of skipped tests
+                - failures: List of (test_name, error_message) tuples
+                - all_tests: List of all test names
+                - total: Total number of tests
+            Returns None if parsing fails.
+        """
         try:
             tree = ET.parse(xml_file)
             root = tree.getroot()
@@ -114,7 +183,14 @@ class BatchIntegLogParser:
         }
     
     def parse_all_suites(self) -> Dict[str, List[TestResult]]:
-        """Parse XML files from all test suites"""
+        """Parse XML files from all test suites.
+        
+        Discovers all test suites and processes their XML files to create
+        TestResult objects for each test.
+        
+        Returns:
+            Dictionary mapping suite names to lists of TestResult objects
+        """
         all_results = {}
         test_suites = self.find_test_suites()
         
@@ -136,7 +212,17 @@ class BatchIntegLogParser:
         return all_results
     
     def _parse_xml_files(self, suite_path: str) -> List[TestResult]:
-        """Parse all XML files in a suite folder"""
+        """Parse all XML files in a suite folder.
+        
+        Processes all .xml files in the given suite directory and converts
+        them into TestResult objects with proper error categorization.
+        
+        Args:
+            suite_path: Path to the test suite directory
+            
+        Returns:
+            List of TestResult objects for all tests in the suite
+        """
         results = []
         xml_files = [f for f in os.listdir(suite_path) if f.endswith('.xml')]
         
@@ -191,6 +277,17 @@ class BatchIntegLogParser:
 
     
     def _extract_model_type(self, test_name: str) -> str:
+        """Extract model type and configuration from test name.
+        
+        Parses test names to identify MoE model configurations, extracting
+        the number of experts and hidden size.
+        
+        Args:
+            test_name: Name of the test method
+            
+        Returns:
+            String describing model type (e.g., "MoE_e8_h2048")
+        """
         if "MoE" in test_name:
             experts_match = re.search(r'e(\d+)', test_name)
             hidden_match = re.search(r'h(\d+)', test_name)
@@ -203,7 +300,18 @@ class BatchIntegLogParser:
         return "MoE_unknown"
     
     def _extract_test_name_from_xml(self, content: str, filename: str) -> str:
-        """Extract test name from XML content or use filename"""
+        """Extract test name from XML content or use filename.
+        
+        Attempts to find the actual test name in XML content, falling back
+        to generating a name from the filename if not found.
+        
+        Args:
+            content: Raw XML content as string
+            filename: Name of the XML file
+            
+        Returns:
+            Extracted or generated test name
+        """
         # Try to find test name in XML content
         test_match = re.search(r'test_fwdbwd_blockwisev2_MoE_[^\s<>"]+', content)
         if test_match:
@@ -213,7 +321,17 @@ class BatchIntegLogParser:
         return f"test_from_{filename.replace('.xml', '')}"
     
     def _extract_error_lines(self, content: str) -> List[str]:
-        """Extract failure messages from XML content"""
+        """Extract failure messages from XML content.
+        
+        Parses XML content to find failure messages, using both XML attributes
+        and text content parsing methods.
+        
+        Args:
+            content: Raw XML content as string
+            
+        Returns:
+            List of error message strings
+        """
         import re
         
         # Extract failure messages from XML
@@ -237,7 +355,16 @@ class BatchIntegLogParser:
         return error_lines
     
     def _extract_error_categories(self, error_lines: List[str]) -> List[str]:
-        """Extract error categories from error lines"""
+        """Extract error categories from error lines.
+        
+        Categorizes multiple error messages and returns unique categories.
+        
+        Args:
+            error_lines: List of error message strings
+            
+        Returns:
+            List of unique error categories
+        """
         categories = []
         
         for error_line in error_lines:
@@ -248,7 +375,26 @@ class BatchIntegLogParser:
         return categories
     
     def _categorize_single_error(self, error_message: str) -> str:
-        """Categorize a single error message"""
+        """Categorize a single error message.
+        
+        Analyzes error message text to classify it into predefined categories
+        for better error tracking and analysis.
+        
+        Args:
+            error_message: The error message to categorize
+            
+        Returns:
+            String representing the error category:
+                - blocksize_support_error
+                - tolerance_assertion_error
+                - xla_runtime_error
+                - nki_compilation_error
+                - runtime_error
+                - assertion_error
+                - index_error
+                - generic_exception
+                - uncategorized_error
+        """
         if not error_message:
             return "unknown"
         
@@ -276,6 +422,17 @@ class BatchIntegLogParser:
             return "uncategorized_error"
     
     def _categorize_error(self, error_message: str) -> str:
+        """Legacy error categorization method.
+        
+        Alternative error categorization with slightly different logic.
+        Consider using _categorize_single_error instead.
+        
+        Args:
+            error_message: The error message to categorize
+            
+        Returns:
+            String representing the error category
+        """
         if not error_message:
             return "unknown"
         
@@ -301,14 +458,38 @@ class BatchIntegLogParser:
             return "uncategorized_error"
     
     def aggregate_results(self, suite_results: Dict[str, List[TestResult]]) -> List[TestResult]:
-        """Aggregate all results into single list"""
+        """Aggregate all results into single list.
+        
+        Flattens the suite-organized results into a single list for
+        easier processing and analysis.
+        
+        Args:
+            suite_results: Dictionary mapping suite names to TestResult lists
+            
+        Returns:
+            Flattened list of all TestResult objects
+        """
         aggregated = []
         for suite, results in suite_results.items():
             aggregated.extend(results)
         return aggregated
     
     def _parse_test_parameters(self, test_name: str) -> Dict:
-        """Extract test parameters from test name"""
+        """Extract test parameters from test name.
+        
+        Uses regex patterns to extract various test configuration parameters
+        from the test method name.
+        
+        Args:
+            test_name: Name of the test method
+            
+        Returns:
+            Dictionary containing extracted parameters:
+                - input_size, hidden_size, num_experts, topk, groups
+                - expert_capacity, block_size, batch_size, sequence_length
+                - precision, test_type, implementation
+                - mesh_strategy, tensor_parallel, data_parallel
+        """
         params = {}
         
         # Extract parameters using regex
@@ -342,7 +523,20 @@ class BatchIntegLogParser:
         return params
     
     def _parse_model_info(self, model_type: str) -> Dict:
-        """Parse model type like '12B_MoE_e8_h7168' or 'deepseek-v3_MoE_e128_h2048' into components"""
+        """Parse model type string into components.
+        
+        Extracts model information from strings like '12B_MoE_e8_h7168' or
+        'deepseek-v3_MoE_e128_h2048'.
+        
+        Args:
+            model_type: Model type string to parse
+            
+        Returns:
+            Dictionary containing:
+                - model_type: Base model type (e.g., '12B', 'deepseek-v3')
+                - num_experts: Number of experts in MoE model
+                - hidden_size: Hidden layer size
+        """
         info = {}
         
         # Extract model type (12B, deepseek-v3, etc.) - everything before _MoE
@@ -362,7 +556,20 @@ class BatchIntegLogParser:
         return info
     
     def upload_all_results(self, aggregated_results: List[TestResult], use_dev_table: bool = True) -> Dict[str, int]:
-        """Upload all aggregated results to Scuba"""
+        """Upload all aggregated results to Scuba database.
+        
+        Converts TestResult objects into structured data format and uploads
+        to Scuba for monitoring and dashboard visualization.
+        
+        Args:
+            aggregated_results: List of TestResult objects to upload
+            use_dev_table: If True, upload to development Scuba table
+            
+        Returns:
+            Dictionary with upload statistics:
+                - success: Number of successful uploads
+                - failed: Number of failed uploads
+        """
         stats = {"success": 0, "failed": 0}
         
         for result in aggregated_results:
@@ -439,7 +646,23 @@ class BatchIntegLogParser:
         return stats
     
     def generate_batch_summary(self, suite_results: Dict[str, List[TestResult]]) -> Dict:
-        """Generate comprehensive summary across all test suites"""
+        """Generate comprehensive summary across all test suites.
+        
+        Creates detailed statistics and analysis of test results across
+        all suites, including pass rates, error categorization, and
+        model-specific statistics.
+        
+        Args:
+            suite_results: Dictionary mapping suite names to TestResult lists
+            
+        Returns:
+            Dictionary containing comprehensive summary:
+                - total_tests, passed_tests, failed_tests, pass_rate
+                - suite_stats: Per-suite statistics
+                - model_stats: Per-model statistics
+                - error_categories: Error distribution
+                - timestamp, base_folder: Metadata
+        """
         aggregated = self.aggregate_results(suite_results)
         
         if not aggregated:
@@ -494,10 +717,16 @@ class BatchIntegLogParser:
         }
 
 def main():
+    """Main entry point for the batch parser script.
+    
+    Handles command-line arguments, orchestrates the parsing process,
+    generates summaries, uploads results to Scuba, and saves detailed
+    output to JSON file.
+    """
     import argparse
     
     parser = argparse.ArgumentParser(description='Batch parse integ.log files and upload to Scuba')
-    parser.add_argument('--test_directory', '--base-folder', default='/home/yoamol/workplace/20250814_221853', help='Test directory containing test suites')
+    parser.add_argument('--test_directory', '--base-folder', required=True, help='Test directory containing test suites')
     parser.add_argument('--event_id', required=True, help='Event ID from VERSION_SET')
     parser.add_argument('--dry-run', action='store_true', default=False, help='Run in dry-run mode')
     parser.add_argument('--use-dev-table', action='store_true', default=False, help='Use dev Scuba table')
@@ -555,35 +784,6 @@ def main():
     else:
         upload_stats = {"success": 0, "failed": 0}
         print("No results to upload")
-    
-    # Save results
-    output_file = f"/home/yoamol/workplace/ws_JAXTrainingTests/batch_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    
-    detailed_output = {
-        "summary": summary if summary else {"total_tests": 0, "passed_tests": 0, "failed_tests": 0},
-        "upload_stats": upload_stats,
-        "suite_results": {
-            suite: [
-                {
-                    "test_name": r.test_name,
-                    "model_type": r.model_type,
-                    "status": r.status,
-                    "duration": r.duration,
-                    "error_message": r.error_message,
-                    "error_category": r.error_category,
-                    "error_categories": r.error_categories,
-                    "timestamp": batch_parser.run_timestamp
-                }
-                for r in results
-            ]
-            for suite, results in suite_results.items()
-        }
-    }
-    
-    with open(output_file, 'w') as f:
-        json.dump(detailed_output, f, indent=2)
-    
-    print(f"✓ Detailed results saved to {output_file}")
 
 if __name__ == "__main__":
     main()
