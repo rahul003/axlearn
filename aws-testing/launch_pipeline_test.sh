@@ -53,5 +53,5 @@ done
 
 echo "All tests finished"
 
-# Parse results
-python ./aws-testing/parse_pytest_results.py --artifacts_dir $TEST_LOGDIR --load_known_failures /fsx/huilgolr/axlearn/test_artifacts/pipeline-failures/jul-25-failures.txt
+# Send the data via scuba
+python ./aws-testing/batch_parser.py --test_directory="$TEST_LOGDIR" --event_id="$VS_EVENT_ID"
