@@ -14,7 +14,7 @@ import neuronxcc.nki.typing as nt
 
 from shuffle_tokens import get_random_ep_mask, get_buffer_mapping, shuffle_tokens_nki
 from reduce_across_ep import get_reduction_indices, reduce_across_ep_nki
-from collective_kernel import nki_all_to_all
+from collective_kernel import nki_all_to_all, nki_all_to_all_v2
 
 NUM_CORES = 64 # LNC2
 EP_DEGREE = 64 # LNC2
@@ -57,8 +57,9 @@ def forward_pass(mapping, positions):
 
     @partial(jax.jit, out_shardings=sharding)
     def setup():
-        a = jax.random.normal(jax.random.PRNGKey(0), shape=(NUM_CORES, T, H), dtype=jnp.bfloat16)
-        return a 
+        with jax.default_device(jax.devices("cpu")[0]):
+            a = jax.random.normal(jax.random.PRNGKey(0), shape=(NUM_CORES, NUM_CORES*T, H), dtype=jnp.float32) # Use fp32, some NaNs with bf16
+        return a.astype(jnp.bfloat16)
     
     tokens = setup() # [EP, T, H] 
     moe_with_ep_sm = shard_map(
@@ -70,6 +71,7 @@ def forward_pass(mapping, positions):
     )
     
     result = moe_with_ep_sm(tokens, mapping, positions) # [EP,T, H]
+    print(result.shape)
 
     return result
 

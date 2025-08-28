@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 from jax.experimental.shard_map import shard_map
 from jax._src.mesh import thread_resources
+from functools import partial
 
 import numpy as np
 from neuronxcc import nki
@@ -45,11 +46,6 @@ def global_permute(x):
     y = nki_all_to_all(x, y)
     return y 
 
-def setup():
-    with jax.default_device(jax.devices("cpu")[0]):
-       a = jax.random.normal(jax.random.PRNGKey(0), shape=(NUM_CORES, NUM_CORES*T, H), dtype=jnp.bfloat16) #[EP, EP*T, H]
-    return a
-
 def setup_toy():
     with jax.default_device(jax.devices("cpu")[0]):
         a = jnp.arange(NUM_CORES)
@@ -60,13 +56,16 @@ def setup_toy():
 
 if __name__ == "__main__":
 
-    input = setup()
-
     mesh = jax.make_mesh((NUM_CORES, ), ('ep'))
     sharding = jax.sharding.NamedSharding(mesh, P('ep')) 
-    print(mesh) 
 
-    input_sharded = jax.device_put(input, sharding)
+    @partial(jax.jit, out_shardings=sharding)
+    def setup():
+        with jax.default_device(jax.devices("cpu")[0]):
+            a = jax.random.normal(jax.random.PRNGKey(0), shape=(NUM_CORES, NUM_CORES*T, H), dtype=jnp.float32) # Use fp32, some NaNs with bf16
+        return a.astype(jnp.bfloat16)
+
+    input_sharded = setup() # [EP, T, H]
 
     global_permute_sm = shard_map(
         global_permute,
