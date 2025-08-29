@@ -31,7 +31,7 @@ export XLA_FLAGS="--xla_cpu_use_thunk_runtime=false --xla_force_host_platform_de
 export GIT_COMMIT=$(git rev-parse --short HEAD)
 
 HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
-export XLA_FLAGS="${XLA_FLAGS} --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*' --xla_dump_hlo_as_text"
+export XLA_FLAGS="${XLA_FLAGS} --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*' --xla_dump_hlo_as_text --xla_dump_hlo_as_proto"
 # export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_snapshots"
 
 # PJRT Flags 
@@ -112,7 +112,7 @@ elif [ "$1" = "150bdev" ]; then
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_layer_unit.xml aws-testing/moe_layer_unit_test.py -k "TestDev150bUnit"
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_gating_unit.xml aws-testing/gating_test.py -k "TestGatingOnCpu or TestDev150bGatingUnit"
 elif [ "$1" = "dev" ]; then
-    pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestLayerOnTrn and test_fwdbwd_blockwisev2_MoE_i2048_h8192_e128_topk16_g4_ec2_b4_s16384_meshfsdp-1tp16_bf16"
+    pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDevSwitchBaseInteg"
 elif [ "$1" = "150b_blockwise_cpu" ]; then
     pytest -rsA --tb=short aws-testing/moe_layer_unit_test.py -k 'TestDev150bUnit and test_fwd_blockwise_vs_einsum or TestDev150bUnit and test_fwdbwd_blockwise_vs_einsum'
     pytest -rsA --tb=short aws-testing/moe_layer_unit_test.py -k 'TestDev150bUnit and test_fwd_blockwisev2_vs_einsum or TestDev150bUnit and test_fwdbwd_blockwisev2_vs_einsum'

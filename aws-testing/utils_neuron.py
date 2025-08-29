@@ -54,7 +54,7 @@ def get_mesh_dims_from_spec(mesh_spec):
 
 def build_name(cfg, invoker_cfg):
     if invoker_cfg['mesh_spec']:
-        mesh_str = f"fsdp{invoker_cfg['mesh_spec']['fsdp']}tp{invoker_cfg['mesh_spec']['model']}"
+        mesh_str = f"fsdp{invoker_cfg['mesh_spec']['fsdp']}tp{invoker_cfg['mesh_spec']['model']}ep{invoker_cfg['mesh_spec']['expert'] if 'expert' in invoker_cfg['mesh_spec'] else 1}"
     else:
         mesh_str = ''
 
