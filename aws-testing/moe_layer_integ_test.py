@@ -42,20 +42,21 @@ class TestLayerOnTrn(LayerTestCase):
     #     self.helper_fwd(cfg)
     
     # @unittest.skip("test fwd skipped as fwd is part of fwd+bwd test")
-    # @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
-    # def test_fwd_blockwisegatherv2(self, cfg):
-    #     self.helper_fwd(cfg)
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+    def test_fwd_blockwisegatherv2(self, cfg):
+        self.helper_fwd(cfg)
     
     # @unittest.skip("skip gather")
     # @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGather, golden=TopKGating, test_device="neuron", golden_device="cpu"))
     # def test_fwdbwd_gather(self, cfg: ExperimentConfig):
     #     self.helper_bwd(cfg)
 
-    @unittest.skip("skip v1 tests as v2 is the focus")
+    @unittest.skip("skip v1 tests")
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
     def test_fwdbwd_blockwisegather(self, cfg: ExperimentConfig):
         self.helper_bwd(cfg)
-
+    
+    @unittest.skip("bwd")
     @unittest.skipIf(not get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"), reason='empty parameters')
     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
     def test_fwdbwd_blockwisev2(self, cfg: ExperimentConfig):

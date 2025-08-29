@@ -22,8 +22,8 @@ export TEST_ARTIFACTS_PATH=$TEST_LOG_DIR/$TEST_SUITE/artifacts
 export NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
 mkdir -p "$TEST_ARTIFACTS_PATH"
 
-export USE_CACHED_GOLDENS=1
-export CACHE_GOLDENS=1
+export USE_CACHED_GOLDENS=0
+export CACHE_GOLDENS=0
 export USE_SHARDMAP_FFN=1
 
 export XLA_FLAGS="--xla_cpu_use_thunk_runtime=false --xla_force_host_platform_device_count=64 --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives"
@@ -31,7 +31,7 @@ export XLA_FLAGS="--xla_cpu_use_thunk_runtime=false --xla_force_host_platform_de
 export GIT_COMMIT=$(git rev-parse --short HEAD)
 
 HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
-export XLA_FLAGS="${XLA_FLAGS} --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*' --xla_dump_hlo_as_text"
+export XLA_FLAGS="${XLA_FLAGS} --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*' --xla_dump_hlo_as_text --xla_dump_hlo_as_proto"
 # export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_snapshots"
 
 # PJRT Flags 
@@ -87,7 +87,7 @@ elif [ "$1" = "integ" ]; then
     elif [ "$2" = "deepseek-v3" ] || [ "$2" = "qwen3-30b" ] || [ "$2" = "switch-base" ]; then
         export TEST_SUITE_PARTS=15
     else
-        export TEST_SUITE_PARTS=10
+        export TEST_SUITE_PARTS=1
     fi
     echo "Splitting tests into $TEST_SUITE_PARTS parts"
     status=0

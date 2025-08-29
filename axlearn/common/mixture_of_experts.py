@@ -1211,6 +1211,7 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
         Invert block_position_indices to obtain token_position_to_id.
         """
         O, G, num_tokens, E = block_position_indices.shape
+        print('bpi shape', block_position_indices.shape)
         mesh = thread_resources.env.physical_mesh
         TP = mesh.shape["model"]
 
@@ -1265,6 +1266,7 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
         # zero_tensor = jnp.zeros(1, dtype=token_position_to_id.dtype)
         # token_position_to_id = jnp.maximum(token_position_to_id, zero_tensor)
         token_position_to_id = self._remat_name(token_position_to_id, "blockwisegating.token_position_to_id")
+        print('token_position_to_id shape', token_position_to_id.shape)
         return token_position_to_id
     
     @partial(jax.jit, static_argnums=(0,2,3,))
@@ -1412,7 +1414,7 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
         expert_capacity = self.compute_expert_capacity(cfg, logits)
         # we compute capacity for dropping before group all-gather in EP case
         # effective capacity to compute local num_blocks needs to be adjusted 
-        effective_capacity = expert_capacity*G
+        effective_capacity = expert_capacity * G
 
         # expert_index: (O, G, S*top_k)
         expert_index = self.compute_expert_index(cfg, raw_gates)
@@ -1488,20 +1490,36 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
         # create full tokens_indices and then shard within TP
         tokens_indices = jnp.arange(G*S, dtype=jnp.int32)[None, None, :, None]
         tokens_indices = jnp.broadcast_to(tokens_indices, (O, ep_size, G*S, local_num_experts))
-        token_position_to_id_sm = shard_map(
-            calculate_token_position_to_id,
-            mesh=thread_resources.env.physical_mesh,
-            in_specs=(
-                PartitionSpec(("fsdp", "data"), "expert", "model", None),
-                PartitionSpec(("fsdp", "data"), "expert", "model", None),
-                None, None, None,
-                PartitionSpec("model", ("fsdp", "data"), "expert",  None),
-            ),
-            out_specs=PartitionSpec("model", ("fsdp", "data"), "expert",  None),
-            check_rep=False
-            )
-        # (TP, O, G, N*B)
-        output = token_position_to_id_sm(position_in_expert_with_offset, tokens_indices, local_num_experts, effective_capacity, G*S, output)
+
+        if ep_size>1:
+            token_position_to_id_sm = shard_map(
+                self.get_token_position_to_id,
+                mesh=thread_resources.env.physical_mesh,
+                in_specs=(
+                    None,
+                    PartitionSpec(("data", "fsdp"), "expert", None, None), 
+                    None,
+                ),
+                out_specs=PartitionSpec(("data", "fsdp"), None, None),
+                check_rep=False
+                )
+                
+            token_position_to_id = token_position_to_id_sm(effective_capacity, position_in_expert_with_offset, local_num_experts)
+        else: 
+            token_position_to_id_sm = shard_map(
+                calculate_token_position_to_id,
+                mesh=thread_resources.env.physical_mesh,
+                in_specs=(
+                    PartitionSpec(("fsdp", "data"), "expert", "model", None),
+                    PartitionSpec(("fsdp", "data"), "expert", "model", None),
+                    None, None, None,
+                    PartitionSpec("model", ("fsdp", "data"), "expert",  None),
+                ),
+                out_specs=PartitionSpec("model", ("fsdp", "data"), "expert",  None),
+                check_rep=False
+                )
+            # (TP, O, G, N*B)
+            output = token_position_to_id_sm(position_in_expert_with_offset, tokens_indices, local_num_experts, effective_capacity, G*S, output)
         # allreduce to get (O, G, N*B)
         token_position_to_id  = jnp.min(output, axis=0)
         router_z_loss = _router_z_loss(logits)
@@ -1834,6 +1852,7 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
         block_size = token_position_to_id.shape[-1] // num_blocks
         gate_up_weight = jnp.stack([self.parameters["wi_0_weight"],self.parameters["wi_1_weight"],], axis=2)
         gate_up_weight = with_sharding_constraint(gate_up_weight, PartitionSpec("expert", "fsdp", None, "model"))
+        ep_degree = mesh.shape["expert"]
 
         # TODO: fix checkpointing as it has needs different out_specs
         partitioned_blockwise_mm = shard_map(
@@ -1844,8 +1863,8 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
                 cfg.dim_to_mesh_axis_map["ogse"], # expert_affinities_masked
                 PartitionSpec("expert", None, None, "model"), # gate_up_proj weight
                 PartitionSpec("expert", "model", None), # down_proj weight
-                PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None), # token_position_to_id
-                PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None), # block_to_expert
+                PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert" if ep_degree == 1 else None, None), # token_position_to_id
+                PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert" if ep_degree == 1 else None, None), # block_to_expert
                 None, # block size
                 None, # activation_fns
             ),
