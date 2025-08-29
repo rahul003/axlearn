@@ -50,7 +50,7 @@ def moe_with_ep(tokens, mapping, positions):
     return reduced_result
 
 @jax.jit
-def forward_pass(mapping, positions): 
+def forward_pass(ep_mask, mapping, positions):
     
     mesh = jax.make_mesh((NUM_CORES, ), ('ep'))
     sharding = jax.sharding.NamedSharding(mesh, P('ep')) 
@@ -71,9 +71,11 @@ def forward_pass(mapping, positions):
     )
     
     result = moe_with_ep_sm(tokens, mapping, positions) # [EP,T, H]
-    print(result.shape)
 
-    return result
+    factor = jnp.sum(ep_mask, axis=1, keepdims=True) 
+    golden = tokens*factor
+
+    return result, golden
 
 
 if __name__ == "__main__":
@@ -82,4 +84,7 @@ if __name__ == "__main__":
     ep_mask = get_random_ep_mask(T, EP_DEGREE) 
     mapping = get_buffer_mapping(ep_mask, skip_dma=True) 
     positions = get_reduction_indices(ep_mask) 
-    forward_pass(jnp.array(mapping), jnp.array(positions))
+    result, golden = forward_pass(jnp.array(ep_mask), jnp.array(mapping), jnp.array(positions))
+
+    assert jnp.allclose(golden.astype(jnp.float32), result.astype(jnp.float32)), "Result incorrect"
+    print("Result correct")
