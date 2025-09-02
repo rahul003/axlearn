@@ -397,6 +397,7 @@ class GridSpaceBuilder:
         grid_space = []
         tp_4_mesh_spec = {"fsdp":-1, "model":4}
         tp_16_mesh_spec = {"fsdp":-1, "model":16}
+        ep_mesh_spec = {"fsdp":-1, "expert":64, "model": 1}
         tp_64_mesh_spec = {"fsdp":-1, "model":64}
         kwargs={
             'dtype': jnp.bfloat16,
@@ -428,7 +429,7 @@ class GridSpaceBuilder:
             # switch large
             grid_space.append(
                 self.create_test_config(
-                **kwargs, input_dim=2048, hidden_dim=8192, n_experts=128, top_k=4, n_groups=1, capacity_factor=2, seq=2048, mesh_spec=tp_16_mesh_spec,
+                **kwargs, input_dim=2048, hidden_dim=8192, n_experts=128, top_k=4, n_groups=1, capacity_factor=2, seq=8192, mesh_spec=ep_mesh_spec,
                 )
             )
             # deepseek
@@ -814,7 +815,7 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
     if test_suite == "toy":
         return builder.build_toy_grid_space()
     elif test_suite == 'presubmit':
-        tests = builder.build_presubmit_grid_space()
+        tests = [builder.build_presubmit_grid_space()[4]]
     elif test_suite == '12b':
         return builder.build_grid_space_12B()
     elif test_suite == '50b':

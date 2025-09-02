@@ -12,7 +12,7 @@ from jax._src.mesh import thread_resources
 from neuronxcc.nki._private_kernels.blockwise_mm import (
         blockwise_mm_selective_cp as blockwise_mm_nki,
         check_blockwise_mm_kernel_compatibility,
-    )
+)
 from neuronxcc.nki._private_kernels.blockwise_mm_bwd import (
     blockwise_mm_bwd_selective_cp as blockwise_mm_bwd_nki,
     # check_blockwise_mm_bwd_kernel_compatibility,
@@ -114,7 +114,7 @@ def _blockwise_mm_fwd(
         expert_affinities_masked = jnp.concat([expert_affinities_masked, padding_e], axis=0)
         expert_affinities_masked = jnp.reshape(expert_affinities_masked, (-1, 1))
 
-    out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+    out, gate_up_activations_T = _blockwise_mm_nki_call[VNC(2)](
         hidden_states,
         expert_affinities_masked,
         gate_up_weight,
@@ -122,14 +122,14 @@ def _blockwise_mm_fwd(
         token_position_to_id,
         block_to_expert,
         block_size=block_size,
-        skip_dma=SkipMode(False, False)
+        skip_dma=SkipMode(False, False),
+        expert_affinity_multiply_on_I=True,
     )
 
-    down_activations = checkpoint_name(down_activations, "blockwise.down_activations")
     gate_up_activations_T = checkpoint_name(gate_up_activations_T, "blockwise.gate_up_activations_T")
     
     return out[None, None, None, :-1, :], (hidden_states, expert_affinities_masked, gate_up_weight, 
-                down_proj_weight, down_activations, gate_up_activations_T, 
+                down_proj_weight, gate_up_activations_T, 
                 token_position_to_id, block_to_expert)
 
 def _blockwise_mm_bwd(
@@ -138,7 +138,7 @@ def _blockwise_mm_bwd(
     grad_output
 ):
     (hidden_states, expert_affinities_masked, gate_up_proj_weight, 
-     down_proj_weight, down_activations, gate_up_activations_T, 
+     down_proj_weight, gate_up_activations_T, 
      token_position_to_id, block_to_expert) = res
     
     T,H = hidden_states.shape
@@ -155,7 +155,7 @@ def _blockwise_mm_bwd(
             gate_up_proj_weight,
             gate_up_activations_T,
             down_proj_weight,
-            down_activations,
+            jnp.nan,
             token_position_to_id.astype(jnp.int32),
             block_to_expert.astype(jnp.int32),
             grad_output,

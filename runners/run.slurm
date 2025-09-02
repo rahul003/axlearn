@@ -3,7 +3,7 @@
 #SBATCH --output logs/%j_%x.out
 
 # comment this out to run full model
-export AXLEARN_NUM_LAYERS=$((6 * SLURM_NNODES))
+export AXLEARN_NUM_LAYERS=$((4 * SLURM_NNODES))
 export AXLEARN_REMAT_LAYER=selective
 export AXLEARN_MODEL_NAME="envy-Mistral-8x20B"
 export AXLEARN_TP_DEGREE=16
@@ -34,7 +34,7 @@ fi
 
 if [ ${2:-1} = "1" ]; then
     echo "Installing"
-    srun -l ./setup_node.sh ../may-artifacts/
+    srun -l ./setup_node.sh ../jul-end-artifacts/
 else
     echo "Skip installing"
 fi
