@@ -11,7 +11,7 @@ else
 fi
 
 function run_suite() {
-    sbatch -W --exclusive -J pipeline_test_$1 --output=test_artifacts/$id/%x_%j.out ./aws-testing/test.slurm $1 $TEST_LOGDIR $GOLDENS_DIR $JAX_CC_DIR &
+    sbatch -W --partition=dev --exclusive -J pipeline_test_$1 --output=test_artifacts/$id/%x_%j.out ./aws-testing/test.slurm $1 $TEST_LOGDIR $GOLDENS_DIR $JAX_CC_DIR &
 }
 
 

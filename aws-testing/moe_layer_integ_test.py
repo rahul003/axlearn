@@ -134,18 +134,47 @@ class TestDevSwitchBaseInteg(LayerTestCase):
             input_dim=1024,
             hidden_dim=4096,
             n_experts=128,
+            n_groups=16,
+            top_k=2,
+            capacity_factor=2,
+            mesh_spec={"expert": 16, "model": 4, "fsdp": 1},
+            batch=4,
+            seq=8192,
+            dtype=jnp.bfloat16,
+        )[1]
+    
+    def create_cfg_ep64(self, test, golden=None, layer="moe"):
+        golden = self.golden if golden is None else golden
+        return create_test_config(
+            layer=layer,
+            test=test,
+            golden=golden,
+            test_device=self.test_device,
+            golden_device=self.golden_device,
+            input_dim=1024,
+            hidden_dim=4096,
+            n_experts=128,
             n_groups=64,
             top_k=2,
             capacity_factor=2,
             mesh_spec={"expert": 64, "model": 1, "fsdp": 1},
-            batch=64,
-            seq=1024,
+            batch=4,
+            seq=8192,
             dtype=jnp.bfloat16,
         )[1]
     
-    def test_fwdbwd_blockwise(self):
+    @unittest.skip("Fails with unsupported collective. TODO")
+    def test_fwdbwd_blockwise_ep16(self):
         jax.config.update('jax_platform_name', 'neuron')
         self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwise))
+    
+    def test_fwdbwd_blockwise_ep64(self):
+        jax.config.update('jax_platform_name', 'neuron')
+        self.helper_bwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwise))
+
+    def test_fwdbwd_blockwise_ep64_v2(self):
+        jax.config.update('jax_platform_name', 'neuron')
+        self.helper_bwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwiseV2))
 
 if __name__ == "__main__":
     absltest.main()
