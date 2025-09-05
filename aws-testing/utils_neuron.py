@@ -515,18 +515,19 @@ class GridSpaceBuilder:
         }
         
         for tp_degree, ep_degree in tp_ep_combinations:
-            if min_tp is not None and tp_degree < min_tp:
+            # Only respect min_tp for TP-only cases (ep_degree == 1)
+            # With EP, lower TP values can still fit the model
+            if min_tp is not None and ep_degree == 1 and tp_degree < min_tp:
                 continue
-            if max_tp is not None and tp_degree > max_tp:
+            if max_tp is not None and ep_degree == 1 and tp_degree > max_tp:
                 continue
                 
             #mesh_spec and batch based on parallelism type
             if ep_degree > 1:
                 mesh_spec = {"fsdp": -1, "expert": ep_degree}
-                batch = batch_sizes[ep_degree]
             else:
                 mesh_spec = {"fsdp": -1, "model": tp_degree}
-                batch = batch_sizes[tp_degree]
+            batch = batch_sizes[tp_degree]
             
             cf = 2
             
@@ -572,11 +573,26 @@ class GridSpaceBuilder:
         # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
         # Grid space for testing
         grid_space = []
-        # TODO add EP
-        for mesh_spec in [{"fsdp": -1, "model": 16}]:
-            batch = 4 if mesh_spec["model"] == 16 else 1
+        
+        mesh_configs = [
+            # TP-only configurations
+            ({"fsdp": -1, "model": 4}, 16, 1),      # TP=4, batch=16, n_groups=1
+            ({"fsdp": -1, "model": 16}, 4, 1),      # TP=16, batch=4, n_groups=1
+            ({"fsdp": -1, "model": 64}, 1, 1),      # TP=64, batch=1, n_groups=1
+            
+            # EP-only configurations
+            ({"fsdp": -1, "expert": 16}, 16, 16),   # EP=16, batch=16, n_groups=16
+            ({"fsdp": -1, "expert": 64}, 16, 64),   # EP=64, batch=16, n_groups=64
+            
+            # Mixed TP+EP configurations
+            ({"fsdp": -1, "model": 4, "expert": 16}, 16, 16),  # TP=4×EP=16, batch=16, n_groups=16
+        ]
+        
+        for mesh_spec, batch, n_groups in mesh_configs:
             for top_k in [1, 8]:
-                grid_space.append(self.create_test_config(**kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
+                test_kwargs = kwargs.copy()
+                test_kwargs['n_groups'] = n_groups
+                grid_space.append(self.create_test_config(**test_kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
         return grid_space
     
     def build_grid_space_switch_xxl(self):
@@ -593,11 +609,26 @@ class GridSpaceBuilder:
         # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
         # Grid space for testing
         grid_space = []
-        # TODO add EP
-        for mesh_spec in [{"fsdp": -1, "model": 64}]:
-            batch = 4 if mesh_spec["model"] == 16 else 1
+        
+        mesh_configs = [
+            # TP-only configurations
+            ({"fsdp": -1, "model": 4}, 16, 1),      # TP=4, batch=16, n_groups=1
+            ({"fsdp": -1, "model": 16}, 4, 1),      # TP=16, batch=4, n_groups=1
+            ({"fsdp": -1, "model": 64}, 1, 1),      # TP=64, batch=1, n_groups=1
+            
+            # EP-only configurations
+            ({"fsdp": -1, "expert": 16}, 16, 16),   # EP=16, batch=16, n_groups=16
+            ({"fsdp": -1, "expert": 64}, 16, 64),   # EP=64, batch=16, n_groups=64
+            
+            # Mixed TP+EP configurations
+            ({"fsdp": -1, "model": 4, "expert": 16}, 16, 16),  # TP=4×EP=16, batch=16, n_groups=16
+        ]
+        
+        for mesh_spec, batch, n_groups in mesh_configs:
             for top_k in [1, 2]:
-                grid_space.append(self.create_test_config(**kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
+                test_kwargs = kwargs.copy()
+                test_kwargs['n_groups'] = n_groups
+                grid_space.append(self.create_test_config(**test_kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
         return grid_space
 
     def build_grid_space_qwen3_235b(self):
@@ -616,9 +647,17 @@ class GridSpaceBuilder:
         grid_space = []
         
         mesh_configs = [
+            # TP-only configurations
+            ({"fsdp": -1, "model": 4}, 16, 1),      # TP=4, batch=16, n_groups=1
+            ({"fsdp": -1, "model": 16}, 4, 1),      # TP=16, batch=4, n_groups=1
             ({"fsdp": -1, "model": 64}, 1, 1),      # TP=64, batch=1, n_groups=1
-            ({"fsdp": -1, "expert": 16}, 4, 16),    # EP=16, batch=4, n_groups=16  
-            ({"fsdp": -1, "expert": 64}, 1, 64),    # EP=64, batch=1, n_groups=64
+            
+            # EP-only configurations
+            ({"fsdp": -1, "expert": 16}, 16, 16),   # EP=16, batch=16, n_groups=16
+            ({"fsdp": -1, "expert": 64}, 16, 64),   # EP=64, batch=16, n_groups=64
+            
+            # Mixed TP+EP configurations
+            ({"fsdp": -1, "model": 4, "expert": 16}, 16, 16),  # TP=4×EP=16, batch=16, n_groups=16
         ]
         
         for mesh_spec, batch, n_groups in mesh_configs:
