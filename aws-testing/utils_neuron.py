@@ -54,7 +54,13 @@ def get_mesh_dims_from_spec(mesh_spec):
 
 def build_name(cfg, invoker_cfg):
     if invoker_cfg['mesh_spec']:
-        mesh_str = f"fsdp{invoker_cfg['mesh_spec']['fsdp']}tp{invoker_cfg['mesh_spec']['model']}"
+        fsdp = invoker_cfg['mesh_spec']['fsdp']
+        if 'model' in invoker_cfg['mesh_spec']:
+            mesh_str = f"fsdp{fsdp}tp{invoker_cfg['mesh_spec']['model']}"
+        elif 'expert' in invoker_cfg['mesh_spec']:
+            mesh_str = f"fsdp{fsdp}ep{invoker_cfg['mesh_spec']['expert']}"
+        else:
+            mesh_str = ''
     else:
         mesh_str = ''
 
@@ -494,31 +500,57 @@ class GridSpaceBuilder:
             32: 2,
             64: 1,
         }
-        tp_degrees = [4, 16, 64]
-        tp_degrees = [d for d in tp_degrees if min_tp is None or d >= min_tp]
-        tp_degrees = [d for d in tp_degrees if max_tp is None or d <=  max_tp]
+        # All tp,ep tuples
+        tp_ep_combinations = [
+            (1, 16), (1, 64),
+            (4, 1), (4, 16), 
+            (16, 1), 
+            (64, 1), 
+        ]
+        
         kwargs={
             'dtype': dtype,
             'input_dim': int(input_dim),
             'hidden_dim': int(hidden_dim),
         }
-        for tp_degree in tp_degrees:
-            mesh_spec = {"fsdp": -1, "model": tp_degree}
-            batch = batch_sizes[tp_degree]
-            for E in [1, 8, 16, 64, 128, 256]:
+        
+        for tp_degree, ep_degree in tp_ep_combinations:
+            if min_tp is not None and tp_degree < min_tp:
+                continue
+            if max_tp is not None and tp_degree > max_tp:
+                continue
+                
+            #mesh_spec and batch based on parallelism type
+            if ep_degree > 1:
+                mesh_spec = {"fsdp": -1, "expert": ep_degree}
+                batch = batch_sizes[ep_degree]
+            else:
+                mesh_spec = {"fsdp": -1, "model": tp_degree}
+                batch = batch_sizes[tp_degree]
+            
+            cf = 2
+            
+            for E in [1, 8, 16, 128 ]:
                 if max_E and E > max_E:
-                    # to skip large Es for large experts
                     break
                 if E >= 64 and tp_degree < 16:
                     continue
-                # min sparsity of 25% assumed
+                if E < ep_degree:  #making sure that E >= ep
+                    continue
+                    
                 for K in [1, 2, 4, 8, 16]:
                     if K >= E//4:
                         break
-                    for G in [1, 4]:
+                    
+                    # Set n_groups based on parallelism type
+                    if ep_degree > 1:
+                        G_values = [ep_degree]  # n_groups = ep_degree for EP
+                    else:
+                        G_values = [1, 4]
+                    
+                    for G in G_values:
                         if G > E:
                             break
-                        cf = 2
                         S = min_seq
                         while (max_seq and S <= max_seq) or (S <= 16*1024):
                             grid_space.append(self.create_test_config(**kwargs, n_experts=E, top_k=K, n_groups=G, capacity_factor=cf, seq=S, batch=batch, mesh_spec=mesh_spec))
@@ -582,11 +614,19 @@ class GridSpaceBuilder:
         # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
         # Grid space for testing
         grid_space = []
-        # TODO add EP
-        for mesh_spec in [{"fsdp": -1, "model": 64}]:
-            batch = 4 if mesh_spec["model"] == 16 else 1
+        
+        mesh_configs = [
+            ({"fsdp": -1, "model": 64}, 1, 1),      # TP=64, batch=1, n_groups=1
+            ({"fsdp": -1, "expert": 16}, 4, 16),    # EP=16, batch=4, n_groups=16  
+            ({"fsdp": -1, "expert": 64}, 1, 64),    # EP=64, batch=1, n_groups=64
+        ]
+        
+        for mesh_spec, batch, n_groups in mesh_configs:
             for top_k in [1, 8]:
-                grid_space.append(self.create_test_config(**kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
+                test_kwargs = kwargs.copy()
+                test_kwargs['n_groups'] = n_groups
+                grid_space.append(self.create_test_config(**test_kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
+        
         return grid_space
 
     def build_grid_space_12B(self):
@@ -708,6 +748,12 @@ class GridSpaceBuilder:
             #batch per TP-group
             self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=8, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
             self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
+            
+            # EP test cases for 16 experts
+            # EP=16 with TP=1
+            self.create_test_config(**kwargs, n_experts=16, top_k=4, n_groups=16, capacity_factor=2, batch=4, seq=8192, mesh_spec={"fsdp":-1, "expert":16}),
+            # EP=16 with TP=4  
+            self.create_test_config(**kwargs, n_experts=16, top_k=4, n_groups=16, capacity_factor=2, batch=4, seq=8192, mesh_spec={"fsdp":-1, "expert":16, "model":4}),
         ])
         return grid_space
 
