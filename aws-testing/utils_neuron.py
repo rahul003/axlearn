@@ -515,14 +515,13 @@ class GridSpaceBuilder:
         }
         
         for tp_degree, ep_degree in tp_ep_combinations:
-            # Only respect min_tp for TP-only cases (ep_degree == 1)
-            # With EP, lower TP values can still fit the model
+
             if min_tp is not None and ep_degree == 1 and tp_degree < min_tp:
                 continue
             if max_tp is not None and ep_degree == 1 and tp_degree > max_tp:
                 continue
                 
-            #mesh_spec and batch based on parallelism type
+            #mesh_spec
             if ep_degree > 1:
                 mesh_spec = {"fsdp": -1, "expert": ep_degree}
             else:
@@ -543,7 +542,7 @@ class GridSpaceBuilder:
                     if K >= E//4:
                         break
                     
-                    # Set n_groups based on parallelism type
+                    # n_groups based on parallelism type
                     if ep_degree > 1:
                         G_values = [ep_degree]  # n_groups = ep_degree for EP
                     else:
@@ -669,43 +668,67 @@ class GridSpaceBuilder:
         return grid_space
 
     def build_grid_space_12B(self):
-        # Grid space for testing
         grid_space = []
-        kwargs={
+        kwargs = {
             'dtype': jnp.bfloat16,
             'input_dim': 2048,
             'hidden_dim': 7168,
         }
+        
+        #Keeping existing TP-only
+        
+        # Base test
+        grid_space.append(self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=2, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}))
+        
+        # Top-K variations (TP=4 only)
         grid_space.extend([
-            # base
-            self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=2, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
-            # topk changes
             self.create_test_config(**kwargs, n_experts=8, top_k=1, n_groups=2, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
             self.create_test_config(**kwargs, n_experts=8, top_k=4, n_groups=2, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
-            # seqlen changes
-                # failed assertionError
+        ])
+        
+        # Sequence length variations (TP=4 only)
+        grid_space.extend([
             self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=2, capacity_factor=2, batch=16, seq=256, mesh_spec={"fsdp":-1, "model":4}),
-                # failed assertionError
             self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=2, capacity_factor=2, batch=16, seq=2048, mesh_spec={"fsdp":-1, "model":4}),
             self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=2, capacity_factor=2, batch=16, seq=8192, mesh_spec={"fsdp":-1, "model":4}),
             self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=2, capacity_factor=2, batch=16, seq=16*1024, mesh_spec={"fsdp":-1, "model":4}),
             self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=2, capacity_factor=2, batch=16, seq=32*1024, mesh_spec={"fsdp":-1, "model":4}),
-            # tp8
-            # self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=2, capacity_factor=2, batch=8, seq=4096, mesh_spec={"fsdp":-1, "model":8}),
+        ])
+        
+        # TP scaling tests (keep existing n_groups=2)
+        grid_space.extend([
             self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=2, capacity_factor=2, batch=4, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
-            # self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=2, capacity_factor=2, batch=2, seq=4096, mesh_spec={"fsdp":-1, "model":32}),
             self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=2, capacity_factor=2, batch=1, seq=4096, mesh_spec={"fsdp":-1, "model":64}),
-
-            # num experts
-                # failed broadcasting error
+        ])
+        
+        # Expert/group variations (TP=4 only) - All 4 original tests
+        grid_space.extend([
             self.create_test_config(**kwargs, n_experts=1, top_k=1, n_groups=2, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
-                # failed assertionError
             self.create_test_config(**kwargs, n_experts=7, top_k=2, n_groups=2, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
-            # num groups
             self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
-                # failed assertionError
             self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=4, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
         ])
+        
+        #EP-specific tests
+        ep_test_configs = [
+            # Basic EP functionality
+            ({"fsdp": -1, "expert": 16}, 16, 16, 16, 2),   # EP=16, n_experts=16, top_k=2
+            
+            # EP with different expert counts (similar to original n_experts variations)
+            ({"fsdp": -1, "expert": 16}, 16, 16, 32, 2),  # EP=16, n_experts=32, top_k=2, is expert=32 allowed?
+            
+            # Mixed TP+EP test
+            ({"fsdp": -1, "model": 4, "expert": 16}, 16, 16, 16, 2),  # TP×EP=64
+            
+            # EP=64 test
+            ({"fsdp": -1, "expert": 64}, 16, 64, 128, 2),   # EP=64, n_experts=128, top_k=2
+        ]
+        
+        for mesh_spec, batch, n_groups, n_experts, top_k in ep_test_configs:
+            test_kwargs = kwargs.copy()
+            test_kwargs['n_groups'] = n_groups
+            grid_space.append(self.create_test_config(**test_kwargs, n_experts=n_experts, top_k=top_k, capacity_factor=2, batch=batch, seq=4096, mesh_spec=mesh_spec))
+        
         return grid_space
 
     def build_grid_space_50B(self):
@@ -743,6 +766,31 @@ class GridSpaceBuilder:
             self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
             self.create_test_config(**kwargs, n_experts=8, top_k=2, n_groups=4, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":4}),
         ])
+
+        #EP-specific tests 
+        ep_test_configs = [
+            # Basic EP functionality
+            ({"fsdp": -1, "expert": 16}, 16, 16, 16, 2),   # EP=16, n_experts=16, top_k=2
+            ({"fsdp": -1, "expert": 16}, 16, 16, 16, 2),   # EP=16, n_experts=16, top_k=4
+            
+            # EP with different expert counts
+            ({"fsdp": -1, "expert": 16}, 16, 16, 32, 2),   # EP=16, n_experts=32, top_k=2
+            ({"fsdp": -1, "expert": 16}, 16, 16, 32, 4),   # EP=16, n_experts=32, top_k=4
+            
+            # Mixed TP+EP test
+            ({"fsdp": -1, "model": 4, "expert": 16}, 16, 16, 16, 2),  # TP=4×EP=16, n_experts=16
+            ({"fsdp": -1, "model": 4, "expert": 16}, 16, 16, 16, 4),  # TP=4×EP=16, n_experts=16, topk=4
+            
+            # EP=64 test
+            ({"fsdp": -1, "expert": 64}, 16, 64, 64, 2),   # EP=64, n_experts=64, top_k=2
+            ({"fsdp": -1, "expert": 64}, 16, 64, 64, 4),   # EP=64, n_experts=64, top_k=4
+        ]
+        
+        for mesh_spec, batch, n_groups, n_experts, top_k in ep_test_configs:
+            test_kwargs = kwargs.copy()
+            test_kwargs['n_groups'] = n_groups
+            grid_space.append(self.create_test_config(**test_kwargs, n_experts=n_experts, top_k=top_k, capacity_factor=2, batch=batch, seq=4096, mesh_spec=mesh_spec))
+        
         return grid_space
 
     def build_grid_space_150B(self):
@@ -787,13 +835,27 @@ class GridSpaceBuilder:
             #batch per TP-group
             self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=8, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
             self.create_test_config(dtype=jnp.bfloat16, input_dim=8192, hidden_dim=16384, n_experts=8, top_k=2, n_groups=1, capacity_factor=2, batch=16, seq=4096, mesh_spec={"fsdp":-1, "model":16}),
+            ])
             
-            # EP test cases for 16 experts
-            # EP=16 with TP=1
-            self.create_test_config(**kwargs, n_experts=16, top_k=4, n_groups=16, capacity_factor=2, batch=4, seq=8192, mesh_spec={"fsdp":-1, "expert":16}),
-            # EP=16 with TP=4  
-            self.create_test_config(**kwargs, n_experts=16, top_k=4, n_groups=16, capacity_factor=2, batch=4, seq=8192, mesh_spec={"fsdp":-1, "expert":16, "model":4}),
-        ])
+        #EP test cases
+        ep_test_configs = [
+            # EP=16 tests
+            ({"fsdp": -1, "expert": 16}, 16, 16, 16, 4),   # EP=16, n_experts=16, top_k=4
+            ({"fsdp": -1, "expert": 16}, 16, 16, 32, 2),   # EP=16, n_experts=32, top_k=2
+            
+            # Mixed TP+EP test  
+            ({"fsdp": -1, "model": 4, "expert": 16}, 16, 16, 16, 4),  # TP=4×EP=16, n_experts=16
+            
+            # EP=64 test
+            ({"fsdp": -1, "expert": 64}, 16, 64, 64, 2),   # EP=64, n_experts=64, top_k=2
+            ({"fsdp": -1, "expert": 64}, 16, 64, 64, 4),   # EP=64, n_experts=64, top_k=4
+            ]
+
+        for mesh_spec, batch, n_groups, n_experts, top_k in ep_test_configs:
+            test_kwargs = kwargs.copy()
+            test_kwargs['n_groups'] = n_groups
+            grid_space.append(self.create_test_config(**test_kwargs, n_experts=n_experts, top_k=top_k, capacity_factor=2, batch=batch, seq=8192, mesh_spec=mesh_spec))
+        
         return grid_space
 
 def get_gating_config(gating_cls, num_experts, top_k, train_capacity_factor, expert_capacity, block_size=None, name=None):
