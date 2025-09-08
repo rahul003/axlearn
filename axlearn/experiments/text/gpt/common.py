@@ -690,6 +690,7 @@ def get_trainer_config_fn(
     eval_every_n_steps: int = 5000,
     eval_batch_size: Optional[int] = None,
     keep_every_n_steps: int = 50_000,
+    keep_last_n: int = 3,
     save_every_n_steps: Optional[int] = None,
     init_state_builder: Optional[state_builder.Builder.Config] = None,
 ) -> TrainerConfigFn:
@@ -766,9 +767,9 @@ def get_trainer_config_fn(
             n=save_every_n_steps or min(eval_every_n_steps, 5_000),
             max_step=max_step,
         )
-        cfg.checkpointer.keep_every_n_steps = min(max_step, keep_every_n_steps)
-        cfg.checkpointer.keep_last_n = 3
-        cfg.summary_writer.write_every_n_steps = 1
+        #cfg.checkpointer.keep_every_n_steps = min(max_step, keep_every_n_steps)
+        cfg.checkpointer.keep_last_n = min(keep_last_n, 3)
+        cfg.summary_writer.write_every_n_steps = 100
         cfg.summary_writer.max_queue = 1000
         if len(mesh_axis_names) != len(mesh_shape):
             raise ValueError(
