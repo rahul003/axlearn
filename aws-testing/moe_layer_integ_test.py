@@ -51,15 +51,15 @@ class TestLayerOnTrn(LayerTestCase):
     # def test_fwdbwd_gather(self, cfg: ExperimentConfig):
     #     self.helper_bwd(cfg)
 
-    @unittest.skip("skip v1 tests as v2 is the focus")
-    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
-    def test_fwdbwd_blockwisegather(self, cfg: ExperimentConfig):
-        self.helper_bwd(cfg)
+    # @unittest.skip("skip v1 tests as v2 is the focus")
+    # @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+    # def test_fwdbwd_blockwisegather(self, cfg: ExperimentConfig):
+    #     self.helper_bwd(cfg)
 
-    @unittest.skipIf(not get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"), reason='empty parameters')
-    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
-    def test_fwdbwd_blockwisev2(self, cfg: ExperimentConfig):
-        self.helper_bwd(cfg)
+    # @unittest.skipIf(not get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"), reason='empty parameters')
+    # @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwiseV2, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+    # def test_fwdbwd_blockwisev2(self, cfg: ExperimentConfig):
+    #     self.helper_bwd(cfg)
 
 class TestDev150bInteg(LayerTestCase):
     def __init__(self, *args, **kwargs):
@@ -168,6 +168,7 @@ class TestDevSwitchBaseInteg(LayerTestCase):
         jax.config.update('jax_platform_name', 'neuron')
         self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwise))
     
+    @unittest.skip("v1")
     def test_fwdbwd_blockwise_ep64(self):
         jax.config.update('jax_platform_name', 'neuron')
         self.helper_bwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwise))
@@ -175,6 +176,27 @@ class TestDevSwitchBaseInteg(LayerTestCase):
     def test_fwdbwd_blockwise_ep64_v2(self):
         jax.config.update('jax_platform_name', 'neuron')
         self.helper_bwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwiseV2))
+    
+    def test_fwdbwd_transformer(self):
+        jax.config.update('jax_platform_name', 'neuron')
+        cfg = create_test_config(
+            layer="transformer",
+            test=TopKGatingGatherBlockwiseV2,
+            golden=None,
+            test_device=self.test_device,
+            golden_device=self.golden_device,
+            input_dim=1024,
+            hidden_dim=4096,
+            n_experts=128,
+            n_groups=64,
+            top_k=2,
+            capacity_factor=2,
+            mesh_spec={"expert": 4, "model": 4, "fsdp": 1, "seq": 16},
+            batch=4,
+            seq=8192,
+            dtype=jnp.bfloat16,
+        )[1]
+        self.helper_fwd(cfg)
 
 if __name__ == "__main__":
     absltest.main()

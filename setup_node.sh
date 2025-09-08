@@ -20,18 +20,18 @@ SECONDS=0
 
 # Update OS packages and install OS headers
 
-sudo apt-get update - > /dev/null
+#sudo apt-get update - > /dev/null
 
-sudo apt install -y software-properties-common
-sudo add-apt-repository -y ppa:deadsnakes/ppa
-sudo apt install -y python3.10
+#sudo apt install -y software-properties-common
+#sudo add-apt-repository -y ppa:deadsnakes/ppa
+#sudo apt install -y python3.10
 
-sudo apt update
-sudo apt install -y python3.10-venv python3.10-dev python3-pip
+#sudo apt update
+#sudo apt install -y python3.10-venv python3.10-dev python3-pip
 
 # Needed for TC_MALLOC fix
-sudo apt-get -f install -y
-sudo apt-get install -y google-perftools
+#sudo apt-get -f install -y
+#sudo apt-get install -y google-perftools
 
 # Binaries to use:
 ###
@@ -43,20 +43,21 @@ COLLECTIVES=$ENV_DROP_DIR/aws-neuronx-collectives-*.deb
 TOOLS=$ENV_DROP_DIR/aws-neuronx-tools-*.deb
 DKMS=$ENV_DROP_DIR/aws-neuronx-dkms_*.deb
 
-sudo dpkg -i $RUNTIME $COLLECTIVES $TOOLS #$DKMS
+sudo dpkg -i $RUNTIME $COLLECTIVES #$TOOLS #$DKMS
 
 # sudo apt-get install -y linux-headers-$(uname -r) || true
 # sudo apt-get remove -y aws-neuronx-devtools || true
 
 # sudo apt-get remove -y --allow-change-held-packages aws-neuronx-tools aws-neuronx-collectives aws-neuronx-runtime-lib
 # # Install Neuron OS packages and dependencies
-sudo dpkg -i $RUNTIME $COLLECTIVES #$TOOLS #$DKMS
+#sudo dpkg -i $RUNTIME $COLLECTIVES #$TOOLS #$DKMS
 # sudo apt-get -o Dpkg::Options::="--force-overwrite" install --reinstall --allow-downgrades -y aws-neuronx-dkms
 
 # # Tracing collectives
 # sudo apt-get install -y bpfcc-tools linux-headers-$(uname -r)
 # sudo python3 -m pip install psutil
 
+set +x
 TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` && INSTANCE_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s  http://169.254.169.254/latest/meta-data/instance-id)
 echo "instance_id:$INSTANCE_ID hostname:$(hostname)"
 echo "runtime versions"

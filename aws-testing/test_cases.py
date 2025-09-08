@@ -8,6 +8,7 @@ from utils_neuron import ExperimentConfig
 from axlearn.common.module import functional as F
 import numpy as np
 from axlearn.common.mixture_of_experts import TopKGatingGatherBlockwise
+from axlearn.common.attention import TransformerLayer
 import jax.numpy as jnp
 
 class LayerTestCase(TestCase):

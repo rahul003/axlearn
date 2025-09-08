@@ -459,6 +459,7 @@ class BaseGating(BaseLayer):
         """Configures BaseGating."""
 
         num_experts: Required[int] = REQUIRED
+        dim_to_mesh_axis_map: dict = None
 
     class Output(NamedTuple):
         # A OG`SEC tensor for combining expert outputs.
@@ -1427,9 +1428,9 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
         # indicators for each expert, i.e. index e \in 0..E-1 independently.
         # cumsum over S dim
         # position_in_expert: [O, G, S*topk, E]
-        expert_mask = with_sharding_constraint(expert_mask, PartitionSpec(("fsdp", "data"), "expert", None, None))
+        expert_mask = with_sharding_constraint(expert_mask, cfg.dim_to_mesh_axis_map["ogse"])
         position_in_expert = _cum_sum(expert_mask.astype(jnp.int32), axis=-2).astype(jnp.float32)
-        position_in_expert = with_sharding_constraint(position_in_expert, PartitionSpec(("fsdp", "data"), "expert", None, None))
+        position_in_expert = with_sharding_constraint(position_in_expert, cfg.dim_to_mesh_axis_map["ogse"])
         expert_mask_pre_capacity_drop = expert_mask
         expert_mask_k_pre_capacity_drop = expert_mask_pre_capacity_drop.reshape(O, G, k, S, E)
         expert_mask_k_pre_capacity_drop = jnp.sum(expert_mask_k_pre_capacity_drop, axis=2)
@@ -1451,7 +1452,10 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
 
         # separate out EP component for index computation 
         mesh = thread_resources.env.physical_mesh 
-        ep_size = mesh.shape["expert"]
+        # ep_size = mesh.shape["expert"]
+        # assumes ep_degree == n_groups
+        ep_size = G
+        print(f"ep_size {ep_size}")
         local_num_experts = int(self.config.num_experts / ep_size)
 
         expert_mask_k = jnp.reshape(expert_mask_k, (O ,1, -1, ep_size, local_num_experts))
@@ -1459,11 +1463,11 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
         expert_affinities_masked = jnp.reshape(expert_affinities_masked, (O ,1, -1, ep_size, local_num_experts))
         expert_affinities_masked = jnp.transpose(expert_affinities_masked, (0, 1, 3, 2, 4)).squeeze(axis=1)
 
-        expert_mask_k = with_sharding_constraint(expert_mask_k, PartitionSpec(("data", "fsdp"), "expert", None, None))
-        expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, PartitionSpec(("data", "fsdp"), "expert", None, None))
+        expert_mask_k = with_sharding_constraint(expert_mask_k, cfg.dim_to_mesh_axis_map["ogse"])
+        expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, cfg.dim_to_mesh_axis_map["ogse"])
 
         position_in_expert = _cum_sum(expert_mask_k.astype(jnp.int32), axis=-2).astype(jnp.int32)
-        position_in_expert = with_sharding_constraint(position_in_expert, PartitionSpec(("fsdp", "data"), "expert", None, None))
+        position_in_expert = with_sharding_constraint(position_in_expert, cfg.dim_to_mesh_axis_map["ogse"])
 
         # Add expert offset to the position_in_expert
         # expert_index_offsets: [e,]
@@ -1492,19 +1496,20 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
             calculate_token_position_to_id,
             mesh=thread_resources.env.physical_mesh,
             in_specs=(
-                PartitionSpec(("fsdp", "data"), "expert", "model", None),
-                PartitionSpec(("fsdp", "data"), "expert", "model", None),
+                cfg.dim_to_mesh_axis_map["oehx"],
+                cfg.dim_to_mesh_axis_map["oehx"],
                 None, None, None,
-                PartitionSpec("model", ("fsdp", "data"), "expert",  None),
+                cfg.dim_to_mesh_axis_map["hoex"],
             ),
-            out_specs=PartitionSpec("model", ("fsdp", "data"), "expert",  None),
+            out_specs=cfg.dim_to_mesh_axis_map["hoex"],
             check_rep=False
-            )
+        )
         # (TP, O, G, N*B)
         output = token_position_to_id_sm(position_in_expert_with_offset, tokens_indices, local_num_experts, effective_capacity, G*S, output)
         # allreduce to get (O, G, N*B)
         token_position_to_id  = jnp.min(output, axis=0)
         router_z_loss = _router_z_loss(logits)
+
         return self.Output(
             dispatch_tensor=block_to_expert,
             combine_tensor=(token_position_to_id, expert_affinities_masked),
@@ -1634,7 +1639,7 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
     def __init__(self, cfg: Config, *, parent: Module):
         super().__init__(cfg, parent=parent)
         cfg: TransformerFeedForwardMoE.Config = self.config
-        self._add_child("gating", cfg.gating.set(num_experts=cfg.num_experts))
+        self._add_child("gating", cfg.gating.set(num_experts=cfg.num_experts, dim_to_mesh_axis_map=cfg.dim_to_mesh_axis_map))
         self._add_child("stochastic_depth", cfg.stochastic_depth)
         # Add norm layers for different structures.
 
@@ -1881,7 +1886,10 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
         token_shape = x.shape[:-1]
         # Number of tokens per outer row.
         num_tokens = np.prod(token_shape) // outer_batch
+        print('num_tokens', num_tokens)
+        
         num_groups = cfg.num_groups
+        print('num_groups', num_groups)
         if num_tokens % num_groups != 0:
             raise ValueError(
                 f"Reshaping input sequence from (batch_size, seq_len, input_dim) to "
@@ -1899,8 +1907,10 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
 
         # Perform gating based on logits. Casting to float32 precision is usually needed for
         # stable performance.
+        print('logits', logits.shape)
         with jax.named_scope("gating"):
             gating = self.gating(logits=logits)
+            
 
         # Collect aux_loss.
         aux_loss = (
