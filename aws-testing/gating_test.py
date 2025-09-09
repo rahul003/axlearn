@@ -1,7 +1,9 @@
-from utils_neuron import TEST_SUITE
+from utils_neuron import TEST_SUITE, get_gating_configs, create_test_config
 from test_cases import GatingTestCase
+from axlearn.common.mixture_of_experts import TopKGating, TopKGatingGather, TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2
 from absl.testing import absltest, parameterized
 import os
+import jax.numpy as jnp
 import unittest
 from functools import partial
 import jax
@@ -50,6 +52,26 @@ class TestDev150bGatingUnit(GatingTestCase):
 
     def test_unit_fwd_blockwisev2(self):
         self.helper_blockwise_gating(self.create_cfg(test=TopKGatingGatherBlockwiseV2, golden=None, test_device="cpu", layer="gating"))
+
+    def test_unit_fwd_blockwisev2_ep(self):
+        cfg = create_test_config(
+            layer="gating",
+            test=TopKGatingGatherBlockwiseV2,
+            golden=None,
+            golden_device="cpu",
+            test_device="cpu",
+            input_dim=1024,
+            hidden_dim=4096,
+            n_experts=128,
+            n_groups=1,
+            top_k=2,
+            capacity_factor=2,
+            mesh_spec={"fsdp": -1, "model": 1, "seq": 4, "expert": 16},
+            batch=4,
+            seq=2048,
+            dtype=jnp.bfloat16,
+        )[1]
+        self.helper_blockwise_gating(cfg)
 
     @unittest.skip("skip gather")
     def test_unit_fwd_gather(self):
