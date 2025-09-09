@@ -7,9 +7,9 @@ from axlearn.common.test_utils import TestCase
 from utils_neuron import ExperimentConfig
 from axlearn.common.module import functional as F
 import numpy as np
-from axlearn.common.mixture_of_experts import TopKGatingGatherBlockwise
+from axlearn.common.mixture_of_experts import TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2
 import jax.numpy as jnp
-
+from jax._src.mesh import thread_resources
 class LayerTestCase(TestCase):
     def _fwd_call(self, layer, state, inputs):
         return F(
@@ -193,7 +193,7 @@ class GatingTestCase(TestCase):
         self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output),
                                   atol=cfg.test.atol, rtol=cfg.test.rtol)
 
-    def validate_block_to_expert(self, block_to_expert, cfg, num_blocks, num_blocks_per_expert):
+    def validate_block_to_expert(self, block_to_expert, cfg, num_blocks, num_blocks_per_expert, ep_size=1):
         # Validating block_to_expert tensor
         # (O, G, N)
         O, G, N = block_to_expert.shape
@@ -206,7 +206,7 @@ class GatingTestCase(TestCase):
                     if expert_id not in num_blocks_for_expert:
                         num_blocks_for_expert[expert_id] = 0
                     num_blocks_for_expert[expert_id] += 1
-                assert len(num_blocks_for_expert) == cfg.test.cfg.num_experts, f"Expected {cfg.test.cfg.num_experts} experts, but got {len(num_blocks_for_expert)}"
+                assert len(num_blocks_for_expert) == cfg.test.cfg.num_experts/ep_size, f"Expected {cfg.test.cfg.num_experts} experts, but got {len(num_blocks_for_expert)}"
                 for expert_id, num_blocks in num_blocks_for_expert.items():
                     assert num_blocks == num_blocks_per_expert, f"Expert {expert_id} has {num_blocks} blocks, expected {num_blocks_per_expert}"
 
@@ -251,19 +251,28 @@ class GatingTestCase(TestCase):
         test_output = jax.device_get(test_output)
         outputs = test_output[0]
         token_position_to_id, expert_affinities_masked = outputs.combine_tensor
-        _,_, S, E = expert_affinities_masked.shape
-        expert_capacity = int(S * cfg.test.cfg.train_capacity_factor / E)
-        if isinstance(cfg.test.cfg, TopKGatingGatherBlockwise.Config):
+        _, ep_size, S, E = expert_affinities_masked.shape
+        num_experts = ep_size * E
+        expert_capacity = int(S * cfg.test.cfg.train_capacity_factor / num_experts)
+        if isinstance(cfg.test.cfg, TopKGatingGatherBlockwiseV2.Config):
+            block_size = expert_capacity
+        elif isinstance(cfg.test.cfg, TopKGatingGatherBlockwise.Config):
             block_size = cfg.test.cfg.block_size
         else:
             block_size = expert_capacity
-        num_blocks = math.ceil(expert_capacity / block_size) * E
-        num_blocks_per_expert = num_blocks / E
-
+        num_blocks = math.ceil(expert_capacity / block_size) * num_experts
+        num_blocks_per_expert = num_blocks / num_experts
+        
+        num_local_blocks = num_blocks_per_expert * E
+        
         block_to_expert = outputs.dispatch_tensor
         O, G, N = block_to_expert.shape
-        self.validate_block_to_expert(block_to_expert, cfg, num_blocks, num_blocks_per_expert)
+        # jax.debug.print(f"token_position_to_id: {token_position_to_id}")
+        # jax.debug.print(f"expert_affinities_masked: {expert_affinities_masked}")
+        self.validate_block_to_expert(block_to_expert, cfg, num_local_blocks, num_blocks_per_expert, ep_size=ep_size)
         self.validate_token_position_to_id(O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
+        expert_affinities_masked = jnp.transpose(expert_affinities_masked, (0, 2, 1, 3))
+        expert_affinities_masked = jnp.reshape(expert_affinities_masked, (O, G, -1, E*ep_size))
         self.validate_expert_affinties(expert_affinities_masked, cfg)
 
     def helper_blockwise_gating_v2(self, cfg):

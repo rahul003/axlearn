@@ -32,7 +32,7 @@ from axlearn.common.mixture_of_experts import (
 from axlearn.common.utils import PartitionSpec, infer_mesh_shape, cast_floats
 from axlearn.experiments.text.gpt.common import MESH_AXIS_NAMES, mesh_shape_from_axes
 from axlearn.common.param_init import PARAM_REGEXP_WEIGHT, DefaultInitializer, WeightInitializer
-from axlearn.experiments.text.gpt.envy import MOE_OUTER_BATCH_AXIS_NAMES, MOE_DIM_TO_MESH_AXIS_MAP
+from axlearn.experiments.text.gpt.envy import MOE_OUTER_BATCH_AXIS_NAMES, MOE_DIM_TO_MESH_AXIS_MAP, get_moe_dim_to_mesh_axis_map
 
 TEST_SUITE = os.environ.get("TEST_SUITE", 'presubmit').lower()
 
@@ -298,7 +298,7 @@ class ExperimentConfig():
         if self.golden:
             self.init_layer(self.golden)
         self.init_layer(self.test, state_to_copy=self.golden.state if self.golden else None)
-        self.random_inputs_with_mesh()
+        self.random_inputs_with_mesh(self.test.cfg.dim_to_mesh_axis_map)
 
     def maybe_set_outer_batch(self):
         test_outer_batch = get_outer_batch_from_mesh(MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, self.test.mesh_dims)
@@ -339,7 +339,7 @@ class ExperimentConfig():
                 if 'gate_weight' in module_config.state:
                     module_config.state['gate_weight'] = module_config.state['gate_weight'].astype(jnp.float32)
     
-    def random_inputs_with_mesh(self): 
+    def random_inputs_with_mesh(self, dim_to_mesh_axis_map): 
         
         # replace O and S from input shape with outer batch and seq
         if self.test.layer_type == "MoE":
@@ -347,7 +347,7 @@ class ExperimentConfig():
             pspec = PartitionSpec(('data','fsdp'), 'model', None)
         else:
             input_key = 'logits'
-            pspec = PartitionSpec(('data','fsdp'), "expert", None, None)
+            pspec = dim_to_mesh_axis_map["ogse"]
             _, G, _, E = self.test.input_shape
             O = self.test.outer_batch
             S = (self.test.invoker_cfg["batch_size"] * self.test.invoker_cfg["seq_len"])//(O * G)
@@ -711,7 +711,7 @@ class GridSpaceBuilder:
         ])
         return grid_space
 
-def get_gating_config(gating_cls, num_experts, top_k, train_capacity_factor, expert_capacity, block_size=None, name=None):
+def get_gating_config(gating_cls, num_experts, top_k, train_capacity_factor, expert_capacity, block_size=None, name=None, mesh_spec=None):
 
     cfg = gating_cls.default_config()
     if name:
@@ -720,6 +720,10 @@ def get_gating_config(gating_cls, num_experts, top_k, train_capacity_factor, exp
     cfg.train_capacity_factor = train_capacity_factor
     cfg.expert_capacity = expert_capacity
     cfg.num_experts = num_experts
+    if mesh_spec:
+        cfg.dim_to_mesh_axis_map=get_moe_dim_to_mesh_axis_map(mesh_spec.get("expert", 1), mesh_spec.get("model", 1), mesh_spec.get("seq", 1))
+    else:
+        cfg.dim_to_mesh_axis_map=get_moe_dim_to_mesh_axis_map(1,1,1)
     if block_size is not None and isinstance(cfg, TopKGatingGatherBlockwise.Config):
         cfg.block_size = block_size
     return cfg
@@ -752,7 +756,7 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
         # enabling nonorm gives us better check of the kernel logits, what's missing here is just add of residual
         
         test_cfg.structure = "nonorm"
-        test_cfg.gating = get_gating_config(test, n_experts, top_k, capacity_factor, expert_capacity=None, block_size=block_size)
+        test_cfg.gating = get_gating_config(test, n_experts, top_k, capacity_factor, expert_capacity=None, block_size=block_size, mesh_spec=mesh_spec)
 
         if golden:
             golden_cfg = test_cfg.clone(name="golden")
@@ -761,7 +765,7 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
             golden_cfg = None
         conv_output = None
     else:
-        test_cfg = get_gating_config(test, n_experts, top_k, capacity_factor, expert_capacity=None, name="test", block_size=block_size)
+        test_cfg = get_gating_config(test, n_experts, top_k, capacity_factor, expert_capacity=None, name="test", block_size=block_size, mesh_spec=mesh_spec)
 
         if golden:
             golden_cfg = get_gating_config(golden, n_experts, top_k, capacity_factor, expert_capacity=None, name="golden", block_size=block_size)
