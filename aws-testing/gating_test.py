@@ -66,7 +66,7 @@ class TestDev150bGatingUnit(GatingTestCase):
             n_groups=1,
             top_k=2,
             capacity_factor=2,
-            mesh_spec={"fsdp": -1, "model": 1, "seq": 4, "expert": 16},
+            mesh_spec={"fsdp": -1, "model": 1, "seq": 16, "expert": 4},
             batch=4,
             seq=2048,
             dtype=jnp.bfloat16,

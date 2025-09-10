@@ -12,6 +12,9 @@ export TEST_LOG_DIR=${3:-"test_artifacts/shell"}
 export GOLDENS_DIR=${4:-"/fsx/huilgolr/axlearn/test_goldens"}
 export JAX_COMPILATION_CACHE_DIR=${5:-"test_artifacts/shell_jax_cc"}
 
+rm -rf $JAX_COMPILATION_CACHE_DIR
+rm -rf $TEST_LOG_DIR
+
 # if defined
 if [ -n "$1" ]; then
     mkdir -p "${JAX_COMPILATION_CACHE_DIR}"
@@ -25,7 +28,8 @@ mkdir -p "$TEST_ARTIFACTS_PATH"
 export USE_CACHED_GOLDENS=1
 export CACHE_GOLDENS=1
 export USE_SHARDMAP_FFN=1
-
+export AXLEARN_USE_BLOCKWISE_MLP_KERNEL=1
+export NEURON_HLO_ANALYZER=1
 export XLA_FLAGS="--xla_cpu_use_thunk_runtime=false --xla_force_host_platform_device_count=64 --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives"
 
 export GIT_COMMIT=$(git rev-parse --short HEAD)
@@ -112,8 +116,8 @@ elif [ "$1" = "150bdev" ]; then
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_layer_unit.xml aws-testing/moe_layer_unit_test.py -k "TestDev150bUnit"
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_gating_unit.xml aws-testing/gating_test.py -k "TestGatingOnCpu or TestDev150bGatingUnit"
 elif [ "$1" = "dev" ]; then
-    pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep64_v2"
-    # pytest -rsA -v aws-testing/gating_test.py -k "TestDev150bGatingUnit and test_unit_fwd_blockwisev2_ep"
+    # pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep64_v2"
+    pytest -rsA -v aws-testing/gating_test.py -k "TestDev150bGatingUnit and test_unit_fwd_blockwisev2_ep"
     
 elif [ "$1" = "150b_blockwise_cpu" ]; then
     pytest -rsA --tb=short aws-testing/moe_layer_unit_test.py -k 'TestDev150bUnit and test_fwd_blockwise_vs_einsum or TestDev150bUnit and test_fwdbwd_blockwise_vs_einsum'

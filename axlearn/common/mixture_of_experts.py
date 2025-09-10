@@ -20,9 +20,9 @@ import math
 from enum import Enum
 from functools import reduce, partial
 from typing import NamedTuple, Optional, Sequence, Union
-# import numpy
-# import sys
-# numpy.set_printoptions(threshold=sys.maxsize)
+import numpy
+import sys
+numpy.set_printoptions(threshold=sys.maxsize)
 
 import jax
 import jax.numpy as jnp
@@ -939,16 +939,16 @@ class TopKGatingGather(TopKGating):
             expert_affinities_masked: Tensor of shape (O, G, S, E) containing the affinities of just the chosen experts for
                                       each token (after normalization if required).
         ∂"""
-
-        # Apply expert_mask obtain the affinities for the chosen experts
-        # expert_affinities_masked -> (O, G, S, E)
-        expert_affinities_masked = jnp.where(expert_mask == 0, 0, expert_affinities)
-        if normalize_top_k_affinities:
-            # Normalize the affinities across the chosen experts
-            norm = jnp.sum(jnp.abs(expert_affinities_masked), axis=-1, keepdims=True)
-            norm = jnp.clip(norm, a_min=1e-9)
-            expert_affinities_masked = expert_affinities_masked / norm
-        return expert_affinities_masked
+        with jax.named_scope("expert_affin_masked"):
+            # Apply expert_mask obtain the affinities for the chosen experts
+            # expert_affinities_masked -> (O, G, S, E)
+            expert_affinities_masked = jnp.where(expert_mask == 0, 0, expert_affinities)
+            if normalize_top_k_affinities:
+                # Normalize the affinities across the chosen experts
+                norm = jnp.sum(jnp.abs(expert_affinities_masked), axis=-1, keepdims=True)
+                norm = jnp.clip(norm, a_min=1e-9)
+                expert_affinities_masked = expert_affinities_masked / norm
+            return expert_affinities_masked
     
     @staticmethod
     def compute_token_assignments(token_permutation_idx, num_experts, expert_capacity):
@@ -1425,95 +1425,109 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
 
         # expert_mask: (O, G, S*topk, E)
         expert_mask = self.compute_expert_mask(cfg, expert_index, cfg.num_experts)
-
+        print('expert_mask', expert_mask.shape)
+        
         # Only use top 1 tokens for calculationg aux loss.
         aux_loss = self.compute_aux_loss(self.config, expert_mask[:, :, :S, :], raw_gates)
-
-        # Compute cumulative sums of assignment
-        # indicators for each expert, i.e. index e \in 0..E-1 independently.
-        # cumsum over S dim
-        # position_in_expert: [O, G, S*topk, E]
         expert_mask = with_sharding_constraint(expert_mask, cfg.dim_to_mesh_axis_map["ogse"])
-        position_in_expert = _cum_sum(expert_mask.astype(jnp.int32), axis=-2).astype(jnp.float32)
-        position_in_expert = with_sharding_constraint(position_in_expert, cfg.dim_to_mesh_axis_map["ogse"])
+
+        with jax.named_scope("position_in_expert"):
+            # Compute cumulative sums of assignment
+            # indicators for each expert, i.e. index e \in 0..E-1 independently.
+            # cumsum over S dim
+            # position_in_expert: [O, G, S*topk, E]
+            
+            position_in_expert = _cum_sum(expert_mask.astype(jnp.int32), axis=-2).astype(jnp.float32)
+            position_in_expert = with_sharding_constraint(position_in_expert, cfg.dim_to_mesh_axis_map["ogse"])
+        
         expert_mask_pre_capacity_drop = expert_mask
-        expert_mask_k_pre_capacity_drop = expert_mask_pre_capacity_drop.reshape(O, G, k, S, E)
-        expert_mask_k_pre_capacity_drop = jnp.sum(expert_mask_k_pre_capacity_drop, axis=2)
+        with jax.named_scope("sum_for_drop"):
+            expert_mask_k_pre_capacity_drop = expert_mask_pre_capacity_drop.reshape(O, G, k, S, E)
+            expert_mask_k_pre_capacity_drop = jnp.sum(expert_mask_k_pre_capacity_drop, axis=2)
 
         # expert_affinities_masked: [O, G, S, E]
         expert_affinities_masked = self.compute_expert_affinities_masked(
             raw_gates, expert_mask_k_pre_capacity_drop, normalize_top_k_affinities=True
         )
 
-        expert_mask = jnp.where(position_in_expert > expert_capacity, 0, expert_mask)
-        expert_mask_k = expert_mask.reshape(O, G, k, S, E)
-        expert_mask_k = jnp.sum(expert_mask_k, axis=2)
-        expert_affinities_masked = jnp.where(expert_mask_k == 0, 0, expert_affinities_masked)
+        with jax.named_scope("update_masks_for_dropped"):
+            expert_mask = jnp.where(position_in_expert > expert_capacity, 0, expert_mask)
+            expert_mask_k = expert_mask.reshape(O, G, k, S, E)
+            expert_mask_k = jnp.sum(expert_mask_k, axis=2)
+            expert_affinities_masked = jnp.where(expert_mask_k == 0, 0, expert_affinities_masked)
 
-        expert_mask_k = with_sharding_constraint(expert_mask_k, cfg.dim_to_mesh_axis_map["ogse"])
-        expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, cfg.dim_to_mesh_axis_map["ogse"])
-        # expert_mask_k = jnp.reshape(expert_mask_k, (O, 1, -1, E))
-        # expert_affinities_masked = jnp.reshape(expert_affinities_masked, (O,1,-1,E))
+            expert_mask_k = with_sharding_constraint(expert_mask_k, cfg.dim_to_mesh_axis_map["ogse"])
+            expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, cfg.dim_to_mesh_axis_map["ogse"])
+            # expert_mask_k = jnp.reshape(expert_mask_k, (O, 1, -1, E))
+            # expert_affinities_masked = jnp.reshape(expert_affinities_masked, (O,1,-1,E))
 
-        # separate out EP component for index computation 
-        mesh = thread_resources.env.physical_mesh 
-        ep_size = np.prod([mesh.shape[x] for x in cfg.dim_to_mesh_axis_map["emh"][0]])
-        local_num_experts = int(self.config.num_experts / ep_size)
+        with jax.named_scope("sep_for_local_experts"):
+            # separate out EP component for index computation 
+            mesh = thread_resources.env.physical_mesh 
+            ep_size = np.prod([mesh.shape[x] for x in cfg.dim_to_mesh_axis_map["emh"][0]])
+            local_num_experts = int(self.config.num_experts / ep_size)
 
-        expert_mask_k = jnp.reshape(expert_mask_k, (O ,1, -1, ep_size, local_num_experts))
-        expert_mask_k = jnp.transpose(expert_mask_k, (0, 1, 3, 2, 4)).squeeze(axis=1)
-        expert_affinities_masked = jnp.reshape(expert_affinities_masked, (O ,1, -1, ep_size, local_num_experts))
-        expert_affinities_masked = jnp.transpose(expert_affinities_masked, (0, 1, 3, 2, 4)).squeeze(axis=1)
+            expert_mask_k = jnp.reshape(expert_mask_k, (O ,1, -1, ep_size, local_num_experts))
+            expert_mask_k = jnp.transpose(expert_mask_k, (0, 1, 3, 2, 4)).squeeze(axis=1)
+            expert_affinities_masked = jnp.reshape(expert_affinities_masked, (O ,1, -1, ep_size, local_num_experts))
+            expert_affinities_masked = jnp.transpose(expert_affinities_masked, (0, 1, 3, 2, 4)).squeeze(axis=1)
 
-        expert_mask_k = with_sharding_constraint(expert_mask_k, cfg.dim_to_mesh_axis_map["ogec"])
-        expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, cfg.dim_to_mesh_axis_map["ogec"])
-        print('expert_mask_k shape', expert_mask_k.shape)
-        print('expert_affinities_masked shape', expert_affinities_masked.shape)
-        position_in_expert = _cum_sum(expert_mask_k.astype(jnp.int32), axis=-2).astype(jnp.int32)
-        position_in_expert = with_sharding_constraint(position_in_expert, cfg.dim_to_mesh_axis_map["ogec"])
-        print('position_in_expert shape', position_in_expert.shape)
+            # O, ep_size, S, local_num_experts
+            expert_mask_k = with_sharding_constraint(expert_mask_k, cfg.dim_to_mesh_axis_map["oexx"])
+            # O, ep_size, S, local_num_experts
+            expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, cfg.dim_to_mesh_axis_map["oexx"])
+            print('expert_mask_k shape', expert_mask_k.shape)
+            print('expert_affinities_masked shape', expert_affinities_masked.shape)
+        
+        with jax.named_scope("new_cumsum"):
+            position_in_expert = _cum_sum(expert_mask_k.astype(jnp.int32), axis=-2).astype(jnp.int32)
+            print('position_in_expert.shape', position_in_expert.shape)
+            position_in_expert = with_sharding_constraint(position_in_expert, cfg.dim_to_mesh_axis_map["oexx"])
+            print('position_in_expert shape', position_in_expert.shape)
         # Add expert offset to the position_in_expert
         # expert_index_offsets: [e,]
-        expert_index_offsets = (
-            jnp.arange(local_num_experts, dtype=jnp.int32) * expert_capacity
-        )
-        block_to_expert = jnp.arange(local_num_experts, dtype=jnp.int32)[None, None, :]
-        block_to_expert = jnp.broadcast_to(block_to_expert, (O, G, local_num_experts))
+        
+        with jax.named_scope("index_calc"):
+            expert_index_offsets = (
+                jnp.arange(local_num_experts, dtype=jnp.int32) * expert_capacity
+            )
+            block_to_expert = jnp.arange(self.config.num_experts, dtype=jnp.int32)[None, None, :]
+            block_to_expert = jnp.broadcast_to(block_to_expert, (O, G, self.config.num_experts))
 
-        # position_in_expert_with_offset: [O, 1, G*S*topk, e]
-        position_in_expert_with_offset = position_in_expert + expert_index_offsets
+            # position_in_expert_with_offset: [O, 1, G*S*topk, e]
+            position_in_expert_with_offset = position_in_expert + expert_index_offsets
 
-        # Apply expert_mask and sum along S*topk axis to get tokens to index for each S.
-        position_in_expert_with_offset = jnp.where(expert_mask_k == 0, 0, position_in_expert_with_offset)
+            # Apply expert_mask and sum along S*topk axis to get tokens to index for each S.
+            position_in_expert_with_offset = jnp.where(expert_mask_k == 0, 0, position_in_expert_with_offset)
 
-        # token_position_to_id: (O, G, N*B)
-        # for every position in the block, gets the token id in sequence
-        mesh = thread_resources.env.physical_mesh
-        T = mesh.shape["model"]
-        output = jnp.zeros((T, O, G, local_num_experts*expert_capacity), dtype=jnp.int32)
-
-        # create full tokens_indices and then shard within TP
-        tokens_indices = jnp.arange(S, dtype=jnp.int32)[None, None, :, None]
-        tokens_indices = jnp.broadcast_to(tokens_indices, (O, G, S, local_num_experts))
-        print('tokens_indices', tokens_indices.shape)
-        print('output', output.shape)
-        token_position_to_id_sm = shard_map(
-            calculate_token_position_to_id,
-            mesh=thread_resources.env.physical_mesh,
-            in_specs=(
-                cfg.dim_to_mesh_axis_map["oexx"],
-                cfg.dim_to_mesh_axis_map["oxxx"],
-                None, None, None,
-                cfg.dim_to_mesh_axis_map["hoxx"],
-            ),
-            out_specs=cfg.dim_to_mesh_axis_map["hoxx"],
-            check_rep=False
-        )
-        # (TP, O, G, N*B)
-        output = token_position_to_id_sm(position_in_expert_with_offset, tokens_indices, local_num_experts, expert_capacity, S, output)
-        print('token position to id', output.shape)
-        # allreduce to get (O, G, N*B)
-        token_position_to_id  = jnp.min(output, axis=0)
+            # token_position_to_id: (O, G, N*B)
+            # for every position in the block, gets the token id in sequence
+            mesh = thread_resources.env.physical_mesh
+            T = mesh.shape["model"]
+            output = jnp.zeros((T, O, G, local_num_experts*expert_capacity), dtype=jnp.int32)
+            
+            # create full tokens_indices and then shard within TP
+            tokens_indices = jnp.arange(S, dtype=jnp.int32)[None, None, :, None]
+            tokens_indices = jnp.broadcast_to(tokens_indices, (O, G, S, local_num_experts))
+            print('tokens_indices', tokens_indices.shape)
+            print('output', output.shape)
+            token_position_to_id_sm = shard_map(
+                calculate_token_position_to_id,
+                mesh=thread_resources.env.physical_mesh,
+                in_specs=(
+                    cfg.dim_to_mesh_axis_map["oexx"],
+                    cfg.dim_to_mesh_axis_map["oxxx"],
+                    None, None, None,
+                    cfg.dim_to_mesh_axis_map["hoxx"],
+                ),
+                out_specs=cfg.dim_to_mesh_axis_map["hoxe"],
+                check_rep=False
+            )
+            # (TP, O, G, N*B)
+            output = token_position_to_id_sm(position_in_expert_with_offset, tokens_indices, local_num_experts, expert_capacity, S, output)
+            print('token position to id', output.shape)
+            # allreduce to get (O, G, N*B)
+            token_position_to_id  = jnp.min(output, axis=0)
         router_z_loss = _router_z_loss(logits)
         return self.Output(
             dispatch_tensor=block_to_expert,
@@ -1845,18 +1859,18 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
         gate_up_weight = jnp.stack([self.parameters["wi_0_weight"],self.parameters["wi_1_weight"],], axis=2)
         gate_up_weight = with_sharding_constraint(gate_up_weight, cfg.dim_to_mesh_axis_map["emnh"])
 
-        
+        print('cfg.dim_to_mesh_axis_map["ehm"]', cfg.dim_to_mesh_axis_map["ehm"])
         # TODO: fix checkpointing as it has needs different out_specs
         partitioned_blockwise_mm = shard_map(
             blockwise_mlp,
             mesh=mesh,
             in_specs=(
                 cfg.dim_to_mesh_axis_map["ogsM"],# hidden_states
-                cfg.dim_to_mesh_axis_map["ogse"], # expert_affinities_masked
+                cfg.dim_to_mesh_axis_map["oexx"], # expert_affinities_masked
                 cfg.dim_to_mesh_axis_map["emnh"], # gate_up_proj weight
                 cfg.dim_to_mesh_axis_map["ehm"], # down_proj weight
-                cfg.dim_to_mesh_axis_map["oxx"], # token_position_to_id: (O, G, N*B)
-                cfg.dim_to_mesh_axis_map["oxx"], # block_to_expert
+                cfg.dim_to_mesh_axis_map["oxe"], # token_position_to_id: (O, G, N*B)
+                cfg.dim_to_mesh_axis_map["oxe"], # block_to_expert
                 None, # block size
                 None, # activation_fns
             ),

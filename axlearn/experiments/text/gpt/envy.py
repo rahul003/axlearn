@@ -188,9 +188,10 @@ def get_moe_dim_to_mesh_axis_map(ep_degree, tp_degree, cp_degree):
             # "oehx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, TP_AXIS_NAMES, None),
             "oexx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
             "oxxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
-            "oxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None),
+            "oxe": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
             # "hoex": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None),
             "hoxx": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, None, None),
+            "hoxe": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
         }
     return MOE_DIM_TO_MESH_AXIS_MAP
 
