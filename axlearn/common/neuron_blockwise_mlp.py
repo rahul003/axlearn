@@ -156,6 +156,9 @@ def _blockwise_mm_bwd(
         print('gate_up_activations_T shape', gate_up_activations_T.shape)
         print('down_activations shape', down_activations.shape)
         print('expert_affinities_masked shape', expert_affinities_masked.shape)
+        print('down_proj_weight', down_proj_weight.shape)
+        print('block_to_expert', block_to_expert.shape)
+        print('ktype', 0 if block_to_expert.shape[-1] == down_proj_weight.shape[0] else 1)
         hidden_states_grad, affinities_grad, gate_up_proj_weight_grad, down_weight_grad = _blockwise_mm_bwd_nki_call[VNC(2)](
             hidden_states,
             expert_affinities_masked,

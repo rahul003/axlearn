@@ -749,7 +749,10 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
         )
         test_cfg.input_dim = input_dim
         test_cfg.hidden_dim = hidden_dim
-        test_cfg.dim_to_mesh_axis_map = MOE_DIM_TO_MESH_AXIS_MAP
+        if mesh_spec:
+            test_cfg.dim_to_mesh_axis_map=get_moe_dim_to_mesh_axis_map(mesh_spec.get("expert", 1), mesh_spec.get("model", 1), mesh_spec.get("seq", 1))
+        else:
+            test_cfg.dim_to_mesh_axis_map=get_moe_dim_to_mesh_axis_map(1,1,1)
         test_cfg.activation = ("nn.silu","linear")
         test_cfg.num_experts = n_experts
         test_cfg.num_groups = n_groups

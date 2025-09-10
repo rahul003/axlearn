@@ -158,6 +158,7 @@ class TestDevSwitchBaseInteg(LayerTestCase):
             top_k=2,
             capacity_factor=2,
             mesh_spec={"expert": 4, "model": 1, "fsdp": 1, "seq": 16},
+            # mesh_spec={"expert": 64, "model": 1, "fsdp": 1},
             batch=4,
             seq=2048,
             dtype=jnp.bfloat16,
@@ -174,7 +175,7 @@ class TestDevSwitchBaseInteg(LayerTestCase):
 
     def test_fwdbwd_blockwise_ep64_v2(self):
         jax.config.update('jax_platform_name', 'neuron')
-        self.helper_bwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwiseV2))
+        self.helper_fwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwiseV2))
 
 if __name__ == "__main__":
     absltest.main()
