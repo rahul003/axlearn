@@ -287,7 +287,7 @@ class GatingTestCase(TestCase):
                 self.validate_token_position_to_id(O, G, num_local_blocks, block_size, S, block_to_expert, expert_affinities_masked_chunks[ep_rank], token_position_to_id_chunks[ep_rank], ep_rank)
                 self.validate_expert_affinties(expert_affinities_masked_chunks[ep_rank], cfg)
 
-    def helper_blockwise_gating_v2(self, cfg):
+    def helper_blockwise_gating_v2_vs_v1(self, cfg):
         cfg.instantiate(unittest.TestCase.id(self))
         cfg.print_summary()
         @partial(jax.jit, static_argnums=0)

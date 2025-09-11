@@ -110,25 +110,25 @@ _BASE_MODEL_HIDDEN_DIM = 768
 
 TP_DEGREE=int(os.getenv("AXLEARN_TP_DEGREE", 4))
 SEQ_DEGREE=int(os.getenv("AXLEARN_SEQ_DEGREE", 1))
-ep_degree=int(os.getenv("AXLEARN_EP_DEGREE", 1))
+EP_DEGREE=int(os.getenv("AXLEARN_EP_DEGREE", 1))
 
 MOE_OUTER_BATCH_AXIS_NAMES = ("data", "fsdp")
 def get_effective_ep_degree():
-    if ep_degree > 1:
-        if ep_degree * TP_DEGREE * SEQ_DEGREE == 64:
+    if EP_DEGREE > 1:
+        if EP_DEGREE * TP_DEGREE * SEQ_DEGREE == 64:
             return 64
-        elif ep_degree * SEQ_DEGREE == 16:
+        elif EP_DEGREE * SEQ_DEGREE == 16:
             return 16
     return 1
 
-def get_moe_dim_to_mesh_axis_map(ep_degree, tp_degree, cp_degree):
-    if ep_degree > 1:
+def get_moe_dim_to_mesh_axis_map(ep_degree_local, tp_degree, cp_degree):
+    if ep_degree_local > 1:
         # fsdp = 1
         FSDP_AXIS_NAMES = None
-        if ep_degree * tp_degree * cp_degree == 64:
+        if ep_degree_local * tp_degree * cp_degree == 64:
             EP_AXIS_NAMES = ("expert", "model", "seq")
             TP_AXIS_NAMES = None
-        elif ep_degree * cp_degree == 16:
+        elif ep_degree_local * cp_degree == 16:
             EP_AXIS_NAMES = ("expert", "seq")
             TP_AXIS_NAMES = "model"
         else:
@@ -138,66 +138,43 @@ def get_moe_dim_to_mesh_axis_map(ep_degree, tp_degree, cp_degree):
         EP_AXIS_NAMES = "expert"
         FSDP_AXIS_NAMES = "fsdp"
     
-    if False:
-        MOE_DIM_TO_MESH_AXIS_MAP = {
-            "me": PartitionSpec(None, None),
-            "emnh": PartitionSpec(EP_AXIS_NAMES, FSDP_AXIS_NAMES, None, TP_AXIS_NAMES),
-            "emh": PartitionSpec(EP_AXIS_NAMES, FSDP_AXIS_NAMES, TP_AXIS_NAMES),
-            "ehm": PartitionSpec(EP_AXIS_NAMES, TP_AXIS_NAMES, FSDP_AXIS_NAMES),
-            "ehM": PartitionSpec(EP_AXIS_NAMES, TP_AXIS_NAMES, None),
-            "onse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, EP_AXIS_NAMES),
-            "ogsm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, TP_AXIS_NAMES),
-            "ogsM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
-            "ogse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
-            "ogec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
-            # Dispatch and combine tensors.
-            "ogsec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, EP_AXIS_NAMES, None),
-            "oegcm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None, TP_AXIS_NAMES),
-            "oegcM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None, None),
-            "ogecm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES, None, TP_AXIS_NAMES),
-            "ogecM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES, None, None),
-            "oegch": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None, TP_AXIS_NAMES),
-            "hoesm": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
-            "oehx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, TP_AXIS_NAMES, None),
-            "hoex": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None),
-        }
-    else:
-        # EP v2 within node map
-        MOE_DIM_TO_MESH_AXIS_MAP = {
-            "me": PartitionSpec(None, None),
-            "emnh": PartitionSpec(EP_AXIS_NAMES, FSDP_AXIS_NAMES, None, TP_AXIS_NAMES),
-            "eMnh": PartitionSpec(EP_AXIS_NAMES, FSDP_AXIS_NAMES, None, TP_AXIS_NAMES),
-            "emh": PartitionSpec(EP_AXIS_NAMES, FSDP_AXIS_NAMES, TP_AXIS_NAMES),
-            "ehm": PartitionSpec(EP_AXIS_NAMES, TP_AXIS_NAMES, FSDP_AXIS_NAMES),
-            "ehM": PartitionSpec(EP_AXIS_NAMES, TP_AXIS_NAMES, None),
+    
+    # EP v2 within node map
+    MOE_DIM_TO_MESH_AXIS_MAP = {
+        "me": PartitionSpec(None, None),
+        "emnh": PartitionSpec(EP_AXIS_NAMES, FSDP_AXIS_NAMES, None, TP_AXIS_NAMES),
+        "eMnh": PartitionSpec(EP_AXIS_NAMES, None, None, TP_AXIS_NAMES),
+        "emh": PartitionSpec(EP_AXIS_NAMES, FSDP_AXIS_NAMES, TP_AXIS_NAMES),
+        "ehm": PartitionSpec(EP_AXIS_NAMES, TP_AXIS_NAMES, FSDP_AXIS_NAMES),
+        "ehM": PartitionSpec(EP_AXIS_NAMES, TP_AXIS_NAMES, None),
 
-            # "onse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, EP_AXIS_NAMES),
-            "ogsm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, TP_AXIS_NAMES),
-            "ogsM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
-            "ogse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
-            "ogec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES, None),
-            "oghsM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, TP_AXIS_NAMES, None, None),
-            # Dispatch and combine tensors.
-            "ogsec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, EP_AXIS_NAMES, None),
-            "oegcm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None, TP_AXIS_NAMES),
-            "oegcM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None, None),
-            "ogecm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES, None, TP_AXIS_NAMES),
-            "ogecM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES, None, None),
-            "oegch": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None, TP_AXIS_NAMES),
-            "ohesm": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
-            # "hoesm": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
-            # "oehx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, TP_AXIS_NAMES, None),
-            "oexx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
-            "oxxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
-            "oxe": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
-            "oxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None),
-            # "hoex": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None),
-            "hoxx": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, None, None),
-            "hoxe": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
-        }
+        # "onse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, EP_AXIS_NAMES),
+        "ogsm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, TP_AXIS_NAMES),
+        "ogsM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
+        "ogse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
+        "ogec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES, None),
+        "oghsM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, TP_AXIS_NAMES, None, None),
+        # Dispatch and combine tensors.
+        "ogsec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, EP_AXIS_NAMES, None),
+        "oegcm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None, TP_AXIS_NAMES),
+        "oegcM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None, None),
+        "ogecm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES, None, TP_AXIS_NAMES),
+        "ogecM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES, None, None),
+        "oegch": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None, TP_AXIS_NAMES),
+        "ohesm": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
+        # "hoesm": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
+        # "oehx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, TP_AXIS_NAMES, None),
+        "oexx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
+        "oxxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
+        "oxe": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
+        "oxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None),
+        # "hoex": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None),
+        "hoxx": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, None, None),
+        "hoxe": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
+    }
     return MOE_DIM_TO_MESH_AXIS_MAP
 
-MOE_DIM_TO_MESH_AXIS_MAP = get_moe_dim_to_mesh_axis_map(ep_degree, TP_DEGREE, SEQ_DEGREE)
+MOE_DIM_TO_MESH_AXIS_MAP = get_moe_dim_to_mesh_axis_map(EP_DEGREE, TP_DEGREE, SEQ_DEGREE)
 
 def get_ffn_layer_types():
     ffn_type = os.getenv("AXLEARN_MOE_LAYER_FREQ", "1")
@@ -505,9 +482,9 @@ def get_trainer_kwargs(
     remat_policy = get_remat_policy()
     ffn_layer_types = get_ffn_layer_types()
     fsdp_degree=int(os.getenv("AXLEARN_FSDP_DEGREE", -1))
-    neuron_mesh = mesh_shape_from_axes(fsdp=fsdp_degree, model=TP_DEGREE, expert=ep_degree, seq=SEQ_DEGREE)
+    neuron_mesh = mesh_shape_from_axes(fsdp=fsdp_degree, model=TP_DEGREE, expert=EP_DEGREE, seq=SEQ_DEGREE)
     # potentially change for different models
-    if ep_degree > 1:
+    if EP_DEGREE > 1:
         # to use default of ("expert", "fsdp", "seq")
         attn_dense_fsdp_axis_names = None
         dense_batch_axis_names = ("data", "fsdp")
@@ -515,7 +492,7 @@ def get_trainer_kwargs(
     else:
         attn_dense_fsdp_axis_names = attn_dense_seq_axis_names = dense_batch_axis_names = None
     MOE_OUTER_BATCH_AXIS_NAMES = ("data", "fsdp")
-    num_groups = get_effective_ep_degree()
+    num_groups = 1 #get_effective_ep_degree()
     train_batch_size = int(os.getenv("AXLEARN_TRAIN_BATCH_SIZE", 16))
 
     # check_env_vars()

@@ -22,7 +22,7 @@ from functools import reduce, partial
 from typing import NamedTuple, Optional, Sequence, Union
 import numpy
 import sys
-numpy.set_printoptions(threshold=sys.maxsize)
+# numpy.set_printoptions(threshold=sys.maxsize)
 
 import jax
 import jax.numpy as jnp
@@ -123,12 +123,12 @@ from jax import lax
 def blockwise_mlp(
     hidden_states, expert_affinities_masked, gate_up_proj_weight, down_proj_weights, token_position_to_id, block_to_expert, 
     activation_fns):
-    print('hiddenstates', hidden_states.shape)
-    print('expert_affinities', expert_affinities_masked.shape)
-    print('token_position_to_id', token_position_to_id.shape)
-    print('block_to_expert', block_to_expert.shape)
-    print('gate_up_proj_weight', gate_up_proj_weight.shape)
-    print('down_proj_weights', down_proj_weights.shape)
+    # print('hiddenstates', hidden_states.shape)
+    # print('expert_affinities', expert_affinities_masked.shape)
+    # print('token_position_to_id', token_position_to_id.shape)
+    # print('block_to_expert', block_to_expert.shape)
+    # print('gate_up_proj_weight', gate_up_proj_weight.shape)
+    # print('down_proj_weights', down_proj_weights.shape)
     O = hidden_states.shape[0]
     G = hidden_states.shape[1]
     # nki doesn't support batching 'E   NotImplementedError: Batching rule for 'nki_call' not implemented'
@@ -175,9 +175,9 @@ def calculate_token_position_to_id(block_position_indices, tokens_indices,
         Invert block_position_indices to obtain token_position_to_id.
         """
         O, G, num_tokens, E = block_position_indices.shape
-        print('block_position_indices', block_position_indices.shape)
-        print('tokens_indices', tokens_indices.shape)
-        print('num_blocks', num_blocks, block_size, total_tokens, dest_output.shape)
+        # print('block_position_indices', block_position_indices.shape)
+        # print('tokens_indices', tokens_indices.shape)
+        # print('num_blocks', num_blocks, block_size, total_tokens, dest_output.shape)
 
         # Create batch and group indices
         # (O, G, S*top_k, E)
@@ -1137,7 +1137,6 @@ class TopKGatingGather(TopKGating):
         """Please see comments of BaseGating.forward."""
         cfg = self.config
         O, G, S, E = logits.shape
-        print('logits', logits.shape)
         raw_gates = self.router(cfg, logits)
         expert_capacity = self.compute_expert_capacity(cfg, logits)
         # expert_index: (O, G, S*top_k)
@@ -1265,16 +1264,10 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
                 scatter_dims_to_operand_dims=(0, 1, 2)
             )
         )
-        # jax.debug.print("token_position_to_id before adjusting, {x}", x=token_position_to_id)
         token_position_to_id = token_position_to_id[:, :, 1:]
-        # jax.debug.print("token_position_to_id after removing one from last axis, {x}", x=token_position_to_id)
-
+        
         token_position_to_id = token_position_to_id - 1
-        # jax.debug.print("token_position_to_id after sub1 {x}", x=token_position_to_id)
         token_position_to_id = jnp.where(token_position_to_id==-1, num_tokens,token_position_to_id)
-        # jax.debug.print("token_position_to_id after replacing -1 {x}", x=token_position_to_id)
-        # zero_tensor = jnp.zeros(1, dtype=token_position_to_id.dtype)
-        # token_position_to_id = jnp.maximum(token_position_to_id, zero_tensor)
         token_position_to_id = self._remat_name(token_position_to_id, "blockwisegating.token_position_to_id")
         return token_position_to_id
     
@@ -1318,7 +1311,6 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
         cfg = self.config
         O, G, S, E = logits.shape
         raw_gates = self.router(cfg, logits)
-        print('logits', logits.shape)
         expert_capacity = self.compute_expert_capacity(cfg, logits)
         # we compute capacity for dropping before group all-gather in EP case
         # effective capacity to compute local num_blocks needs to be adjusted 
@@ -1349,8 +1341,6 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
         local_num_experts = int(self.config.num_experts / ep_size)
 
         num_dropped = jnp.sum(expert_mask, axis=(0,1,2,3)) - jnp.sum(expert_mask_after_dropping, axis=(0,1,2,3))
-        # jax.debug.print('num_dropped, {x}', x=num_dropped)
-        # jax.debug.print('total_num_dropped, {x}', x=jnp.sum(num_dropped))
         num_blocks = self.compute_num_blocks(effective_capacity, local_num_experts)
 
         expert_mask_after_dropping = jnp.reshape(expert_mask_after_dropping, (O ,1, -1, ep_size, local_num_experts))
@@ -1420,7 +1410,6 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
         cfg = self.config
         O, G, S, E = logits.shape
         k = cfg.top_k
-        print('logits', logits.shape)
         raw_gates = self.router(cfg, logits)
         expert_capacity = self.compute_expert_capacity(cfg, logits)
         print('expert_capacity', expert_capacity)
@@ -1432,7 +1421,6 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
 
         # expert_mask: (O, G, S*topk, E)
         expert_mask = self.compute_expert_mask(cfg, expert_index, cfg.num_experts)
-        print('expert_mask', expert_mask.shape)
         
         # Only use top 1 tokens for calculationg aux loss.
         aux_loss = self.compute_aux_loss(self.config, expert_mask[:, :, :S, :], raw_gates)
@@ -1486,14 +1474,10 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
             expert_mask_k = with_sharding_constraint(expert_mask_k, cfg.dim_to_mesh_axis_map["oexx"])
             # O, ep_size, S, local_num_experts
             expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, cfg.dim_to_mesh_axis_map["oexx"])
-            # print('expert_mask_k shape', expert_mask_k.shape)
-            # print('expert_affinities_masked shape', expert_affinities_masked.shape)
-        
+
         with jax.named_scope("new_cumsum"):
             position_in_expert = _cum_sum(expert_mask_k.astype(jnp.int32), axis=-2).astype(jnp.int32)
-            print('position_in_expert.shape', position_in_expert.shape)
             position_in_expert = with_sharding_constraint(position_in_expert, cfg.dim_to_mesh_axis_map["oexx"])
-            print('position_in_expert shape', position_in_expert.shape)
         # Add expert offset to the position_in_expert
         # expert_index_offsets: [e,]
         
@@ -1519,7 +1503,6 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
             # create full tokens_indices and then shard within TP
             tokens_indices = jnp.arange(S, dtype=jnp.int32)[None, None, :, None]
             tokens_indices = jnp.broadcast_to(tokens_indices, (O, G, S, local_num_experts))
-            # print('tokens_indices', tokens_indices.shape)
             token_position_to_id_sm = shard_map(
                 calculate_token_position_to_id,
                 mesh=thread_resources.env.physical_mesh,
