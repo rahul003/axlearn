@@ -125,7 +125,11 @@ def get_moe_dim_to_mesh_axis_map(ep_degree_local, tp_degree, cp_degree):
     if ep_degree_local > 1:
         # fsdp = 1
         FSDP_AXIS_NAMES = None
-        if ep_degree_local * tp_degree * cp_degree == 64:
+        if ep_degree_local == 64:
+            EP_AXIS_NAMES = "expert"
+            TP_AXIS_NAMES = None
+            FSDP_AXIS_NAMES = "fsdp"
+        elif ep_degree_local * tp_degree * cp_degree == 64:
             EP_AXIS_NAMES = ("expert", "model", "seq")
             TP_AXIS_NAMES = None
         elif ep_degree_local * cp_degree == 16:
