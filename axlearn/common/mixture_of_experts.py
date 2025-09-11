@@ -119,10 +119,16 @@ def combine_outputs(permuted_output, token_permutation_idx, expert_index, expert
 import jax.numpy as jnp
 from jax import lax
 
-@partial(jax.jit, static_argnums=(6, 7,))
+@partial(jax.jit, static_argnums=(6,))
 def blockwise_mlp(
     hidden_states, expert_affinities_masked, gate_up_proj_weight, down_proj_weights, token_position_to_id, block_to_expert, 
-    block_size, activation_fns):
+    activation_fns):
+    print('hiddenstates', hidden_states.shape)
+    print('expert_affinities', expert_affinities_masked.shape)
+    print('token_position_to_id', token_position_to_id.shape)
+    print('block_to_expert', block_to_expert.shape)
+    print('gate_up_proj_weight', gate_up_proj_weight.shape)
+    print('down_proj_weights', down_proj_weights.shape)
     O = hidden_states.shape[0]
     G = hidden_states.shape[1]
     # nki doesn't support batching 'E   NotImplementedError: Batching rule for 'nki_call' not implemented'
@@ -132,7 +138,8 @@ def blockwise_mlp(
         expert_affinities_masked = expert_affinities_masked.reshape((O*G, 1, 1) + expert_affinities_masked.shape[2:])
         token_position_to_id = token_position_to_id.reshape((O*G, 1, 1) + token_position_to_id.shape[2:])
         block_to_expert = block_to_expert.reshape((O*G, 1, 1) + block_to_expert.shape[2:])
-
+    num_local_blocks = block_to_expert.shape[-1]
+    block_size = token_position_to_id.shape[-1] // num_local_blocks
     if can_use_blockwise_matmul_nki(
         hidden_size=gate_up_proj_weight.shape[1],
         intermediate_size_tp=gate_up_proj_weight.shape[-1],
@@ -1464,7 +1471,10 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
         with jax.named_scope("sep_for_local_experts"):
             # separate out EP component for index computation 
             mesh = thread_resources.env.physical_mesh 
-            ep_size = np.prod([mesh.shape[x] for x in cfg.dim_to_mesh_axis_map["emh"][0]])
+            if isinstance(cfg.dim_to_mesh_axis_map["emh"][0], tuple):
+                ep_size = np.prod([mesh.shape[x] for x in cfg.dim_to_mesh_axis_map["emh"][0]])
+            else:
+                ep_size = mesh.shape[cfg.dim_to_mesh_axis_map["emh"][0]]
             local_num_experts = int(self.config.num_experts / ep_size)
 
             expert_mask_k = jnp.reshape(expert_mask_k, (O ,1, -1, ep_size, local_num_experts))
@@ -1476,8 +1486,8 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
             expert_mask_k = with_sharding_constraint(expert_mask_k, cfg.dim_to_mesh_axis_map["oexx"])
             # O, ep_size, S, local_num_experts
             expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, cfg.dim_to_mesh_axis_map["oexx"])
-            print('expert_mask_k shape', expert_mask_k.shape)
-            print('expert_affinities_masked shape', expert_affinities_masked.shape)
+            # print('expert_mask_k shape', expert_mask_k.shape)
+            # print('expert_affinities_masked shape', expert_affinities_masked.shape)
         
         with jax.named_scope("new_cumsum"):
             position_in_expert = _cum_sum(expert_mask_k.astype(jnp.int32), axis=-2).astype(jnp.int32)
@@ -1491,8 +1501,8 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
             expert_index_offsets = (
                 jnp.arange(local_num_experts, dtype=jnp.int32) * expert_capacity
             )
-            block_to_expert = jnp.arange(self.config.num_experts, dtype=jnp.int32)[None, None, :]
-            block_to_expert = jnp.broadcast_to(block_to_expert, (O, G, self.config.num_experts))
+            block_to_expert = jnp.arange(local_num_experts, dtype=jnp.int32)[None, None, :]
+            block_to_expert = jnp.broadcast_to(block_to_expert, (O, G, local_num_experts))
 
             # position_in_expert_with_offset: [O, 1, G*S*topk, e]
             position_in_expert_with_offset = position_in_expert + expert_index_offsets
@@ -1509,8 +1519,7 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
             # create full tokens_indices and then shard within TP
             tokens_indices = jnp.arange(S, dtype=jnp.int32)[None, None, :, None]
             tokens_indices = jnp.broadcast_to(tokens_indices, (O, G, S, local_num_experts))
-            print('tokens_indices', tokens_indices.shape)
-            print('output', output.shape)
+            # print('tokens_indices', tokens_indices.shape)
             token_position_to_id_sm = shard_map(
                 calculate_token_position_to_id,
                 mesh=thread_resources.env.physical_mesh,
@@ -1525,13 +1534,13 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
             )
             # (TP, O, G, N*B)
             output = token_position_to_id_sm(position_in_expert_with_offset, tokens_indices, local_num_experts, expert_capacity, S, output)
-            print('token position to id', output.shape)
             # allreduce to get (O, G, N*B)
             token_position_to_id  = jnp.min(output, axis=0)
+            
         router_z_loss = _router_z_loss(logits)
         return self.Output(
             dispatch_tensor=block_to_expert,
-            combine_tensor=(token_position_to_id, expert_affinities_masked),
+            combine_tensor=(token_position_to_id, expert_affinities_masked, expert_index),
             load_balance_loss=aux_loss,
             router_z_loss=router_z_loss,
         )
@@ -1854,8 +1863,8 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
         expert_affinities_masked = gating.combine_tensor[1]
         token_position_to_id = gating.combine_tensor[0]
         block_to_expert = gating.dispatch_tensor
-        num_blocks = block_to_expert.shape[-1]
-        block_size = token_position_to_id.shape[-1] // num_blocks
+        # num_blocks_local = block_to_expert.shape[-1]
+        # block_size = token_position_to_id.shape[-1] // num_blocks_local
         gate_up_weight = jnp.stack([self.parameters["wi_0_weight"],self.parameters["wi_1_weight"],], axis=2)
         gate_up_weight = with_sharding_constraint(gate_up_weight, cfg.dim_to_mesh_axis_map["emnh"])
 
@@ -1867,11 +1876,10 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
             in_specs=(
                 cfg.dim_to_mesh_axis_map["ogsM"],# hidden_states
                 cfg.dim_to_mesh_axis_map["oexx"], # expert_affinities_masked
-                cfg.dim_to_mesh_axis_map["emnh"], # gate_up_proj weight
-                cfg.dim_to_mesh_axis_map["ehm"], # down_proj weight
+                cfg.dim_to_mesh_axis_map["eMnh"], # gate_up_proj weight
+                cfg.dim_to_mesh_axis_map["ehM"], # down_proj weight
                 cfg.dim_to_mesh_axis_map["oxe"], # token_position_to_id: (O, G, N*B)
-                cfg.dim_to_mesh_axis_map["oxe"], # block_to_expert
-                None, # block size
+                cfg.dim_to_mesh_axis_map["oxx"], # block_to_expert
                 None, # activation_fns
             ),
             out_specs=cfg.dim_to_mesh_axis_map["oghsM"],
@@ -1884,7 +1892,6 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
             self.parameters["wo_weight"], 
             token_position_to_id, 
             block_to_expert, 
-            block_size,
             cfg.activation
         )
         outputs = jnp.sum(outputs, axis=2, dtype=outputs.dtype)
