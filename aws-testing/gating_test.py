@@ -25,7 +25,7 @@ class TestGatingOnCpu(GatingTestCase):
 
     @parameterized.named_parameters(get_gating_configs(test_suite=TEST_SUITE, layer='gating', test=TopKGatingGatherBlockwiseV2, golden=TopKGatingGatherBlockwise, test_device="cpu", golden_device="cpu"))
     def test_fwd_blockwisev2(self, cfg):
-        self.helper_blockwise_gating_v2(cfg)
+        self.helper_blockwise_gating_v2_vs_v1(cfg)
 
 class TestDev150bGatingUnit(GatingTestCase):
     def create_cfg(self, test, golden, test_device, golden_device="cpu", layer="gating"):

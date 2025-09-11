@@ -113,11 +113,7 @@ def _blockwise_mm_fwd(
         hidden_states = jnp.concat([hidden_states, padding_h], axis=0)
         expert_affinities_masked = jnp.concat([expert_affinities_masked, padding_e], axis=0)
         expert_affinities_masked = jnp.reshape(expert_affinities_masked, (-1, 1))
-    print('hs', hidden_states.shape)
-    print('expert affin', expert_affinities_masked.shape)
-    print('token_position_to_id', token_position_to_id.shape)
-    print('block_to_expert', block_to_expert.shape)
-    print('block_size', block_size)
+
     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
         hidden_states,
         expert_affinities_masked,
@@ -128,7 +124,7 @@ def _blockwise_mm_fwd(
         block_size=block_size,
         skip_dma=SkipMode(False, False)
     )
-    print('out', out.shape)
+
     down_activations = checkpoint_name(down_activations, "blockwise.down_activations")
     gate_up_activations_T = checkpoint_name(gate_up_activations_T, "blockwise.gate_up_activations_T")
     
@@ -153,13 +149,6 @@ def _blockwise_mm_bwd(
         padding_h = jnp.zeros((1, hidden_states.shape[1]), dtype=hidden_states.dtype)
         grad_output = jnp.concat([grad_output, padding_h], axis=0)
         # Compute gradients
-        print('hidden_states shape', hidden_states.shape)
-        print('gate_up_activations_T shape', gate_up_activations_T.shape)
-        print('down_activations shape', down_activations.shape)
-        print('expert_affinities_masked shape', expert_affinities_masked.shape)
-        print('down_proj_weight', down_proj_weight.shape)
-        print('block_to_expert', block_to_expert.shape)
-        print('ktype', 0 if block_to_expert.shape[-1] == down_proj_weight.shape[0] else 1)
         hidden_states_grad, affinities_grad, gate_up_proj_weight_grad, down_weight_grad = _blockwise_mm_bwd_nki_call[VNC(2)](
             hidden_states,
             expert_affinities_masked,
