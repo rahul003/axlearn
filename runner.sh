@@ -63,7 +63,7 @@ export NEURON_ENABLE_INT_MATMUL_DOWNCAST=1
 export NEURON_FSDP_CC_MULTISTREAM=0
 export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1
 export NEURON_HLO_ANALYZER=1
-#export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_as_proto"
+export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_as_proto"
 export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_as_text --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
 
 
