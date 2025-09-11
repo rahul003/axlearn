@@ -140,6 +140,8 @@ def blockwise_mlp(
         block_to_expert = block_to_expert.reshape((O*G, 1, 1) + block_to_expert.shape[2:])
     num_local_blocks = block_to_expert.shape[-1]
     block_size = token_position_to_id.shape[-1] // num_local_blocks
+    print('num_local_blocks', num_local_blocks, block_size)
+    
     if can_use_blockwise_matmul_nki(
         hidden_size=gate_up_proj_weight.shape[1],
         intermediate_size_tp=gate_up_proj_weight.shape[-1],
@@ -1519,7 +1521,7 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
             output = token_position_to_id_sm(position_in_expert_with_offset, tokens_indices, local_num_experts, expert_capacity, S, output)
             # allreduce to get (O, G, N*B)
             token_position_to_id  = jnp.min(output, axis=0)
-            
+        print('token_position_to_id', token_position_to_id.shape)
         router_z_loss = _router_z_loss(logits)
         return self.Output(
             dispatch_tensor=block_to_expert,

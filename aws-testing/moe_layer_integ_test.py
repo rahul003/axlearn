@@ -157,6 +157,26 @@ class TestDevSwitchBaseInteg(LayerTestCase):
             n_groups=1,
             top_k=1,
             capacity_factor=2,
+            mesh_spec={"expert": 64, "model": 1, "fsdp": 1, "seq": 1},
+            batch=4,
+            seq=2048,
+            dtype=jnp.bfloat16,
+        )[1]
+    
+    def create_cfg_ep4_seq16(self, test, golden=None, layer="moe"):
+        golden = self.golden if golden is None else golden
+        return create_test_config(
+            layer=layer,
+            test=test,
+            golden=golden,
+            test_device=self.test_device,
+            golden_device=self.golden_device,
+            input_dim=1024,
+            hidden_dim=4096,
+            n_experts=64,
+            n_groups=1,
+            top_k=1,
+            capacity_factor=2,
             mesh_spec={"expert": 4, "model": 1, "fsdp": 1, "seq": 16},
             batch=4,
             seq=2048,
@@ -170,13 +190,13 @@ class TestDevSwitchBaseInteg(LayerTestCase):
     
     def test_fwdbwd_blockwise_ep64(self):
         jax.config.update('jax_platform_name', 'neuron')
-        self.helper_bwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwise))
+        self.helper_bwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwiseV2))
 
     def test_fwd_blockwise_ep4_seq16(self):
         jax.config.update('jax_platform_name', 'neuron')
-        self.helper_fwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwiseV2))
+        self.helper_fwd(self.create_cfg_ep4_seq16(test=TopKGatingGatherBlockwiseV2))
 
-    @unittest.skip("Fwd itself fails right now")
+    @unittest.skip("Fwd itself fails right")
     def test_fwdbwd_blockwise_ep4_seq16(self):
         jax.config.update('jax_platform_name', 'neuron')
         self.helper_bwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwiseV2))

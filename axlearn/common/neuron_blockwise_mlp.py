@@ -113,7 +113,12 @@ def _blockwise_mm_fwd(
         hidden_states = jnp.concat([hidden_states, padding_h], axis=0)
         expert_affinities_masked = jnp.concat([expert_affinities_masked, padding_e], axis=0)
         expert_affinities_masked = jnp.reshape(expert_affinities_masked, (-1, 1))
-
+    print('expert_affinshape', expert_affinities_masked.shape)
+    print('token_postoid', token_position_to_id.shape)
+    print('block_size', block_size)
+    print('block_to_expert', block_to_expert.shape)
+    print('hs', hidden_states.shape)
+    print('gate_up_weight', gate_up_weight.shape)
     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
         hidden_states,
         expert_affinities_masked,
