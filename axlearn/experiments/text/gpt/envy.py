@@ -130,9 +130,12 @@ def get_moe_dim_to_mesh_axis_map(ep_degree_local, tp_degree, cp_degree):
             TP_AXIS_NAMES = None
             FSDP_AXIS_NAMES = "fsdp"
         elif ep_degree_local * tp_degree * cp_degree == 64:
+            # doesn't allow tp>1
             EP_AXIS_NAMES = ("expert", "model", "seq")
             TP_AXIS_NAMES = None
         elif ep_degree_local * cp_degree == 16:
+            # not used for EP=16 TP=4
+            # TODO
             EP_AXIS_NAMES = ("expert", "seq")
             TP_AXIS_NAMES = "model"
         else:

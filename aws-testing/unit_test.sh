@@ -116,7 +116,7 @@ elif [ "$1" = "150bdev" ]; then
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_gating_unit.xml aws-testing/gating_test.py -k "TestGatingOnCpu or TestDev150bGatingUnit"
 elif [ "$1" = "dev" ]; then
     # pytest -rsA -v aws-testing/gating_test.py -k "TestDev150bGatingUnit and test_unit_fwd_blockwisev2_ep"
-    pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep64" # or TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq16"
+    pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq4_model4" # or TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq16"
     
     
 elif [ "$1" = "150b_blockwise_cpu" ]; then

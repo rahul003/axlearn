@@ -183,6 +183,26 @@ class TestDevSwitchBaseInteg(LayerTestCase):
             dtype=jnp.bfloat16,
         )[1]
     
+    def create_cfg_ep4_seq4_model4(self, test, golden=None, layer="moe"):
+        golden = self.golden if golden is None else golden
+        return create_test_config(
+            layer=layer,
+            test=test,
+            golden=golden,
+            test_device=self.test_device,
+            golden_device=self.golden_device,
+            input_dim=1024,
+            hidden_dim=4096,
+            n_experts=64,
+            n_groups=1,
+            top_k=1,
+            capacity_factor=2,
+            mesh_spec={"expert": 4, "model": 4, "fsdp": 1, "seq": 4},
+            batch=4,
+            seq=2048,
+            dtype=jnp.bfloat16,
+        )[1]
+    
     @unittest.skip("Fails with unsupported collective. TODO")
     def test_fwdbwd_blockwise_ep16(self):
         jax.config.update('jax_platform_name', 'neuron')
@@ -195,6 +215,10 @@ class TestDevSwitchBaseInteg(LayerTestCase):
     def test_fwd_blockwise_ep4_seq16(self):
         jax.config.update('jax_platform_name', 'neuron')
         self.helper_fwd(self.create_cfg_ep4_seq16(test=TopKGatingGatherBlockwiseV2))
+
+    def test_fwdbwd_blockwise_ep4_seq4_model4(self):
+        jax.config.update('jax_platform_name', 'neuron')
+        self.helper_bwd(self.create_cfg_ep4_seq4_model4(test=TopKGatingGatherBlockwiseV2))
 
     @unittest.skip("Fwd itself fails right")
     def test_fwdbwd_blockwise_ep4_seq16(self):

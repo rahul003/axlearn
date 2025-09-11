@@ -232,6 +232,9 @@ def model_config(
     eos_token_id: Optional[int] = None,
     ffn_layer_types: Optional[Sequence[Literal["dense", "sparse"]]] = None,
     expert_cfg: TransformerFeedForwardMoE = TransformerFeedForwardMoE.default_config(),
+    batch_axis_names = None,
+    seq_axis_names = None,
+    fsdp_axis_names = None,
 ) -> causal_lm.Model.Config:
     """Returns an LM model config based on the given hyperparams.
 
@@ -292,13 +295,21 @@ def model_config(
     # Stack.
     # transformer_cfg = stack_cfg.set(num_layers=num_layers, layer=layer_cfg)
     # Shard some FFN and attention weights over multiple axes.
-    batch_axis_names = ("data", "expert", "fsdp")
+    
+    # used only for dense MLP when ep=1
+    if batch_axis_names is None:
+        batch_axis_names = ("data", "expert", "fsdp")
+    # seq and fsdp used for attn and dense MLP when ep=1
+    if seq_axis_names is None:
+        seq_axis_names = "seq"
+    if fsdp_axis_names is None:
+        fsdp_axis_names = ("expert", "fsdp", "seq")
     set_double_shard_weights_config(
         layer_cfg,
         batch_axis_names=batch_axis_names,
-        fsdp_axis_names=("expert", "fsdp", "seq"),
+        fsdp_axis_names=fsdp_axis_names,
         tp_axis_names="model",
-        seq_axis_names="seq",
+        seq_axis_names=seq_axis_names,
     )
     def config_dense(cfg: TransformerLayer.Config) -> TransformerLayer.Config:
         cfg = layer_cfg.clone()
