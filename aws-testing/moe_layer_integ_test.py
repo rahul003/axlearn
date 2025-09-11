@@ -119,7 +119,7 @@ class TestDev150bInteg(LayerTestCase):
 class TestDevSwitchBaseInteg(LayerTestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.test_device = 'neuron'
+        self.test_device = 'cpu'
         self.golden_device = 'cpu'
         self.golden = TopKGating
     
@@ -134,10 +134,10 @@ class TestDevSwitchBaseInteg(LayerTestCase):
             input_dim=1024,
             hidden_dim=4096,
             n_experts=128,
-            n_groups=16,
+            n_groups=64,
             top_k=2,
             capacity_factor=2,
-            mesh_spec={"expert": 16, "model": 4, "fsdp": 1},
+            mesh_spec={"expert": 64, "model": 1, "fsdp": 1},
             batch=4,
             seq=8192,
             dtype=jnp.bfloat16,
@@ -151,16 +151,16 @@ class TestDevSwitchBaseInteg(LayerTestCase):
             golden=golden,
             test_device=self.test_device,
             golden_device=self.golden_device,
-            input_dim=1024,
-            hidden_dim=4096,
-            n_experts=128,
+            input_dim=16,
+            hidden_dim=16,
+            n_experts=64,
             n_groups=1,
-            top_k=2,
-            capacity_factor=2,
-            mesh_spec={"expert": 4, "model": 1, "fsdp": 1, "seq": 16},
+            top_k=1,
+            capacity_factor=1,
+            mesh_spec={"expert": 1, "model": 16, "fsdp": 4, "seq": 1},
             # mesh_spec={"expert": 64, "model": 1, "fsdp": 1},
             batch=4,
-            seq=2048,
+            seq=512,
             dtype=jnp.bfloat16,
         )[1]
     

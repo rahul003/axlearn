@@ -194,7 +194,6 @@ class GatingTestCase(TestCase):
                                   atol=cfg.test.atol, rtol=cfg.test.rtol)
 
     def validate_block_to_expert(self, block_to_expert, cfg, num_blocks, num_blocks_per_expert, ep_size=1):
-        print('block_to_expert', block_to_expert)
         # Validating block_to_expert tensor
         # (O, G, N)
         O, G, N = block_to_expert.shape
@@ -254,7 +253,11 @@ class GatingTestCase(TestCase):
 
         test_output = jax.device_get(test_output)
         outputs = test_output[0]
-        token_position_to_id, expert_affinities_masked = outputs.combine_tensor
+        token_position_to_id, expert_affinities_masked, expert_index = outputs.combine_tensor
+
+        print('expert_index', expert_index.shape, expert_index)
+        print('token_postoid', token_position_to_id)
+        
         _, ep_size, S, E = expert_affinities_masked.shape
         num_experts = ep_size * E
         expert_capacity = int(S * cfg.test.cfg.train_capacity_factor / num_experts)
@@ -270,17 +273,18 @@ class GatingTestCase(TestCase):
         num_local_blocks = num_blocks_per_expert * E
         
         block_to_expert = outputs.dispatch_tensor
+        print('block to expert', block_to_expert)
         O, G, N = block_to_expert.shape
-        assert N == num_blocks
+        assert N == num_local_blocks
         with jax.default_device(jax.devices("cpu")[0]):
             expert_affinities_masked = jnp.transpose(expert_affinities_masked, (0, 2, 1, 3))
             expert_affinities_masked = jnp.reshape(expert_affinities_masked, (O, G, -1, E*ep_size))
-            block_to_expert_chunks = jnp.split(block_to_expert, ep_size, axis=-1)
+            print('expert_affinities', expert_affinities_masked)
             expert_affinities_masked_chunks = jnp.split(expert_affinities_masked, ep_size, axis=-1)
             token_position_to_id_chunks = jnp.split(token_position_to_id, ep_size, axis=-1)                
             for ep_rank in range(ep_size):
-                self.validate_block_to_expert(block_to_expert_chunks[ep_rank], cfg, num_local_blocks, num_blocks_per_expert, ep_size=ep_size)
-                self.validate_token_position_to_id(O, G, num_local_blocks, block_size, S, block_to_expert_chunks[ep_rank], expert_affinities_masked, token_position_to_id_chunks[ep_rank], ep_rank)
+                self.validate_block_to_expert(block_to_expert, cfg, num_local_blocks, num_blocks_per_expert, ep_size=ep_size)
+                self.validate_token_position_to_id(O, G, num_local_blocks, block_size, S, block_to_expert, expert_affinities_masked_chunks[ep_rank], token_position_to_id_chunks[ep_rank], ep_rank)
                 self.validate_expert_affinties(expert_affinities_masked_chunks[ep_rank], cfg)
 
     def helper_blockwise_gating_v2(self, cfg):

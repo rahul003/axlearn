@@ -117,6 +117,7 @@ def _blockwise_mm_fwd(
     print('expert affin', expert_affinities_masked.shape)
     print('token_position_to_id', token_position_to_id.shape)
     print('block_to_expert', block_to_expert.shape)
+    print('block_size', block_size)
     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
         hidden_states,
         expert_affinities_masked,

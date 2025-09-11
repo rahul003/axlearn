@@ -166,6 +166,7 @@ def get_moe_dim_to_mesh_axis_map(ep_degree, tp_degree, cp_degree):
         MOE_DIM_TO_MESH_AXIS_MAP = {
             "me": PartitionSpec(None, None),
             "emnh": PartitionSpec(EP_AXIS_NAMES, FSDP_AXIS_NAMES, None, TP_AXIS_NAMES),
+            "eMnh": PartitionSpec(EP_AXIS_NAMES, FSDP_AXIS_NAMES, None, TP_AXIS_NAMES),
             "emh": PartitionSpec(EP_AXIS_NAMES, FSDP_AXIS_NAMES, TP_AXIS_NAMES),
             "ehm": PartitionSpec(EP_AXIS_NAMES, TP_AXIS_NAMES, FSDP_AXIS_NAMES),
             "ehM": PartitionSpec(EP_AXIS_NAMES, TP_AXIS_NAMES, None),
@@ -189,6 +190,7 @@ def get_moe_dim_to_mesh_axis_map(ep_degree, tp_degree, cp_degree):
             "oexx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
             "oxxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
             "oxe": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
+            "oxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None),
             # "hoex": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None),
             "hoxx": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, None, None),
             "hoxe": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
