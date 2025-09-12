@@ -45,7 +45,7 @@ export NEURON_FSDP=0
 export NEURON_FSDP_NUM_LAYER_COALESCE=-1
 export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1 # changed from 0
 export NEURON_DISABLE_BOUNDARY_MARKER=1
-
+export NEURON_COLLECTIVE_PERMUTE_TO_ALL_GATHER=1
 # Neuron runtime flags
 export NEURON_RT_DBG_CC_DMA_PACKET_SIZE=4096 && export NEURON_RT_DBG_DMA_PACKETIZATION_SIZE=104857
 export NEURON_RT_ASYNC_EXEC_MAX_INFLIGHT_REQUESTS=0
@@ -64,7 +64,6 @@ export FI_EFA_USE_DEVICE_RDMA="1"
 export FI_PROVIDER="efa"
 export FI_EFA_FORK_SAFE=1
 export OFI_NCCL_MR_CACHE_DISABLE=1
-
 # Neuron compiler flags
 export NEURON_CC_FLAGS="--framework=XLA"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-max-instruction-limit=20000000"
@@ -116,7 +115,8 @@ elif [ "$1" = "150bdev" ]; then
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_gating_unit.xml aws-testing/gating_test.py -k "TestGatingOnCpu or TestDev150bGatingUnit"
 elif [ "$1" = "dev" ]; then
     # pytest -rsA -v aws-testing/gating_test.py -k "TestDev150bGatingUnit and test_unit_fwd_blockwisev2_ep"
-    pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq4_model4" # or TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq16"
+    # pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq4_model4" # or TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq16"
+    pytest -rsA -v aws-testing/transformer_layer_integ_test.py -k "TestDevSwitchBaseInteg and test_fwdbwd_transformer" # or TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq16"
     
     
 elif [ "$1" = "150b_blockwise_cpu" ]; then

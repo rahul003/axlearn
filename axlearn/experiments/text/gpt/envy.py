@@ -181,7 +181,6 @@ def get_moe_dim_to_mesh_axis_map(ep_degree_local, tp_degree, cp_degree):
     }
     return MOE_DIM_TO_MESH_AXIS_MAP
 
-MOE_DIM_TO_MESH_AXIS_MAP = get_moe_dim_to_mesh_axis_map(EP_DEGREE, TP_DEGREE, SEQ_DEGREE)
 
 def get_ffn_layer_types():
     ffn_type = os.getenv("AXLEARN_MOE_LAYER_FREQ", "1")
@@ -911,7 +910,7 @@ def model_config(
         outer_batch_size = get_outer_batch_from_mesh(
             MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, mesh_shape
         )
-
+    MOE_DIM_TO_MESH_AXIS_MAP = get_moe_dim_to_mesh_axis_map(EP_DEGREE, TP_DEGREE, SEQ_DEGREE)
     use_blockwise = int(os.getenv('AXLEARN_USE_BLOCKWISE', 1))
     if use_blockwise == 1:
         gating_type = TopKGatingGatherBlockwise
