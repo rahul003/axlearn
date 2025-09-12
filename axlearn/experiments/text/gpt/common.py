@@ -89,7 +89,12 @@ def scaled_hidden_dim(scale: float, *, round_up_to_multiples_of: int = 256) -> F
         round_up_to_multiples_of=round_up_to_multiples_of,
     )
 
-
+# TODO: change annotations to use Seq parallel properly
+"""
+Had run into below error with flash attention as is
+File "/fsx/huilgolr/axlearn/axlearn/common/flash_attention/layer.py", line 133, in _maybe_repeat_kv_heads
+ValueError: num_heads (12) must be greater than or equal to the number of devices 16 in the mesh axis ('seq', 'model').
+"""
 def flash_attention_config() -> FlashAttention.Config:
     """Builds a FlashAttention config with sharding config."""
     return FlashAttention.default_config().set(

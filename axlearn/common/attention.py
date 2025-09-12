@@ -80,6 +80,8 @@ TODO(changlan): Merge the use of `positions` and `time_step` to reduce cognitive
 
 """
 
+from jax._src.mesh import thread_resources
+
 # pylint: disable=abstract-method,too-many-lines
 import enum
 import functools
@@ -156,6 +158,7 @@ from axlearn.common.utils import (
     save_and_offload_only_these_names_regex,
     shapes,
     split_prng_key,
+    with_sharding_constraint,
 )
 
 
@@ -1812,6 +1815,12 @@ class MultiheadAttention(BaseLayer):
             query_positions = query_positions + time_step[:, None]  # [batch, steps]
         q_proj, k_proj, v_proj = self.i_proj(query, query_positions=query_positions, **kv_kwargs)
 
+        mesh = thread_resources.env.physical_mesh 
+        if mesh.shape["seq"] > 1:
+            q_proj = with_sharding_constraint(q_proj, PartitionSpec(("data", "fsdp"), ("expert", "seq"), "model", None))
+            k_proj = with_sharding_constraint(k_proj, PartitionSpec(("data", "fsdp"), None, "model", None))
+            v_proj = with_sharding_constraint(v_proj, PartitionSpec(("data", "fsdp"), None, "model", None))
+
         if mode == ForwardMode.FORWARD:
             new_cached_states = dict()
             key_positions = jnp.arange(k_proj.shape[1])[None]
@@ -1869,11 +1878,19 @@ class MultiheadAttention(BaseLayer):
             v_proj=v_proj,
             attention_logit_biases=attention_logit_biases,
         )
+
+        if mesh.shape["seq"] > 1:
+            context = with_sharding_constraint(context, PartitionSpec(("data", "fsdp"), ("seq", "expert"), "model", None))
+            probs = with_sharding_constraint(probs, PartitionSpec(("data", "fsdp"), "model", ("seq","expert"), None))
+
         self.vlog(3, "atten.prob=%s", probs[0, 0, 0, :])
         self.vlog(3, "atten.context=%s", context.sum())
 
         # [batch, target_length, output_dim].
         o_proj = self.o_proj(context)
+        if mesh.shape["seq"] > 1:
+            o_proj = with_sharding_constraint(o_proj, PartitionSpec(("data", "fsdp"), ("seq", "expert"), None))
+
         outputs = self._remat_name(o_proj, "o_proj")
         self._add_tensor_stats("o_proj_outputs", outputs)
         return_aux = return_aux or set()

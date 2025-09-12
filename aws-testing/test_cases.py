@@ -3,7 +3,9 @@ import unittest
 from functools import partial
 import jax
 import math
+import axlearn
 from axlearn.common.test_utils import TestCase
+from axlearn.common.attention import TransformerLayer
 from utils_neuron import ExperimentConfig
 from axlearn.common.module import functional as F
 import numpy as np
@@ -102,6 +104,8 @@ class LayerTestCase(TestCase):
         def golden_bwd_call(golden_layer, golden_state, golden_inputs):
             def loss_fn(state):
                 output, aux = self._fwd_call(golden_layer, state, golden_inputs)
+                if isinstance(output, axlearn.common.attention.BaseTransformerLayer.Output):
+                    output = output.data
                 return cfg.loss_fn(output), output  # Return both loss and output
             (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(golden_state)
             return loss, grads, output
@@ -112,6 +116,8 @@ class LayerTestCase(TestCase):
         def test_bwd_call(test_layer, test_state, test_inputs):
             def loss_fn(state):
                 output, aux = self._fwd_call(test_layer, state, test_inputs)
+                if isinstance(output, axlearn.common.attention.BaseTransformerLayer.Output):
+                    output = output.data
                 return cfg.loss_fn(output), output
             (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
             return loss, grads, output

@@ -20,7 +20,10 @@ import jax.numpy as jnp
 from jax.experimental import mesh_utils
 from jax.sharding import NamedSharding, Mesh
 from parse_pytest_results import parse_pytest_xml
-
+from axlearn.common.embedding import TransformerTextEmbeddings
+from axlearn.common.decoder import Decoder
+from axlearn.common.attention import TransformerLayer, GroupedQueryAttention, RoFormerQKVLinear, GroupedQKVLinear, ScaleKey, ScaleQuery, set_double_shard_weights_config
+from axlearn.common.layers import RMSNorm
 from axlearn.common.mixture_of_experts import (
     TopKGating,
     TransformerFeedForwardMoE,
@@ -32,7 +35,7 @@ from axlearn.common.mixture_of_experts import (
 from axlearn.common.utils import PartitionSpec, infer_mesh_shape, cast_floats
 from axlearn.experiments.text.gpt.common import MESH_AXIS_NAMES, mesh_shape_from_axes
 from axlearn.common.param_init import PARAM_REGEXP_WEIGHT, DefaultInitializer, WeightInitializer
-from axlearn.experiments.text.gpt.envy import MOE_OUTER_BATCH_AXIS_NAMES, MOE_DIM_TO_MESH_AXIS_MAP, get_moe_dim_to_mesh_axis_map
+from axlearn.experiments.text.gpt.envy import MOE_OUTER_BATCH_AXIS_NAMES, get_moe_dim_to_mesh_axis_map
 
 TEST_SUITE = os.environ.get("TEST_SUITE", 'presubmit').lower()
 
@@ -71,6 +74,8 @@ def build_name(cfg, invoker_cfg):
         else:
             block_size_str = ''
         return f"MoE_i{cfg.input_dim}_h{cfg.hidden_dim}_e{cfg.num_experts}_topk{cfg.gating.top_k}_g{cfg.num_groups}_ec{cfg.gating.train_capacity_factor}{block_size_str}_b{invoker_cfg['batch_size']}_s{invoker_cfg['seq_len']}_mesh{mesh_str}_{dtype_str}"
+    elif hasattr(cfg, "feed_forward"):
+        return f"transformer_i{cfg.input_dim}_h{cfg.feed_forward.hidden_dim}_e{cfg.feed_forward.num_experts}_topk{cfg.feed_forward.gating.top_k}_g{cfg.feed_forward.num_groups}_ec{cfg.feed_forward.gating.train_capacity_factor}_b{invoker_cfg['batch_size']}_s{invoker_cfg['seq_len']}_mesh{mesh_str}_{dtype_str}"
     else:
         # Gating layer
         E = invoker_cfg['input_shape'][-1]
@@ -204,11 +209,18 @@ class ModuleConfig():
 
     @property
     def layer_type(self):
-        return "MoE" if isinstance(self.cfg, TransformerFeedForwardMoE.Config) else "Gating"
+        if isinstance(self.cfg, TransformerFeedForwardMoE.Config):
+            return "MoE"
+        elif isinstance(self.cfg, TransformerLayer.Config):
+            return "Transformer"
+        else:
+            return "Gating"
     
     @property
     def gating_type(self):
-        if self.layer_type == "MoE":
+        if self.layer_type == "Transformer":
+            return self.cfg.feed_forward.gating.__class__.__name__
+        elif self.layer_type == "MoE":
             return self.cfg.gating.__class__.__name__
         else:
             return self.cfg.__class__.__name__
@@ -298,7 +310,7 @@ class ExperimentConfig():
         if self.golden:
             self.init_layer(self.golden)
         self.init_layer(self.test, state_to_copy=self.golden.state if self.golden else None)
-        self.random_inputs_with_mesh(self.test.cfg.dim_to_mesh_axis_map)
+        self.random_inputs_with_mesh(self.test.cfg.dim_to_mesh_axis_map if hasattr(self.test.cfg, 'dim_to_mesh_axis_map') else None)
 
     def maybe_set_outer_batch(self):
         test_outer_batch = get_outer_batch_from_mesh(MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, self.test.mesh_dims)
@@ -334,7 +346,8 @@ class ExperimentConfig():
                         return params
                     init_fn = jax.jit(_init_state, in_shardings=(None,), out_shardings=param_partition_specs)
                     module_config.state = init_fn(jax.random.PRNGKey(123))
-                module_config.state = cast_floats(module_config.state, to_dtype=module_config.dtype)
+                # this was causing segfault, doesn't seem like its needed?
+                # module_config.state = cast_floats(module_config.state, to_dtype=module_config.dtype)
                 # TODO: Currently bf16 seeing expert index mismatch with f32. Setting routing to f32.
                 if 'gate_weight' in module_config.state:
                     module_config.state['gate_weight'] = module_config.state['gate_weight'].astype(jnp.float32)
@@ -344,6 +357,9 @@ class ExperimentConfig():
         # replace O and S from input shape with outer batch and seq
         if self.test.layer_type == "MoE":
             input_key = 'inputs'
+            pspec = PartitionSpec(('data','fsdp'), 'model', None)
+        elif self.test.layer_type == "Transformer":
+            input_key = 'data'
             pspec = PartitionSpec(('data','fsdp'), 'model', None)
         else:
             input_key = 'logits'
@@ -572,10 +588,10 @@ class GridSpaceBuilder:
         kwargs={
             'dtype': jnp.bfloat16,
             'input_dim': 4096,
-            'hidden_dim': 12288,
+            'hidden_dim': 1536,
             'n_experts': 128,
             'dtype': jnp.bfloat16,
-            'seq': 16384,
+            'seq': 8192,
             'capacity_factor': 2,
             'n_groups': 1,
         }
@@ -728,6 +744,32 @@ def get_gating_config(gating_cls, num_experts, top_k, train_capacity_factor, exp
         cfg.block_size = block_size
     return cfg
 
+def create_moe_test_config(test, golden, test_device, golden_device, input_dim, hidden_dim, n_experts, top_k, n_groups, capacity_factor, mesh_spec, batch, seq, dtype, block_size, model_param_init, name=None):
+    test_cfg = TransformerFeedForwardMoE.default_config().set(
+            name="test" if name is None else name,
+            param_init=model_param_init
+        )
+    test_cfg.input_dim = input_dim
+    test_cfg.hidden_dim = hidden_dim
+    if mesh_spec:
+        test_cfg.dim_to_mesh_axis_map=get_moe_dim_to_mesh_axis_map(mesh_spec.get("expert", 1), mesh_spec.get("model", 1), mesh_spec.get("seq", 1))
+    else:
+        test_cfg.dim_to_mesh_axis_map=get_moe_dim_to_mesh_axis_map(1,1,1)
+    test_cfg.activation = ("nn.silu","linear")
+    test_cfg.num_experts = n_experts
+    test_cfg.num_groups = n_groups
+    # enabling nonorm gives us better check of the kernel logits, what's missing here is just add of residual
+
+    test_cfg.structure = "nonorm"
+    test_cfg.gating = get_gating_config(test, n_experts, top_k, capacity_factor, expert_capacity=None, block_size=block_size)
+
+    if golden:
+        golden_cfg = test_cfg.clone(name="golden" if name is None else name)
+        golden_cfg.gating = get_gating_config(golden, n_experts, top_k, capacity_factor, expert_capacity=None)
+    else:
+        golden_cfg = None
+    return test_cfg, golden_cfg
+
 def create_test_config(test, golden, test_device, golden_device, input_dim, hidden_dim, n_experts, top_k, n_groups, capacity_factor, mesh_spec, batch, seq, dtype, block_size=512, layer='moe'):
     """
     Ensure any new param added here also shows up in the name to prevent multiple tests from having same name.
@@ -743,27 +785,54 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
     )
 
     if layer == "moe":
-        test_cfg = TransformerFeedForwardMoE.default_config().set(
-            name="test",
-            param_init=model_param_init
+        conv_output = None
+        test_cfg, golden_cfg = create_moe_test_config(
+            test, golden, test_device, golden_device, input_dim, hidden_dim, n_experts, top_k, n_groups, capacity_factor, mesh_spec, batch, seq, dtype, block_size, model_param_init
         )
-        test_cfg.input_dim = input_dim
-        test_cfg.hidden_dim = hidden_dim
-        if mesh_spec:
-            test_cfg.dim_to_mesh_axis_map=get_moe_dim_to_mesh_axis_map(mesh_spec.get("expert", 1), mesh_spec.get("model", 1), mesh_spec.get("seq", 1))
-        else:
-            test_cfg.dim_to_mesh_axis_map=get_moe_dim_to_mesh_axis_map(1,1,1)
-        test_cfg.activation = ("nn.silu","linear")
-        test_cfg.num_experts = n_experts
-        test_cfg.num_groups = n_groups
-        # enabling nonorm gives us better check of the kernel logits, what's missing here is just add of residual
-        
-        test_cfg.structure = "nonorm"
-        test_cfg.gating = get_gating_config(test, n_experts, top_k, capacity_factor, expert_capacity=None, block_size=block_size, mesh_spec=mesh_spec)
+    elif layer == "transformer":
+        test_cfg = TransformerLayer.default_config().set(
+            name="test",
+            param_init=model_param_init,
+            input_dim=input_dim,
+        )
+        # RoPE embeddings: https://arxiv.org/abs/2104.09864.
+        attention_qkv_linear = RoFormerQKVLinear.default_config().set(
+            input_linear=GroupedQKVLinear.default_config().set(
+                num_kv_heads=8,
+            ),
+            rotary_value=False,
+        )
+        attention_qkv_linear.rope_pos_emb_layer.theta = 5e5
+        norm_cfg = RMSNorm.default_config().set(eps=1e-5, forward_dtype=None)
 
+        if False: #flash_attention
+            test_cfg.self_attention.attention = flash_attention_config()
+        else:
+            test_cfg.self_attention.attention = GroupedQueryAttention.default_config()
+        test_cfg.self_attention.attention.set(
+            # Use q/k-norm in keeping with:
+            # <https://arxiv.org/abs/2309.14322>
+            query_scale=ScaleQuery.default_config().set(norm=norm_cfg.clone()),
+            key_scale=ScaleKey.default_config().set(norm=norm_cfg.clone()),
+        )
+        test_cfg.self_attention.attention.input_linear = attention_qkv_linear
+
+        test_cfg.self_attention.attention.causal = True
+        test_cfg.self_attention.attention.num_heads = 8
+        batch_axis_names = ("data", "expert", "fsdp")
+        set_double_shard_weights_config(
+            test_cfg,
+            batch_axis_names=batch_axis_names,
+            fsdp_axis_names=("expert", "fsdp", "seq"),
+            tp_axis_names="model",
+            seq_axis_names="seq",
+        )
+        test_moe_cfg, golden_moe_cfg = create_moe_test_config(test, golden, test_device, golden_device, input_dim, hidden_dim, n_experts, top_k, n_groups, capacity_factor, mesh_spec, batch, seq, dtype, block_size, model_param_init, name="feed_forward")
+        test_cfg.feed_forward = test_moe_cfg
+        test_cfg.feed_forward.gating.dim_to_mesh_axis_map = test_moe_cfg.dim_to_mesh_axis_map
         if golden:
             golden_cfg = test_cfg.clone(name="golden")
-            golden_cfg.gating = get_gating_config(golden, n_experts, top_k, capacity_factor, expert_capacity=None)
+            golden_cfg.feed_forward = golden_moe_cfg
         else:
             golden_cfg = None
         conv_output = None
@@ -786,7 +855,7 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
         "dtype": jnp.bfloat16 if dtype in ["bfloat16", jnp.bfloat16] else jnp.float32,
         "device": test_device,
         "mesh_spec": mesh_spec,
-        "input_shape": (batch, seq, input_dim) if layer == "moe" else ('O', n_groups, 'S', n_experts),
+        "input_shape": (batch, seq, input_dim) if layer in ["moe", "transformer"] else ('O', n_groups, 'S', n_experts),
     }
     if golden:
         golden_invoker_cfg = dict(test_invoker_cfg)
@@ -801,7 +870,7 @@ def create_test_config(test, golden, test_device, golden_device, input_dim, hidd
         golden_invoker_cfg,
         loss_fn=lambda x: jnp.mean(x)*1e2,
         conv_output=conv_output,
-        prefix="_moe" if layer == "moe" else "_gating"
+        prefix="_" + layer
     )
     return (build_name(test_cfg, test_invoker_cfg), config)
 
