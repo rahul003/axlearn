@@ -2801,7 +2801,15 @@ class TransformerAttentionLayer(BaseLayer):
             skip_input = target  # pre-norm: where normalization happens within the residual part.
             norm_target = self.norm(target)
             # b, s/tp, h
-            norm_target = with_sharding_constraint(norm_target, PartitionSpec(("data","fsdp"), ("expert", "seq"), None))
+
+            # TODO: remove this
+            # this annotation currently helps with tests
+            mesh = thread_resources.env.physical_mesh
+            if mesh.shape["seq"] > 1:
+                norm_target = with_sharding_constraint(norm_target, PartitionSpec(("data","fsdp"), ("expert", "seq"), None))
+            else:
+                norm_target = with_sharding_constraint(norm_target, PartitionSpec(("data","fsdp"), None, None))
+
             # b,s,h
             atten_state, atten_output = attention_thunk(norm_target)
             # b,s/cp, h
