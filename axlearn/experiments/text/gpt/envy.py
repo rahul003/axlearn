@@ -390,8 +390,13 @@ def _generate_trn2_custom_configs(
             )
             trn2_module_modifications.append(mcm)
 
-        input_norm_partition = "model" if TP_DEGREE >= SEQ_DEGREE else "seq"
-        output_norm_partition = None if TP_DEGREE >= SEQ_DEGREE else "seq"
+        # verify after consolidating with tp+fsdp jobs
+        if SEQ_DEGREE > 1:
+            input_norm_partition = ('expert', 'seq', 'model')
+            output_norm_partition = ('expert', 'seq', 'model')
+        else:
+            input_norm_partition = "model"
+            output_norm_partition = None
 
         trn2_partition_spec_modifications.append(
             PartitionSpecModifier.default_config().set(
