@@ -11,7 +11,6 @@ export TEST_SUITE=${2:-"presubmit"}
 export TEST_LOG_DIR=${3:-"test_artifacts/shell"}
 export GOLDENS_DIR=${4:-"/fsx/huilgolr/axlearn/test_goldens"}
 export JAX_COMPILATION_CACHE_DIR=${5:-"test_artifacts/shell_jax_cc"}
-
 rm -rf $JAX_COMPILATION_CACHE_DIR
 rm -rf $TEST_LOG_DIR
 
@@ -26,7 +25,7 @@ export NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
 mkdir -p "$TEST_ARTIFACTS_PATH"
 
 export USE_CACHED_GOLDENS=1
-export CACHE_GOLDENS=1
+export CACHE_GOLDENS=0
 export USE_SHARDMAP_FFN=1
 export NEURON_HLO_ANALYZER=1
 export XLA_FLAGS="--xla_cpu_use_thunk_runtime=false --xla_force_host_platform_device_count=64 --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives"

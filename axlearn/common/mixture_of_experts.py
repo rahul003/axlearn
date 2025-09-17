@@ -1906,7 +1906,9 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
             )
         group_len = num_tokens // num_groups
         x = x.reshape([outer_batch, num_groups, group_len, cfg.input_dim])
-        x = with_sharding_constraint(x, PartitionSpec(("data", "fsdp"), "expert", None))
+        # TODO: does this need change for some cases?
+        # AG logits
+        x = with_sharding_constraint(x, PartitionSpec(("data", "fsdp"), None, None))
 
         with jax.named_scope("router"):
             x_fp32 = x.astype(jnp.float32)

@@ -360,7 +360,7 @@ class ExperimentConfig():
             pspec = PartitionSpec(('data','fsdp'), 'model', None)
         elif self.test.layer_type == "Transformer":
             input_key = 'data'
-            pspec = PartitionSpec(('data','fsdp'), 'model', None)
+            pspec = PartitionSpec(('data','fsdp'), ('expert', 'seq', 'model'), None)
         else:
             input_key = 'logits'
             pspec = dim_to_mesh_axis_map["ogse"]

@@ -1818,8 +1818,8 @@ class MultiheadAttention(BaseLayer):
         mesh = thread_resources.env.physical_mesh 
         if mesh.shape["seq"] > 1:
             q_proj = with_sharding_constraint(q_proj, PartitionSpec(("data", "fsdp"), ("expert", "seq"), "model", None))
-            k_proj = with_sharding_constraint(k_proj, PartitionSpec(("data", "fsdp"), None, "model", None))
-            v_proj = with_sharding_constraint(v_proj, PartitionSpec(("data", "fsdp"), None, "model", None))
+            k_proj = with_sharding_constraint(k_proj, PartitionSpec(("data", "fsdp"), ("expert", "seq"), "model", None))
+            v_proj = with_sharding_constraint(v_proj, PartitionSpec(("data", "fsdp"), ("expert", "seq"), "model", None))
 
         if mode == ForwardMode.FORWARD:
             new_cached_states = dict()
@@ -1871,6 +1871,10 @@ class MultiheadAttention(BaseLayer):
         if segment_ids is not None:
             assert mode == ForwardMode.FORWARD, "segment_ids must be None in inference."
             attention_logit_biases += SegmentIdAttentionBias(segment_ids)
+        # AG kv proj
+        if mesh.shape["seq"] > 1:
+            k_proj = with_sharding_constraint(k_proj, PartitionSpec(("data", "fsdp"), None, "model", None))
+            v_proj = with_sharding_constraint(v_proj, PartitionSpec(("data", "fsdp"), None, "model", None))
         context, probs = self._compute_attention(
             mode=mode,
             q_proj=q_proj,
@@ -1878,10 +1882,10 @@ class MultiheadAttention(BaseLayer):
             v_proj=v_proj,
             attention_logit_biases=attention_logit_biases,
         )
-
+        
         if mesh.shape["seq"] > 1:
-            context = with_sharding_constraint(context, PartitionSpec(("data", "fsdp"), ("seq", "expert"), "model", None))
-            probs = with_sharding_constraint(probs, PartitionSpec(("data", "fsdp"), "model", ("seq","expert"), None))
+            context = with_sharding_constraint(context, PartitionSpec(("data", "fsdp"), ("expert", "seq"), "model", None))
+            probs = with_sharding_constraint(probs, PartitionSpec(("data", "fsdp"), "model", ("expert", "seq"), None))
 
         self.vlog(3, "atten.prob=%s", probs[0, 0, 0, :])
         self.vlog(3, "atten.context=%s", context.sum())
@@ -1889,7 +1893,7 @@ class MultiheadAttention(BaseLayer):
         # [batch, target_length, output_dim].
         o_proj = self.o_proj(context)
         if mesh.shape["seq"] > 1:
-            o_proj = with_sharding_constraint(o_proj, PartitionSpec(("data", "fsdp"), ("seq", "expert"), None))
+            o_proj = with_sharding_constraint(o_proj, PartitionSpec(("data", "fsdp"), ("expert", "seq"), None))
 
         outputs = self._remat_name(o_proj, "o_proj")
         self._add_tensor_stats("o_proj_outputs", outputs)
@@ -2796,8 +2800,13 @@ class TransformerAttentionLayer(BaseLayer):
         if cfg.structure == "prenorm":
             skip_input = target  # pre-norm: where normalization happens within the residual part.
             norm_target = self.norm(target)
+            # b, s/tp, h
+            norm_target = with_sharding_constraint(norm_target, PartitionSpec(("data","fsdp"), ("expert", "seq"), None))
+            # b,s,h
             atten_state, atten_output = attention_thunk(norm_target)
+            # b,s/cp, h
             data = skip_input + self.stochastic_depth(self.dropout(atten_output.data))
+            # b, s/tp, h + # b, s/cp, h
         elif cfg.structure == "postnorm":
             # This is the structure used by the original Transformer, BERT, and RoBERTa.
             atten_state, atten_output = attention_thunk(target)

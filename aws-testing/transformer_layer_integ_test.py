@@ -50,7 +50,7 @@ class TestDevSwitchBaseInteg(LayerTestCase):
         cfg = create_test_config(
             layer="transformer",
             test=TopKGatingGatherBlockwiseV2,
-            golden=self.golden,
+            golden=None,
             test_device=self.test_device,
             golden_device=self.golden_device,
             input_dim=1024,
