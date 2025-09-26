@@ -101,7 +101,7 @@ MAX_SEQUENCE_LENGTH = {
     "Switch-Large": 8192,
     "Switch-XXL": 8192,
     "Mistral-toy": 256,
-    "Mistral-8x7B": 2048,
+    "Mistral-8x7B": 8192,
     "Mistral-8x20B": 8192,
     "Mistral-16x10B": 8192,
 }
@@ -173,6 +173,7 @@ def get_moe_dim_to_mesh_axis_map(ep_degree_local, tp_degree, cp_degree):
         # "oehx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, TP_AXIS_NAMES, None),
         "oexx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
         "oxxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
+        "oxxe": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, EP_AXIS_NAMES),
         "oxe": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
         "oxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None),
         # "hoex": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None),
