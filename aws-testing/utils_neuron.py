@@ -327,6 +327,9 @@ class ExperimentConfig():
     def init_layer(self, module_config, state_to_copy=None):
         devices = jax.devices(module_config.device)[:module_config.num_devices]
         module_config.mesh = Mesh(mesh_utils.create_device_mesh(module_config.mesh_dims, devices=devices), MESH_AXIS_NAMES) 
+        print(module_config.mesh)
+        print(module_config.mesh.devices)
+        
         with module_config.mesh:
             with jax.default_device(devices[0]):
                 module_config.layer = module_config.cfg.instantiate(parent=None) 

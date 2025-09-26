@@ -57,21 +57,22 @@ class TestDev150bGatingUnit(GatingTestCase):
         cfg = create_test_config(
             layer="gating",
             test=TopKGatingGatherBlockwiseV2,
-            golden=None,
+            golden=TopKGatingGatherBlockwise,
             golden_device="cpu",
             test_device="cpu",
-            input_dim=16,
-            hidden_dim=16,
+            input_dim=1024,
+            hidden_dim=4096,
             n_experts=64,
             n_groups=1,
             top_k=1,
             capacity_factor=1,
-            mesh_spec={"fsdp": -1, "model": 1, "seq": 16, "expert": 4},
+            mesh_spec={"fsdp": -1, "model": 4, "seq": 4, "expert": 4},
             batch=2,
-            seq=512,
+            seq=32,
+            block_size=1,
             dtype=jnp.bfloat16,
         )[1]
-        self.helper_blockwise_gating(cfg)
+        self.helper_blockwise_gating_v2_vs_v1(cfg)
 
     @unittest.skip("skip gather")
     def test_unit_fwd_gather(self):
