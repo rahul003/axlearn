@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="3" time="43.703" timestamp="2025-09-02T19:24:52.334192+00:00" hostname="ip-10-0-4-121"><testcase classname="aws-testing.moe_layer_integ_test.TestDevSwitchBaseInteg" name="test_fwdbwd_blockwise_16experts" time="10.483"><failure message="RuntimeError: Unknown backend neuron. Available backends are ['cpu']">aws-testing/moe_layer_integ_test.py:196: in test_fwdbwd_blockwise_16experts
+    self.helper_bwd(self.create_cfg_16experts(test=TopKGatingGatherBlockwiseV2))
+aws-testing/test_cases.py:121: in helper_bwd
+    cfg.instantiate(unittest.TestCase.id(self))
+aws-testing/utils_neuron.py:300: in instantiate
+    self.init_layer(self.test, state_to_copy=self.golden.state if self.golden else None)
+aws-testing/utils_neuron.py:316: in init_layer
+    devices = jax.devices(module_config.device)[:module_config.num_devices]
+../jaxmoe/lib/python3.10/site-packages/jax/_src/xla_bridge.py:1115: in devices
+    return get_backend(backend).devices()
+../jaxmoe/lib/python3.10/site-packages/jax/_src/xla_bridge.py:1049: in get_backend
+    return _get_backend_uncached(platform)
+../jaxmoe/lib/python3.10/site-packages/jax/_src/xla_bridge.py:1037: in _get_backend_uncached
+    raise RuntimeError(
+E   RuntimeError: Unknown backend neuron. Available backends are ['cpu']</failure></testcase><testcase classname="aws-testing.moe_layer_integ_test.TestDevSwitchBaseInteg" name="test_fwdbwd_blockwise_ep16" time="5.591"><failure message="RuntimeError: Unknown backend neuron. Available backends are ['cpu']">aws-testing/moe_layer_integ_test.py:188: in test_fwdbwd_blockwise_ep16
+    self.helper_bwd(self.create_cfg(test=TopKGatingGatherBlockwiseV2))
+aws-testing/test_cases.py:121: in helper_bwd
+    cfg.instantiate(unittest.TestCase.id(self))
+aws-testing/utils_neuron.py:300: in instantiate
+    self.init_layer(self.test, state_to_copy=self.golden.state if self.golden else None)
+aws-testing/utils_neuron.py:316: in init_layer
+    devices = jax.devices(module_config.device)[:module_config.num_devices]
+../jaxmoe/lib/python3.10/site-packages/jax/_src/xla_bridge.py:1115: in devices
+    return get_backend(backend).devices()
+../jaxmoe/lib/python3.10/site-packages/jax/_src/xla_bridge.py:1049: in get_backend
+    return _get_backend_uncached(platform)
+../jaxmoe/lib/python3.10/site-packages/jax/_src/xla_bridge.py:1037: in _get_backend_uncached
+    raise RuntimeError(
+E   RuntimeError: Unknown backend neuron. Available backends are ['cpu']</failure></testcase><testcase classname="aws-testing.moe_layer_integ_test.TestDevSwitchBaseInteg" name="test_fwdbwd_blockwise_ep64" time="5.193"><failure message="RuntimeError: Unknown backend neuron. Available backends are ['cpu']">aws-testing/moe_layer_integ_test.py:192: in test_fwdbwd_blockwise_ep64
+    self.helper_bwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwiseV2))
+aws-testing/test_cases.py:121: in helper_bwd
+    cfg.instantiate(unittest.TestCase.id(self))
+aws-testing/utils_neuron.py:300: in instantiate
+    self.init_layer(self.test, state_to_copy=self.golden.state if self.golden else None)
+aws-testing/utils_neuron.py:316: in init_layer
+    devices = jax.devices(module_config.device)[:module_config.num_devices]
+../jaxmoe/lib/python3.10/site-packages/jax/_src/xla_bridge.py:1115: in devices
+    return get_backend(backend).devices()
+../jaxmoe/lib/python3.10/site-packages/jax/_src/xla_bridge.py:1049: in get_backend
+    return _get_backend_uncached(platform)
+../jaxmoe/lib/python3.10/site-packages/jax/_src/xla_bridge.py:1037: in _get_backend_uncached
+    raise RuntimeError(
+E   RuntimeError: Unknown backend neuron. Available backends are ['cpu']</failure></testcase></testsuite></testsuites>

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="1" tests="2" time="209.911" timestamp="2025-09-30T22:19:20.168199+00:00" hostname="ip-10-0-139-165"><testcase classname="aws-testing.moe_layer_integ_test.TestLayerOnTrn" name="test_fwdbwd_blockwisegather" time="0.000"><skipped type="pytest.skip" message="skip v1 tests as v2 is the focus">/fsx/yoamol/jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:303: skip v1 tests as v2 is the focus</skipped></testcase><testcase classname="aws-testing.moe_layer_integ_test.TestLayerOnTrn" name="test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16" time="92.520"><failure message="AssertionError: Only support block_size in [128, 256, 512, 1024], found 64">jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+
+The above exception was the direct cause of the following exception:
+aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+    self.helper_bwd(cfg)
+aws-testing/test_cases.py:134: in helper_bwd
+    test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+aws-testing/test_cases.py:116: in test_bwd_call
+    (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+aws-testing/test_cases.py:114: in loss_fn
+    output, aux = self._fwd_call(test_layer, state, test_inputs)
+aws-testing/test_cases.py:15: in _fwd_call
+    return F(
+axlearn/common/module.py:1096: in functional
+    method_outputs, output_collection = fn(*args, **kwargs)
+axlearn/common/module.py:1037: in __call__
+    method_outputs = self.method_fn(*args, **kwargs)
+axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+    return fn(*args, **kwargs)
+axlearn/common/module.py:598: in wrap_method_fn
+    return method_fn_in_context(self, *args, **kwargs)
+axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+    return fn(*args, **kwargs)
+axlearn/common/traceback_util.py:168: in in_context_exception_wrapper
+    return fn(*args, **kwargs)
+axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+    return fn(*args, **kwargs)
+axlearn/common/module.py:560: in _call_method_in_context
+    return method_fn(module, *args, **kwargs)
+axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+    return fn(*args, **kwargs)
+axlearn/common/mixture_of_experts.py:1697: in forward
+    x = self._dispatch_and_combine(inputs)
+axlearn/common/mixture_of_experts.py:1914: in _dispatch_and_combine
+    x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
+axlearn/common/mixture_of_experts.py:1857: in _dispatch_and_combine_with_gather_blockwise_gating
+    outputs = partitioned_blockwise_mm(
+axlearn/common/mixture_of_experts.py:159: in blockwise_mlp
+    output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+axlearn/common/neuron_blockwise_mlp.py:88: in blockwise_mm
+    out, _ = _blockwise_mm_fwd(hidden_states, expert_affinities_masked, gate_up_weight,
+axlearn/common/neuron_blockwise_mlp.py:117: in _blockwise_mm_fwd
+    out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+neuronxcc/nki/compile.py:103: in neuronxcc.nki.compile.GenericKernel.__call__
+    ???
+neuronxcc/nki/_jax.py:64: in neuronxcc.nki._jax.JAXKernel.__call__
+    ???
+neuronxcc/nki/_jax.py:103: in neuronxcc.nki._jax.nki_call_eval
+    ???
+neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:289: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+    ???
+neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:290: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+    ???
+neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:301: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config_with_boundargs
+    ???
+neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:337: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+    ???
+neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:339: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+    ???
+neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:347: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+    ???
+neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:367: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+    ???
+neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:352: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+    ???
+../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1619: in blockwise_mm_selective_cp
+    blockwise_mm_baseline_shard_hidden(
+neuronxcc/nki/compiler/backends/neuron/TraceContext.py:114: in neuronxcc.nki.compiler.backends.neuron.TraceContext.TraceContext.call
+    ???
+../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1666: in blockwise_mm_baseline_shard_hidden
+    check_blockwise_mm_kernel_compatibility(H, B, I_TP)
+../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:68: in check_blockwise_mm_kernel_compatibility
+    assert block_size in available_block_sizes, f"Only support block_size in {available_block_sizes}, found {block_size}"
+E   AssertionError: Only support block_size in [128, 256, 512, 1024], found 64</failure></testcase></testsuite></testsuites>

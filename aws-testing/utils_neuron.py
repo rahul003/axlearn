@@ -406,6 +406,7 @@ class GridSpaceBuilder:
         tp_4_mesh_spec = {"fsdp":-1, "model":4}
         tp_16_mesh_spec = {"fsdp":-1, "model":16}
         tp_64_mesh_spec = {"fsdp":-1, "model":64}
+        ep_64_mesh_spec = {"fsdp":-1, "expert":64}
         kwargs={
             'dtype': jnp.bfloat16,
             'batch': 16,
@@ -427,6 +428,10 @@ class GridSpaceBuilder:
             # llama4 scout
             self.create_test_config(
                 **kwargs, input_dim=5120, hidden_dim=8192, n_experts=16, top_k=1, n_groups=1, capacity_factor=4, seq=4096, mesh_spec=tp_4_mesh_spec,
+            ),
+            # gpt-oss main config
+            self.create_test_config(
+                **kwargs, input_dim=2880, hidden_dim=2880, n_experts=128, top_k=4, n_groups=64, capacity_factor=2, seq=4096, mesh_spec=ep_64_mesh_spec,
             ),
         ])
         
@@ -489,6 +494,36 @@ class GridSpaceBuilder:
                 )
             )
             
+        return grid_space
+
+    def build_grid_space_gpt_oss(self):
+        kwargs={
+            'dtype': jnp.bfloat16,
+            'input_dim': 2880,
+            'hidden_dim': 2880,
+            'n_experts': 128,
+            'capacity_factor': 2,
+            'seq': 4096,
+        }
+        grid_space = []
+        
+        mesh_configs = [
+            # TP=4 configurations
+            ({"fsdp": -1, "model": 4}, 16, 1),
+            
+            # EP=64 configurations  
+            ({"fsdp": -1, "expert": 64}, 16, 64),
+            
+            # Mixed TP+EP configurations
+            ({"fsdp": -1, "model": 4, "expert": 16}, 16, 16),
+        ]
+        
+        for mesh_spec, batch, n_groups in mesh_configs:
+            for top_k in [1, 2, 4, 8]:
+                test_kwargs = kwargs.copy()
+                test_kwargs['n_groups'] = n_groups
+                grid_space.append(self.create_test_config(**test_kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
+        
         return grid_space
 
     def build_grid_space_input_hidden(self, input_dim=2048, hidden_dim=7168, min_seq=8*1024, max_seq=None, min_tp=None, max_tp=None, max_E=None, dtype=jnp.bfloat16):
@@ -990,6 +1025,8 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
         tests = builder.build_grid_space_switch_xxl()
     elif test_suite == 'llama4-maverick':
         tests = builder.build_grid_space_llama4_maverick()
+    elif test_suite == 'gpt-oss':
+        tests = builder.build_grid_space_gpt_oss()
     else:
         raise ValueError(f"Unknown test suite: {test_suite}")
 

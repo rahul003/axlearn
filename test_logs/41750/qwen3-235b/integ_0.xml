@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1" time="108.466" timestamp="2025-09-04T22:55:49.993482+00:00" hostname="ip-10-0-133-53"><testcase classname="" name="aws-testing.moe_layer_integ_test" time="0.000"><error message="collection failure">aws-testing/moe_layer_integ_test.py:29: in &lt;module&gt;
+    class TestLayerOnTrn(LayerTestCase):
+aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+aws-testing/utils_neuron.py:893: in get_training_configs
+    tests = builder.build_grid_space_qwen3_235b()
+aws-testing/utils_neuron.py:623: in build_grid_space_qwen3_235b
+    grid_space.append(self.create_test_config(**kwargs, n_groups=64, top_k=top_k, batch=batch, mesh_spec=mesh_spec))
+E   TypeError: utils_neuron.GridSpaceBuilder.create_test_config() got multiple values for keyword argument 'n_groups'</error></testcase></testsuite></testsuites>

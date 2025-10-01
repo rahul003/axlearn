@@ -1,0 +1,536 @@
++ srun -l setup_node.sh /fsx/huilgolr/jul-end-artifacts/
+0: + SECONDS=0
+0: + sudo apt-get update -
+0: E: The repository 'https://apt.repos.neuron.amazonaws.com noble Release' does not have a Release file.
+0: + sudo apt install -y software-properties-common
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: software-properties-common is already the newest version (0.99.49.3).
+0: The following packages were automatically installed and are no longer required:
+0:   amd64-microcode bpfcc-tools bpftrace ieee-data libbpfcc libclang-cpp18
+0:   libclang1-18 libllvm18 microcode-initrd python3-bpfcc python3-netaddr
+0:   ubuntu-kernel-accessories
+0: Use 'sudo apt autoremove' to remove them.
+0: 0 upgraded, 0 newly installed, 0 to remove and 30 not upgraded.
+0: + sudo add-apt-repository -y ppa:deadsnakes/ppa
+0: Hit:1 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble InRelease
+0: Hit:2 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble-updates InRelease
+0: Hit:3 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble-backports InRelease
+0: Hit:4 https://download.docker.com/linux/ubuntu noble InRelease
+0: Hit:5 http://security.ubuntu.com/ubuntu noble-security InRelease
+0: Hit:6 https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu noble InRelease
+0: Ign:7 https://apt.repos.neuron.amazonaws.com noble InRelease
+0: Hit:8 https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble InRelease
+0: Err:9 https://apt.repos.neuron.amazonaws.com noble Release
+0:   404  Not Found [IP: 13.249.74.112 443]
+0: Reading package lists...
+0: E: The repository 'https://apt.repos.neuron.amazonaws.com noble Release' does not have a Release file.
+0: Repository: 'Types: deb
+0: URIs: https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu/
+0: Suites: noble
+0: Components: main
+0: '
+0: Description:
+0: This PPA contains more recent Python versions packaged for Ubuntu.
+0: 
+0: Disclaimer: there's no guarantee of timely updates in case of security problems or other issues. If you want to use them in a security-or-otherwise-critical environment (say, on a production server), you do so at your own risk.
+0: 
+0: Update Note
+0: ===========
+0: Please use this repository instead of ppa:fkrull/deadsnakes.
+0: 
+0: Reporting Issues
+0: ================
+0: 
+0: Issues can be reported in the master issue tracker at:
+0: https://github.com/deadsnakes/issues/issues
+0: 
+0: Supported Ubuntu and Python Versions
+0: ====================================
+0: 
+0: - Ubuntu 20.04 (focal) Python3.5 - Python3.7, Python3.9 - Python3.13
+0: - Ubuntu 22.04 (jammy) Python3.7 - Python3.9, Python3.11 - Python3.13
+0: - Ubuntu 24.04 (noble) Python3.7 - Python3.11, Python3.13
+0: - Note: Python2.7 (focal, jammy), Python 3.8 (focal), Python 3.10 (jammy), Python3.12 (noble) are not provided by deadsnakes as upstream ubuntu provides those packages.
+0: 
+0: Why some packages aren't built:
+0: - Note: for focal, older python versions require libssl<1.1 so they are not currently built
+0: - Note: for jammy and noble, older python versions requre libssl<3 so they are not currently built
+0: - If you need these, reach out to asottile to set up a private ppa
+0: 
+0: The packages may also work on other versions of Ubuntu or Debian, but that is not tested or supported.
+0: 
+0: Packages
+0: ========
+0: 
+0: The packages provided here are loosely based on the debian upstream packages with some modifications to make them more usable as non-default pythons and on ubuntu.  As such, the packages follow debian's patterns and often do not include a full python distribution with just `apt install python#.#`.  Here is a list of packages that may be useful along with the default install:
+0: 
+0: - `python#.#-dev`: includes development headers for building C extensions
+0: - `python#.#-venv`: provides the standard library `venv` module
+0: - `python#.#-distutils`: provides the standard library `distutils` module
+0: - `python#.#-lib2to3`: provides the `2to3-#.#` utility as well as the standard library `lib2to3` module
+0: - `python#.#-gdbm`: provides the standard library `dbm.gnu` module
+0: - `python#.#-tk`: provides the standard library `tkinter` module
+0: 
+0: Third-Party Python Modules
+0: ==========================
+0: 
+0: Python modules in the official Ubuntu repositories are packaged to work with the Python interpreters from the official repositories. Accordingly, they generally won't work with the Python interpreters from this PPA. As an exception, pure-Python modules for Python 3 will work, but any compiled extension modules won't.
+0: 
+0: To install 3rd-party Python modules, you should use the common Python packaging tools.  For an introduction into the Python packaging ecosystem and its tools, refer to the Python Packaging User Guide:
+0: https://packaging.python.org/installing/
+0: 
+0: Sources
+0: =======
+0: The package sources are available at:
+0: https://github.com/deadsnakes/
+0: 
+0: Nightly Builds
+0: ==============
+0: 
+0: For nightly builds, see ppa:deadsnakes/nightly https://launchpad.net/~deadsnakes/+archive/ubuntu/nightly
+0: More info: https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa
+0: Adding repository.
+0: Found existing deb entry in /etc/apt/sources.list.d/deadsnakes-ubuntu-ppa-noble.sources
+0: + sudo apt install -y python3.10
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: python3.10 is already the newest version (3.10.18-1+noble1).
+0: The following packages were automatically installed and are no longer required:
+0:   amd64-microcode bpfcc-tools bpftrace ieee-data libbpfcc libclang-cpp18
+0:   libclang1-18 libllvm18 microcode-initrd python3-bpfcc python3-netaddr
+0:   ubuntu-kernel-accessories
+0: Use 'sudo apt autoremove' to remove them.
+0: 0 upgraded, 0 newly installed, 0 to remove and 30 not upgraded.
+0: + sudo apt update
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: Hit:1 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble InRelease
+0: Hit:2 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble-updates InRelease
+0: Hit:3 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble-backports InRelease
+0: Hit:4 https://download.docker.com/linux/ubuntu noble InRelease
+0: Hit:5 http://security.ubuntu.com/ubuntu noble-security InRelease
+0: Ign:6 https://apt.repos.neuron.amazonaws.com noble InRelease
+0: Err:7 https://apt.repos.neuron.amazonaws.com noble Release
+0:   404  Not Found [IP: 13.249.74.14 443]
+0: Hit:8 https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu noble InRelease
+0: Hit:9 https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble InRelease
+0: Reading package lists...
+0: E: The repository 'https://apt.repos.neuron.amazonaws.com noble Release' does not have a Release file.
+0: + sudo apt install -y python3.10-venv python3.10-dev python3-pip
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: python3.10-venv is already the newest version (3.10.18-1+noble1).
+0: python3.10-dev is already the newest version (3.10.18-1+noble1).
+0: python3-pip is already the newest version (24.0+dfsg-1ubuntu1.3).
+0: The following packages were automatically installed and are no longer required:
+0:   amd64-microcode bpfcc-tools bpftrace ieee-data libbpfcc libclang-cpp18
+0:   libclang1-18 libllvm18 microcode-initrd python3-bpfcc python3-netaddr
+0:   ubuntu-kernel-accessories
+0: Use 'sudo apt autoremove' to remove them.
+0: 0 upgraded, 0 newly installed, 0 to remove and 30 not upgraded.
+0: + sudo apt-get -f install -y
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: The following packages were automatically installed and are no longer required:
+0:   amd64-microcode bpfcc-tools bpftrace ieee-data libbpfcc libclang-cpp18
+0:   libclang1-18 libllvm18 microcode-initrd python3-bpfcc python3-netaddr
+0:   ubuntu-kernel-accessories
+0: Use 'sudo apt autoremove' to remove them.
+0: 0 upgraded, 0 newly installed, 0 to remove and 30 not upgraded.
+0: + sudo apt-get install -y google-perftools
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: google-perftools is already the newest version (2.15-3build1).
+0: The following packages were automatically installed and are no longer required:
+0:   amd64-microcode bpfcc-tools bpftrace ieee-data libbpfcc libclang-cpp18
+0:   libclang1-18 libllvm18 microcode-initrd python3-bpfcc python3-netaddr
+0:   ubuntu-kernel-accessories
+0: Use 'sudo apt autoremove' to remove them.
+0: 0 upgraded, 0 newly installed, 0 to remove and 30 not upgraded.
+0: + ENV_DROP_DIR=/fsx/huilgolr/jul-end-artifacts/
+0: + RUNTIME='/fsx/huilgolr/jul-end-artifacts//aws-neuronx-runtime-lib-*.deb'
+0: + COLLECTIVES='/fsx/huilgolr/jul-end-artifacts//aws-neuronx-collectives-*.deb'
+0: + TOOLS='/fsx/huilgolr/jul-end-artifacts//aws-neuronx-tools-*.deb'
+0: + DKMS='/fsx/huilgolr/jul-end-artifacts//aws-neuronx-dkms_*.deb'
+0: + sudo dpkg -i /fsx/huilgolr/jul-end-artifacts//aws-neuronx-runtime-lib-2.x.30619.0-735d5ee25.deb /fsx/huilgolr/jul-end-artifacts//aws-neuronx-collectives-2.x.32119.0-9686b27ce.deb '/fsx/huilgolr/jul-end-artifacts//aws-neuronx-tools-*.deb'
+0: dpkg: error: cannot access archive '/fsx/huilgolr/jul-end-artifacts//aws-neuronx-tools-*.deb': No such file or directory
+0: + sudo dpkg -i /fsx/huilgolr/jul-end-artifacts//aws-neuronx-runtime-lib-2.x.30619.0-735d5ee25.deb /fsx/huilgolr/jul-end-artifacts//aws-neuronx-collectives-2.x.32119.0-9686b27ce.deb
+0: (Reading database ... 152834 files and directories currently installed.)
+0: Preparing to unpack .../aws-neuronx-runtime-lib-2.x.30619.0-735d5ee25.deb ...
+0: Unpacking aws-neuronx-runtime-lib (2.x.30619.0-735d5ee25) over (2.x.29632.0-5b11fddb8) ...
+0: Preparing to unpack .../aws-neuronx-collectives-2.x.32119.0-9686b27ce.deb ...
+0: Unpacking aws-neuronx-collectives (2.x.32119.0-9686b27ce) over (2.x.31306.0-76169865b) ...
+0: Setting up aws-neuronx-runtime-lib (2.x.30619.0-735d5ee25) ...
+0: Setting up aws-neuronx-collectives (2.x.32119.0-9686b27ce) ...
+0: ++ curl -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600'
+0:   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+0:                                  Dload  Upload   Total   Spent    Left  Speed
+0:   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    56  100    56    0     0  38888      0 --:--:-- --:--:-- --:--:-- 56000
+0: + TOKEN=AQAEAHeaTadmA8SdNmn-u_jMOAexZoxgmOvAyKDdlUcFqgKWiQ3ndw==
+0: ++ curl -H 'X-aws-ec2-metadata-token: AQAEAHeaTadmA8SdNmn-u_jMOAexZoxgmOvAyKDdlUcFqgKWiQ3ndw==' -s http://169.254.169.254/latest/meta-data/instance-id
+0: + INSTANCE_ID=i-0b9ef1faa2a4de5d5
+0: ++ hostname
+0: instance_id:i-0b9ef1faa2a4de5d5 hostname:ip-10-0-133-125
+0: runtime versions
+0: ===============================================
+0: Dependency versions
+0: ===============================================
+0: + echo 'instance_id:i-0b9ef1faa2a4de5d5 hostname:ip-10-0-133-125'
+0: + echo 'runtime versions'
+0: + echo ===============================================
+0: + echo 'Dependency versions'
+0: + echo ===============================================
+0: + grep neuron
+0: + apt list
+0: + grep installed
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: aws-neuronx-collectives/now 2.x.32119.0-9686b27ce amd64 [installed,local]
+0: aws-neuronx-devtools/now 2.0.15554.0 amd64 [installed,local]
+0: aws-neuronx-dkms/now 2.x.6276.0 all [installed,local]
+0: aws-neuronx-runtime-lib/now 2.x.30619.0-735d5ee25 amd64 [installed,local]
+0: aws-neuronx-tools/now 2.0.16698.0 amd64 [installed,local]
+0: Setup took 22 s
+0: + echo 'Setup took 22 s'
++ SUITE_ARG=switch-large
++ TEST_LOGDIR=test_artifacts/20251001_073556
++ GOLDENS_DIR=/fsx/huilgolr/axlearn/test_goldens
++ JAX_CC_DIR=test_jax_cc
++ '[' -z switch-large ']'
++ mkdir -p test_artifacts/20251001_073556
++ run_suite switch-large
++ suite=switch-large
++ echo 'Running test suite: switch-large'
+Running test suite: switch-large
++ mkdir -p test_artifacts/20251001_073556/switch-large
++ '[' switch-large = 150b ']'
++ srun -l ./aws-testing/unit_test.sh integ switch-large test_artifacts/20251001_073556 /fsx/huilgolr/axlearn/test_goldens test_jax_cc
++ tee test_artifacts/20251001_073556/switch-large/integ.log
+0: Splitting tests into 10 parts
+0: + TEST_SUITE_PART=0
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20251001_073556/switch-large/integ_0.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-10-01 10:51:57,236:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: collected 0 items / 1 error
+0: 
+0: ==================================== ERRORS ====================================
+0: _____________ ERROR collecting aws-testing/moe_layer_integ_test.py _____________
+0: aws-testing/moe_layer_integ_test.py:29: in <module>
+0:     class TestLayerOnTrn(LayerTestCase):
+0: aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+0:     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+0: aws-testing/utils_neuron.py:1013: in get_training_configs
+0:     tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16, max_E=128)
+0: aws-testing/utils_neuron.py:566: in build_grid_space_input_hidden
+0:     batch = batch_sizes[tp_degree]
+0: E   KeyError: 1
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20251001_073556/switch-large/integ_0.xml -
+0: =========================== short test summary info ============================
+0: ERROR aws-testing/moe_layer_integ_test.py - KeyError: 1
+0: !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+0: ========================= 1 error in 102.28s (0:01:42) =========================
+0: + status_part=2
+0: + status=2
+0: + set +x
+0: + TEST_SUITE_PART=1
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20251001_073556/switch-large/integ_1.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-10-01 10:53:20,891:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: collected 0 items / 1 error
+0: 
+0: ==================================== ERRORS ====================================
+0: _____________ ERROR collecting aws-testing/moe_layer_integ_test.py _____________
+0: aws-testing/moe_layer_integ_test.py:29: in <module>
+0:     class TestLayerOnTrn(LayerTestCase):
+0: aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+0:     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+0: aws-testing/utils_neuron.py:1013: in get_training_configs
+0:     tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16, max_E=128)
+0: aws-testing/utils_neuron.py:566: in build_grid_space_input_hidden
+0:     batch = batch_sizes[tp_degree]
+0: E   KeyError: 1
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20251001_073556/switch-large/integ_1.xml -
+0: =========================== short test summary info ============================
+0: ERROR aws-testing/moe_layer_integ_test.py - KeyError: 1
+0: !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+0: ============================== 1 error in 33.03s ===============================
+0: + status_part=2
+0: + status=4
+0: + set +x
+0: + TEST_SUITE_PART=2
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20251001_073556/switch-large/integ_2.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-10-01 10:53:56,832:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: collected 0 items / 1 error
+0: 
+0: ==================================== ERRORS ====================================
+0: _____________ ERROR collecting aws-testing/moe_layer_integ_test.py _____________
+0: aws-testing/moe_layer_integ_test.py:29: in <module>
+0:     class TestLayerOnTrn(LayerTestCase):
+0: aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+0:     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+0: aws-testing/utils_neuron.py:1013: in get_training_configs
+0:     tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16, max_E=128)
+0: aws-testing/utils_neuron.py:566: in build_grid_space_input_hidden
+0:     batch = batch_sizes[tp_degree]
+0: E   KeyError: 1
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20251001_073556/switch-large/integ_2.xml -
+0: =========================== short test summary info ============================
+0: ERROR aws-testing/moe_layer_integ_test.py - KeyError: 1
+0: !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+0: ============================== 1 error in 33.15s ===============================
+0: + status_part=2
+0: + status=6
+0: + set +x
+0: + TEST_SUITE_PART=3
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20251001_073556/switch-large/integ_3.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-10-01 10:54:34,065:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: collected 0 items / 1 error
+0: 
+0: ==================================== ERRORS ====================================
+0: _____________ ERROR collecting aws-testing/moe_layer_integ_test.py _____________
+0: aws-testing/moe_layer_integ_test.py:29: in <module>
+0:     class TestLayerOnTrn(LayerTestCase):
+0: aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+0:     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+0: aws-testing/utils_neuron.py:1013: in get_training_configs
+0:     tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16, max_E=128)
+0: aws-testing/utils_neuron.py:566: in build_grid_space_input_hidden
+0:     batch = batch_sizes[tp_degree]
+0: E   KeyError: 1
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20251001_073556/switch-large/integ_3.xml -
+0: =========================== short test summary info ============================
+0: ERROR aws-testing/moe_layer_integ_test.py - KeyError: 1
+0: !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+0: ============================== 1 error in 31.01s ===============================
+0: + status_part=2
+0: + status=8
+0: + set +x
+0: + TEST_SUITE_PART=4
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20251001_073556/switch-large/integ_4.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-10-01 10:55:08,029:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: collected 0 items / 1 error
+0: 
+0: ==================================== ERRORS ====================================
+0: _____________ ERROR collecting aws-testing/moe_layer_integ_test.py _____________
+0: aws-testing/moe_layer_integ_test.py:29: in <module>
+0:     class TestLayerOnTrn(LayerTestCase):
+0: aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+0:     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+0: aws-testing/utils_neuron.py:1013: in get_training_configs
+0:     tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16, max_E=128)
+0: aws-testing/utils_neuron.py:566: in build_grid_space_input_hidden
+0:     batch = batch_sizes[tp_degree]
+0: E   KeyError: 1
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20251001_073556/switch-large/integ_4.xml -
+0: =========================== short test summary info ============================
+0: ERROR aws-testing/moe_layer_integ_test.py - KeyError: 1
+0: !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+0: ============================== 1 error in 27.87s ===============================
+0: + status_part=2
+0: + status=10
+0: + set +x
+0: + TEST_SUITE_PART=5
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20251001_073556/switch-large/integ_5.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-10-01 10:55:37,143:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: collected 0 items / 1 error
+0: 
+0: ==================================== ERRORS ====================================
+0: _____________ ERROR collecting aws-testing/moe_layer_integ_test.py _____________
+0: aws-testing/moe_layer_integ_test.py:29: in <module>
+0:     class TestLayerOnTrn(LayerTestCase):
+0: aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+0:     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+0: aws-testing/utils_neuron.py:1013: in get_training_configs
+0:     tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16, max_E=128)
+0: aws-testing/utils_neuron.py:566: in build_grid_space_input_hidden
+0:     batch = batch_sizes[tp_degree]
+0: E   KeyError: 1
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20251001_073556/switch-large/integ_5.xml -
+0: =========================== short test summary info ============================
+0: ERROR aws-testing/moe_layer_integ_test.py - KeyError: 1
+0: !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+0: ============================== 1 error in 31.67s ===============================
+0: + status_part=2
+0: + status=12
+0: + set +x
+0: + TEST_SUITE_PART=6
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20251001_073556/switch-large/integ_6.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-10-01 10:56:13,922:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: collected 0 items / 1 error
+0: 
+0: ==================================== ERRORS ====================================
+0: _____________ ERROR collecting aws-testing/moe_layer_integ_test.py _____________
+0: aws-testing/moe_layer_integ_test.py:29: in <module>
+0:     class TestLayerOnTrn(LayerTestCase):
+0: aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+0:     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+0: aws-testing/utils_neuron.py:1013: in get_training_configs
+0:     tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16, max_E=128)
+0: aws-testing/utils_neuron.py:566: in build_grid_space_input_hidden
+0:     batch = batch_sizes[tp_degree]
+0: E   KeyError: 1
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20251001_073556/switch-large/integ_6.xml -
+0: =========================== short test summary info ============================
+0: ERROR aws-testing/moe_layer_integ_test.py - KeyError: 1
+0: !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+0: ============================== 1 error in 34.05s ===============================
+0: + status_part=2
+0: + status=14
+0: + set +x
+0: + TEST_SUITE_PART=7
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20251001_073556/switch-large/integ_7.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-10-01 10:56:51,090:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: collected 0 items / 1 error
+0: 
+0: ==================================== ERRORS ====================================
+0: _____________ ERROR collecting aws-testing/moe_layer_integ_test.py _____________
+0: aws-testing/moe_layer_integ_test.py:29: in <module>
+0:     class TestLayerOnTrn(LayerTestCase):
+0: aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+0:     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+0: aws-testing/utils_neuron.py:1013: in get_training_configs
+0:     tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16, max_E=128)
+0: aws-testing/utils_neuron.py:566: in build_grid_space_input_hidden
+0:     batch = batch_sizes[tp_degree]
+0: E   KeyError: 1
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20251001_073556/switch-large/integ_7.xml -
+0: =========================== short test summary info ============================
+0: ERROR aws-testing/moe_layer_integ_test.py - KeyError: 1
+0: !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+0: ============================== 1 error in 34.52s ===============================
+0: + status_part=2
+0: + status=16
+0: + set +x
+0: + TEST_SUITE_PART=8
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20251001_073556/switch-large/integ_8.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-10-01 10:57:28,767:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: collected 0 items / 1 error
+0: 
+0: ==================================== ERRORS ====================================
+0: _____________ ERROR collecting aws-testing/moe_layer_integ_test.py _____________
+0: aws-testing/moe_layer_integ_test.py:29: in <module>
+0:     class TestLayerOnTrn(LayerTestCase):
+0: aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+0:     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+0: aws-testing/utils_neuron.py:1013: in get_training_configs
+0:     tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16, max_E=128)
+0: aws-testing/utils_neuron.py:566: in build_grid_space_input_hidden
+0:     batch = batch_sizes[tp_degree]
+0: E   KeyError: 1
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20251001_073556/switch-large/integ_8.xml -
+0: =========================== short test summary info ============================
+0: ERROR aws-testing/moe_layer_integ_test.py - KeyError: 1
+0: !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+0: ============================== 1 error in 34.60s ===============================
+0: + status_part=2
+0: + status=18
+0: + set +x
+0: + TEST_SUITE_PART=9
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20251001_073556/switch-large/integ_9.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-10-01 10:58:06,594:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: collected 0 items / 1 error
+0: 
+0: ==================================== ERRORS ====================================
+0: _____________ ERROR collecting aws-testing/moe_layer_integ_test.py _____________
+0: aws-testing/moe_layer_integ_test.py:29: in <module>
+0:     class TestLayerOnTrn(LayerTestCase):
+0: aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+0:     @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+0: aws-testing/utils_neuron.py:1013: in get_training_configs
+0:     tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16, max_E=128)
+0: aws-testing/utils_neuron.py:566: in build_grid_space_input_hidden
+0:     batch = batch_sizes[tp_degree]
+0: E   KeyError: 1
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20251001_073556/switch-large/integ_9.xml -
+0: =========================== short test summary info ============================
+0: ERROR aws-testing/moe_layer_integ_test.py - KeyError: 1
+0: !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+0: ============================== 1 error in 32.84s ===============================
+0: + status_part=2
+0: + status=20
+0: + set +x
+srun: error: ip-10-0-133-125: task 0: Exited with exit code 1
+srun: Terminating StepId=49664.1
++ summary switch-large
++ echo ---------------------------------
+---------------------------------
++ suite=switch-large
+++ wc -l
+++ grep -re PASSED test_artifacts/20251001_073556/switch-large/integ.log
++ num_passed=0
+++ wc -l
+++ grep -re FAILED test_artifacts/20251001_073556/switch-large/integ.log
++ num_failed=0
++ total_num=0
++ echo 'Test suite: switch-large, Total tests 0'
+Test suite: switch-large, Total tests 0
++ echo 'Number of tests passed: 0'
+Number of tests passed: 0
++ echo 'Number of tests failed: 0'
+Number of tests failed: 0
++ '[' 0 -gt 0 ']'

@@ -1,0 +1,11 @@
+{
+    "training_step_time": {
+        "latency_ms_p50": 2217.5135612487793,
+        "latency_ms_p90": 2217.817449569702,
+        "latency_ms_p95": 2217.8306102752686,
+        "latency_ms_p99": 2217.8411388397217,
+        "latency_ms_p100": 2217.843770980835,
+        "latency_ms_avg": 2217.3380851745605,
+        "step_count": 4
+    }
+}

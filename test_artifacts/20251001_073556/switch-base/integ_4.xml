@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1" time="29.922" timestamp="2025-10-01T10:58:06.204770+00:00" hostname="ip-10-0-136-4"><testcase classname="" name="aws-testing.moe_layer_integ_test" time="0.000"><error message="collection failure">aws-testing/moe_layer_integ_test.py:29: in &lt;module&gt;
+    class TestLayerOnTrn(LayerTestCase):
+aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+aws-testing/utils_neuron.py:1011: in get_training_configs
+    tests = builder.build_grid_space_input_hidden(input_dim=1536, hidden_dim=6144, max_tp=16)
+aws-testing/utils_neuron.py:566: in build_grid_space_input_hidden
+    batch = batch_sizes[tp_degree]
+E   KeyError: 1</error></testcase></testsuite></testsuites>

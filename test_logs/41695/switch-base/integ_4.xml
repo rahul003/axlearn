@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="1" tests="4" time="135.460" timestamp="2025-09-04T21:16:23.712987+00:00" hostname="ip-10-0-129-191"><testcase classname="aws-testing.moe_layer_integ_test.TestLayerOnTrn" name="test_fwdbwd_blockwisegather" time="0.001"><skipped type="pytest.skip" message="skip v1 tests as v2 is the focus">/fsx/yoamol/jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:303: skip v1 tests as v2 is the focus</skipped></testcase><testcase classname="aws-testing.moe_layer_integ_test.TestLayerOnTrn" name="test_fwdbwd_blockwisev2_MoE_i1536_h6144_e16_topk2_g1_ec2_blocksize512_b16_s16384_meshfsdp-1tp4_bf16" time="12.191"><failure message="AssertionError: Only support block_size in [128, 256, 512, 1024], found 2048">jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+
+The above exception was the direct cause of the following exception:
+aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+    self.helper_bwd(cfg)
+aws-testing/test_cases.py:134: in helper_bwd
+    test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+aws-testing/test_cases.py:116: in test_bwd_call
+    (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+aws-testing/test_cases.py:114: in loss_fn
+    output, aux = self._fwd_call(test_layer, state, test_inputs)
+aws-testing/test_cases.py:15: in _fwd_call
+    return F(
+axlearn/common/module.py:1096: in functional
+    method_outputs, output_collection = fn(*args, **kwargs)
+axlearn/common/module.py:1037: in __call__
+    method_outputs = self.method_fn(*args, **kwargs)
+axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+    return fn(*args, **kwargs)
+axlearn/common/module.py:598: in wrap_method_fn
+    return method_fn_in_context(self, *args, **kwargs)
+axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+    return fn(*args, **kwargs)
+axlearn/common/traceback_util.py:168: in in_context_exception_wrapper
+    return fn(*args, **kwargs)
+axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+    return fn(*args, **kwargs)
+axlearn/common/module.py:560: in _call_method_in_context
+    return method_fn(module, *args, **kwargs)
+axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+    return fn(*args, **kwargs)
+axlearn/common/mixture_of_experts.py:1697: in forward
+    x = self._dispatch_and_combine(inputs)
+axlearn/common/mixture_of_experts.py:1914: in _dispatch_and_combine
+    x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
+axlearn/common/mixture_of_experts.py:1857: in _dispatch_and_combine_with_gather_blockwise_gating
+    outputs = partitioned_blockwise_mm(
+axlearn/common/mixture_of_experts.py:159: in blockwise_mlp
+    output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+axlearn/common/neuron_blockwise_mlp.py:88: in blockwise_mm
+    out, _ = _blockwise_mm_fwd(hidden_states, expert_affinities_masked, gate_up_weight,
+axlearn/common/neuron_blockwise_mlp.py:117: in _blockwise_mm_fwd
+    out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+neuronxcc/nki/compile.py:103: in neuronxcc.nki.compile.GenericKernel.__call__
+    ???
+neuronxcc/nki/_jax.py:64: in neuronxcc.nki._jax.JAXKernel.__call__
+    ???
+neuronxcc/nki/_jax.py:103: in neuronxcc.nki._jax.nki_call_eval
+    ???
+neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:289: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+    ???
+neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:290: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+    ???
+neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:301: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config_with_boundargs
+    ???
+neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:337: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+    ???
+neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:339: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+    ???
+neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:347: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+    ???
+neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:367: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+    ???
+neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:352: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+    ???
+../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1619: in blockwise_mm_selective_cp
+    blockwise_mm_baseline_shard_hidden(
+neuronxcc/nki/compiler/backends/neuron/TraceContext.py:114: in neuronxcc.nki.compiler.backends.neuron.TraceContext.TraceContext.call
+    ???
+../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1666: in blockwise_mm_baseline_shard_hidden
+    check_blockwise_mm_kernel_compatibility(H, B, I_TP)
+../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:68: in check_blockwise_mm_kernel_compatibility
+    assert block_size in available_block_sizes, f"Only support block_size in {available_block_sizes}, found {block_size}"
+E   AssertionError: Only support block_size in [128, 256, 512, 1024], found 2048</failure></testcase><testcase classname="aws-testing.moe_layer_integ_test.TestLayerOnTrn" name="test_fwdbwd_blockwisev2_MoE_i1536_h6144_e16_topk2_g1_ec2_blocksize512_b16_s8192_meshfsdp-1tp4_bf16" time="44.868" /><testcase classname="aws-testing.moe_layer_integ_test.TestLayerOnTrn" name="test_fwdbwd_blockwisev2_MoE_i1536_h6144_e16_topk2_g4_ec2_blocksize512_b16_s8192_meshfsdp-1tp4_bf16" time="39.268"><failure message="AssertionError: &#10;Not equal to tolerance rtol=0.001, atol=0.008&#10;: 0.363525390625.&#10;actual=[[[ 0.234375    0.14550781  0.03173828 ...  0.22558594 -0.05957031&#10;   -0.15136719]&#10;  [-0.13183594 -0.02685547 -0.08447266 ...  0.01251221  0.00074387&#10;   -0.1484375 ]&#10;  [ 0.03979492  0.11083984 -0.01013184 ...  0.05517578 -0.05957031&#10;   -0.15917969]&#10;  ...&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]]&#10;&#10; [[ 0.07226562 -0.12890625 -0.06396484 ...  0.06982422  0.19433594&#10;   -0.04345703]&#10;  [-0.12792969  0.06396484 -0.05029297 ... -0.02160645  0.16992188&#10;   -0.20410156]&#10;  [-0.18847656 -0.09716797  0.09472656 ...  0.06982422 -0.04296875&#10;    0.08398438]&#10;  ...&#10;  [-0.06176758  0.21289062 -0.03344727 ...  0.21777344 -0.13183594&#10;    0.08789062]&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]&#10;  [-0.00909424  0.03515625 -0.0135498  ...  0.02148438 -0.18066406&#10;    0.08789062]]&#10;&#10; [[-0.03662109  0.02539062 -0.03271484 ...  0.04345703 -0.02270508&#10;   -0.11132812]&#10;  [ 0.4296875   0.19335938  0.02490234 ...  0.2109375   0.03540039&#10;   -0.18261719]&#10;  [-0.12988281 -0.02062988  0.0390625  ...  0.12451172 -0.21289062&#10;   -0.4375    ]&#10;  ...&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]&#10;  [ 0.07763672  0.20019531 -0.06396484 ...  0.07128906 -0.16992188&#10;   -0.0703125 ]&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]]&#10;&#10; ...&#10;&#10; [[ 0.21679688  0.1328125  -0.11474609 ...  0.1328125  -0.04272461&#10;   -0.02685547]&#10;  [-0.2734375  -0.01385498  0.09960938 ...  0.15820312 -0.02758789&#10;    0.00823975]&#10;  [-0.07958984  0.20019531  0.24804688 ...  0.33984375 -0.21386719&#10;    0.0546875 ]&#10;  ...&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]]&#10;&#10; [[-0.11425781 -0.00335693 -0.0112915  ...  0.00271606  0.08886719&#10;   -0.03344727]&#10;  [-0.03466797 -0.10058594 -0.078125   ...  0.01867676 -0.07275391&#10;    0.13476562]&#10;  [ 0.06494141  0.09667969  0.08886719 ...  0.01696777  0.08789062&#10;   -0.04101562]&#10;  ...&#10;  [ 0.03466797 -0.11474609 -0.10498047 ...  0.0300293   0.00762939&#10;   -0.15332031]&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]]&#10;&#10; [[ 0.01623535  0.08691406  0.1171875  ...  0.14941406 -0.36914062&#10;    0.04638672]&#10;  [-0.30273438  0.02392578  0.03100586 ...  0.18066406  0.01904297&#10;    0.06542969]&#10;  [ 0.05908203  0.17871094  0.08105469 ...  0.15722656 -0.18847656&#10;    0.01409912]&#10;  ...&#10;  [-0.04833984  0.03686523  0.12207031 ...  0.06787109 -0.12695312&#10;    0.04541016]&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]&#10;  [ 0.          0.          0.         ...  0.          0.&#10;    0.        ]]]&#10;desired=[[[ 2.34375000e-01  1.44531250e-01  3.19824219e-02 ...  2.25585938e-01&#10;   -5.93261719e-02 -1.51367188e-01]&#10;  [-1.32812500e-01 -2.62451172e-02 -8.39843750e-02 ...  1.26953125e-02&#10;    4.32968140e-04 -1.48437500e-01]&#10;  [ 3.97949219e-02  1.11816406e-01 -9.70458984e-03 ...  5.54199219e-02&#10;   -5.95703125e-02 -1.59179688e-01]&#10;  ...&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]]&#10;&#10; [[ 7.17773438e-02 -1.27929688e-01 -6.44531250e-02 ...  6.98242188e-02&#10;    1.94335938e-01 -4.32128906e-02]&#10;  [-1.27929688e-01  6.34765625e-02 -5.02929688e-02 ... -2.23388672e-02&#10;    1.70898438e-01 -2.04101562e-01]&#10;  [-1.87500000e-01 -9.66796875e-02  9.57031250e-02 ...  6.98242188e-02&#10;   -4.29687500e-02  8.39843750e-02]&#10;  ...&#10;  [-6.22558594e-02  2.12890625e-01 -3.32031250e-02 ...  2.17773438e-01&#10;   -1.30859375e-01  8.78906250e-02]&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]&#10;  [-8.91113281e-03  3.56445312e-02 -1.30004883e-02 ...  2.13623047e-02&#10;   -1.80664062e-01  8.78906250e-02]]&#10;&#10; [[-3.73535156e-02  2.53906250e-02 -3.27148438e-02 ...  4.37011719e-02&#10;   -2.25830078e-02 -1.11328125e-01]&#10;  [ 4.29687500e-01  1.92382812e-01  2.53906250e-02 ...  2.09960938e-01&#10;    3.63769531e-02 -1.81640625e-01]&#10;  [-1.30859375e-01 -2.12402344e-02  3.88183594e-02 ...  1.24511719e-01&#10;   -2.12890625e-01 -4.37500000e-01]&#10;  ...&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]&#10;  [ 7.76367188e-02  2.01171875e-01 -6.34765625e-02 ...  7.12890625e-02&#10;   -1.69921875e-01 -7.08007812e-02]&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]]&#10;&#10; ...&#10;&#10; [[ 2.16796875e-01  1.32812500e-01 -1.15234375e-01 ...  1.33789062e-01&#10;   -4.24804688e-02 -2.75878906e-02]&#10;  [-2.73437500e-01 -1.35498047e-02  1.00097656e-01 ...  1.59179688e-01&#10;   -2.79541016e-02  8.54492188e-03]&#10;  [-8.00781250e-02  2.00195312e-01  2.47070312e-01 ...  3.39843750e-01&#10;   -2.13867188e-01  5.41992188e-02]&#10;  ...&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]]&#10;&#10; [[-1.14257812e-01 -3.61633301e-03 -1.11083984e-02 ...  3.03649902e-03&#10;    8.83789062e-02 -3.34472656e-02]&#10;  [-3.41796875e-02 -1.00097656e-01 -7.81250000e-02 ...  1.89208984e-02&#10;   -7.32421875e-02  1.34765625e-01]&#10;  [ 6.49414062e-02  9.57031250e-02  8.93554688e-02 ...  1.72119141e-02&#10;    8.74023438e-02 -4.07714844e-02]&#10;  ...&#10;  [ 3.44238281e-02 -1.15234375e-01 -1.04980469e-01 ...  2.90527344e-02&#10;    7.41577148e-03 -1.51367188e-01]&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]]&#10;&#10; [[ 1.59912109e-02  8.74023438e-02  1.17187500e-01 ...  1.50390625e-01&#10;   -3.71093750e-01  4.56542969e-02]&#10;  [-3.02734375e-01  2.41699219e-02  3.08837891e-02 ...  1.81640625e-01&#10;    1.95312500e-02  6.49414062e-02]&#10;  [ 5.95703125e-02  1.79687500e-01  8.00781250e-02 ...  1.58203125e-01&#10;   -1.88476562e-01  1.42822266e-02]&#10;  ...&#10;  [-4.76074219e-02  3.71093750e-02  1.21582031e-01 ...  6.73828125e-02&#10;   -1.25976562e-01  4.46777344e-02]&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]&#10;  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00&#10;    0.00000000e+00  0.00000000e+00]]]&#10;Mismatched elements: 25397 / 201326592 (0.0126%)&#10;Max absolute difference: 0.3635254&#10;Max relative difference: 6143.&#10; x: array([[[ 0.234375,  0.145508,  0.031738, ...,  0.225586, -0.05957 ,&#10;         -0.151367],&#10;        [-0.131836, -0.026855, -0.084473, ...,  0.012512,  0.000744,...&#10; y: array([[[ 2.343750e-01,  1.445312e-01,  3.198242e-02, ...,&#10;          2.255859e-01, -5.932617e-02, -1.513672e-01],&#10;        [-1.328125e-01, -2.624512e-02, -8.398438e-02, ...,...">aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+    self.helper_bwd(cfg)
+aws-testing/test_cases.py:138: in helper_bwd
+    self.assertNestedAllClose(test_output, golden_output, atol=cfg.test.atol, rtol=cfg.test.rtol)
+axlearn/common/test_utils.py:245: in assertNestedAllClose
+    assert_allclose(a_value, b_value, atol=atol, rtol=rtol, err_msg=f"{a_name}")
+axlearn/common/test_utils.py:81: in assert_allclose
+    np.testing.assert_allclose(
+/usr/lib/python3.10/contextlib.py:79: in inner
+    return func(*args, **kwds)
+E   AssertionError: 
+E   Not equal to tolerance rtol=0.001, atol=0.008
+E   : 0.363525390625.
+E   actual=[[[ 0.234375    0.14550781  0.03173828 ...  0.22558594 -0.05957031
+E      -0.15136719]
+E     [-0.13183594 -0.02685547 -0.08447266 ...  0.01251221  0.00074387
+E      -0.1484375 ]
+E     [ 0.03979492  0.11083984 -0.01013184 ...  0.05517578 -0.05957031
+E      -0.15917969]
+E     ...
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]]
+E   
+E    [[ 0.07226562 -0.12890625 -0.06396484 ...  0.06982422  0.19433594
+E      -0.04345703]
+E     [-0.12792969  0.06396484 -0.05029297 ... -0.02160645  0.16992188
+E      -0.20410156]
+E     [-0.18847656 -0.09716797  0.09472656 ...  0.06982422 -0.04296875
+E       0.08398438]
+E     ...
+E     [-0.06176758  0.21289062 -0.03344727 ...  0.21777344 -0.13183594
+E       0.08789062]
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]
+E     [-0.00909424  0.03515625 -0.0135498  ...  0.02148438 -0.18066406
+E       0.08789062]]
+E   
+E    [[-0.03662109  0.02539062 -0.03271484 ...  0.04345703 -0.02270508
+E      -0.11132812]
+E     [ 0.4296875   0.19335938  0.02490234 ...  0.2109375   0.03540039
+E      -0.18261719]
+E     [-0.12988281 -0.02062988  0.0390625  ...  0.12451172 -0.21289062
+E      -0.4375    ]
+E     ...
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]
+E     [ 0.07763672  0.20019531 -0.06396484 ...  0.07128906 -0.16992188
+E      -0.0703125 ]
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]]
+E   
+E    ...
+E   
+E    [[ 0.21679688  0.1328125  -0.11474609 ...  0.1328125  -0.04272461
+E      -0.02685547]
+E     [-0.2734375  -0.01385498  0.09960938 ...  0.15820312 -0.02758789
+E       0.00823975]
+E     [-0.07958984  0.20019531  0.24804688 ...  0.33984375 -0.21386719
+E       0.0546875 ]
+E     ...
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]]
+E   
+E    [[-0.11425781 -0.00335693 -0.0112915  ...  0.00271606  0.08886719
+E      -0.03344727]
+E     [-0.03466797 -0.10058594 -0.078125   ...  0.01867676 -0.07275391
+E       0.13476562]
+E     [ 0.06494141  0.09667969  0.08886719 ...  0.01696777  0.08789062
+E      -0.04101562]
+E     ...
+E     [ 0.03466797 -0.11474609 -0.10498047 ...  0.0300293   0.00762939
+E      -0.15332031]
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]]
+E   
+E    [[ 0.01623535  0.08691406  0.1171875  ...  0.14941406 -0.36914062
+E       0.04638672]
+E     [-0.30273438  0.02392578  0.03100586 ...  0.18066406  0.01904297
+E       0.06542969]
+E     [ 0.05908203  0.17871094  0.08105469 ...  0.15722656 -0.18847656
+E       0.01409912]
+E     ...
+E     [-0.04833984  0.03686523  0.12207031 ...  0.06787109 -0.12695312
+E       0.04541016]
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]
+E     [ 0.          0.          0.         ...  0.          0.
+E       0.        ]]]
+E   desired=[[[ 2.34375000e-01  1.44531250e-01  3.19824219e-02 ...  2.25585938e-01
+E      -5.93261719e-02 -1.51367188e-01]
+E     [-1.32812500e-01 -2.62451172e-02 -8.39843750e-02 ...  1.26953125e-02
+E       4.32968140e-04 -1.48437500e-01]
+E     [ 3.97949219e-02  1.11816406e-01 -9.70458984e-03 ...  5.54199219e-02
+E      -5.95703125e-02 -1.59179688e-01]
+E     ...
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]]
+E   
+E    [[ 7.17773438e-02 -1.27929688e-01 -6.44531250e-02 ...  6.98242188e-02
+E       1.94335938e-01 -4.32128906e-02]
+E     [-1.27929688e-01  6.34765625e-02 -5.02929688e-02 ... -2.23388672e-02
+E       1.70898438e-01 -2.04101562e-01]
+E     [-1.87500000e-01 -9.66796875e-02  9.57031250e-02 ...  6.98242188e-02
+E      -4.29687500e-02  8.39843750e-02]
+E     ...
+E     [-6.22558594e-02  2.12890625e-01 -3.32031250e-02 ...  2.17773438e-01
+E      -1.30859375e-01  8.78906250e-02]
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]
+E     [-8.91113281e-03  3.56445312e-02 -1.30004883e-02 ...  2.13623047e-02
+E      -1.80664062e-01  8.78906250e-02]]
+E   
+E    [[-3.73535156e-02  2.53906250e-02 -3.27148438e-02 ...  4.37011719e-02
+E      -2.25830078e-02 -1.11328125e-01]
+E     [ 4.29687500e-01  1.92382812e-01  2.53906250e-02 ...  2.09960938e-01
+E       3.63769531e-02 -1.81640625e-01]
+E     [-1.30859375e-01 -2.12402344e-02  3.88183594e-02 ...  1.24511719e-01
+E      -2.12890625e-01 -4.37500000e-01]
+E     ...
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]
+E     [ 7.76367188e-02  2.01171875e-01 -6.34765625e-02 ...  7.12890625e-02
+E      -1.69921875e-01 -7.08007812e-02]
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]]
+E   
+E    ...
+E   
+E    [[ 2.16796875e-01  1.32812500e-01 -1.15234375e-01 ...  1.33789062e-01
+E      -4.24804688e-02 -2.75878906e-02]
+E     [-2.73437500e-01 -1.35498047e-02  1.00097656e-01 ...  1.59179688e-01
+E      -2.79541016e-02  8.54492188e-03]
+E     [-8.00781250e-02  2.00195312e-01  2.47070312e-01 ...  3.39843750e-01
+E      -2.13867188e-01  5.41992188e-02]
+E     ...
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]]
+E   
+E    [[-1.14257812e-01 -3.61633301e-03 -1.11083984e-02 ...  3.03649902e-03
+E       8.83789062e-02 -3.34472656e-02]
+E     [-3.41796875e-02 -1.00097656e-01 -7.81250000e-02 ...  1.89208984e-02
+E      -7.32421875e-02  1.34765625e-01]
+E     [ 6.49414062e-02  9.57031250e-02  8.93554688e-02 ...  1.72119141e-02
+E       8.74023438e-02 -4.07714844e-02]
+E     ...
+E     [ 3.44238281e-02 -1.15234375e-01 -1.04980469e-01 ...  2.90527344e-02
+E       7.41577148e-03 -1.51367188e-01]
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]]
+E   
+E    [[ 1.59912109e-02  8.74023438e-02  1.17187500e-01 ...  1.50390625e-01
+E      -3.71093750e-01  4.56542969e-02]
+E     [-3.02734375e-01  2.41699219e-02  3.08837891e-02 ...  1.81640625e-01
+E       1.95312500e-02  6.49414062e-02]
+E     [ 5.95703125e-02  1.79687500e-01  8.00781250e-02 ...  1.58203125e-01
+E      -1.88476562e-01  1.42822266e-02]
+E     ...
+E     [-4.76074219e-02  3.71093750e-02  1.21582031e-01 ...  6.73828125e-02
+E      -1.25976562e-01  4.46777344e-02]
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]
+E     [ 0.00000000e+00  0.00000000e+00  0.00000000e+00 ...  0.00000000e+00
+E       0.00000000e+00  0.00000000e+00]]]
+E   Mismatched elements: 25397 / 201326592 (0.0126%)
+E   Max absolute difference: 0.3635254
+E   Max relative difference: 6143.
+E    x: array([[[ 0.234375,  0.145508,  0.031738, ...,  0.225586, -0.05957 ,
+E            -0.151367],
+E           [-0.131836, -0.026855, -0.084473, ...,  0.012512,  0.000744,...
+E    y: array([[[ 2.343750e-01,  1.445312e-01,  3.198242e-02, ...,
+E             2.255859e-01, -5.932617e-02, -1.513672e-01],
+E           [-1.328125e-01, -2.624512e-02, -8.398438e-02, ...,...</failure></testcase></testsuite></testsuites>

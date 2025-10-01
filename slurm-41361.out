@@ -1,0 +1,459 @@
+/var/spool/slurmd/job41361/slurm_script: line 2: SBATCH: command not found
+0: + SECONDS=0
+0: + sudo apt-get update -
+0: W: GPG error: https://apt.repos.neuron.amazonaws.com jammy InRelease: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 5749CAD8646D9185
+0: E: The repository 'https://apt.repos.neuron.amazonaws.com jammy InRelease' is not signed.
+0: + sudo apt install -y software-properties-common
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: software-properties-common is already the newest version (0.99.49.3).
+0: 0 upgraded, 0 newly installed, 0 to remove and 61 not upgraded.
+0: 4 not fully installed or removed.
+0: After this operation, 0 B of additional disk space will be used.
+0: Setting up linux-image-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: Setting up linux-headers-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: /etc/kernel/header_postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.8.0-1031-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: dkms autoinstall on 6.8.0-1031-aws/x86_64 succeeded for aws-neuronx efa
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.8.0-1031-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/header_postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-headers-6.8.0-1031-aws (--configure):
+0:  installed linux-headers-6.8.0-1031-aws package post-installation script subprocess returned error exit status 11
+0: dpkg: dependency problems prevent configuration of linux-headers-aws:
+0:  linux-headers-aws depends on linux-headers-6.8.0-1031-aws; however:
+0:   Package linux-headers-6.8.0-1031-aws is not configured yet.
+0: 
+0: dpkg: error processing package linux-headers-aws (--configure):
+0:  dependency problems - leaving unconfigured
+0: dpkg: dependency problems prevent configuration of linux-aws:
+0:  linux-aws depends on linux-headers-aws (= 6.8.0-1031.33); however:
+0:   Package linux-headers-aws is not configured yet.
+0: 
+0: dpkg: error processing package linux-aws (--configure):
+0:  dependency problems - leaving unconfigured
+0: No apport report written because the error message indicates its a followup error from a previous failure.
+0: No apport report written because the error message indicates its a followup error from a previous failure.
+0: Processing triggers for linux-image-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: /etc/kernel/postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.8.0-1031-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: dkms autoinstall on 6.8.0-1031-aws/x86_64 succeeded for aws-neuronx efa
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.8.0-1031-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-image-6.8.0-1031-aws (--configure):
+0:  installed linux-image-6.8.0-1031-aws package post-installation script subprocess returned error exit status 11
+0: No apport report written because MaxReports is reached already
+0: Errors were encountered while processing:
+0:  linux-headers-6.8.0-1031-aws
+0:  linux-headers-aws
+0:  linux-aws
+0:  linux-image-6.8.0-1031-aws
+0: needrestart is being skipped since dpkg has failed
+0: E: Sub-process /usr/bin/dpkg returned an error code (1)
+0: + sudo add-apt-repository -y ppa:deadsnakes/ppa
+0: Hit:1 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble InRelease
+0: Hit:2 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble-updates InRelease
+0: Hit:3 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble-backports InRelease
+0: Hit:4 https://download.docker.com/linux/ubuntu noble InRelease
+0: Hit:5 http://security.ubuntu.com/ubuntu noble-security InRelease
+0: Get:6 https://apt.repos.neuron.amazonaws.com jammy InRelease [1445 B]
+0: Err:6 https://apt.repos.neuron.amazonaws.com jammy InRelease
+0:   The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 5749CAD8646D9185
+0: Hit:7 https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu noble InRelease
+0: Hit:8 https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble InRelease
+0: Reading package lists...
+0: W: GPG error: https://apt.repos.neuron.amazonaws.com jammy InRelease: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 5749CAD8646D9185
+0: E: The repository 'https://apt.repos.neuron.amazonaws.com jammy InRelease' is not signed.
+0: Repository: 'Types: deb
+0: URIs: https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu/
+0: Suites: noble
+0: Components: main
+0: '
+0: Description:
+0: This PPA contains more recent Python versions packaged for Ubuntu.
+0: 
+0: Disclaimer: there's no guarantee of timely updates in case of security problems or other issues. If you want to use them in a security-or-otherwise-critical environment (say, on a production server), you do so at your own risk.
+0: 
+0: Update Note
+0: ===========
+0: Please use this repository instead of ppa:fkrull/deadsnakes.
+0: 
+0: Reporting Issues
+0: ================
+0: 
+0: Issues can be reported in the master issue tracker at:
+0: https://github.com/deadsnakes/issues/issues
+0: 
+0: Supported Ubuntu and Python Versions
+0: ====================================
+0: 
+0: - Ubuntu 20.04 (focal) Python3.5 - Python3.7, Python3.9 - Python3.13
+0: - Ubuntu 22.04 (jammy) Python3.7 - Python3.9, Python3.11 - Python3.13
+0: - Ubuntu 24.04 (noble) Python3.7 - Python3.11, Python3.13
+0: - Note: Python2.7 (focal, jammy), Python 3.8 (focal), Python 3.10 (jammy), Python3.12 (noble) are not provided by deadsnakes as upstream ubuntu provides those packages.
+0: 
+0: Why some packages aren't built:
+0: - Note: for focal, older python versions require libssl<1.1 so they are not currently built
+0: - Note: for jammy and noble, older python versions requre libssl<3 so they are not currently built
+0: - If you need these, reach out to asottile to set up a private ppa
+0: 
+0: The packages may also work on other versions of Ubuntu or Debian, but that is not tested or supported.
+0: 
+0: Packages
+0: ========
+0: 
+0: The packages provided here are loosely based on the debian upstream packages with some modifications to make them more usable as non-default pythons and on ubuntu.  As such, the packages follow debian's patterns and often do not include a full python distribution with just `apt install python#.#`.  Here is a list of packages that may be useful along with the default install:
+0: 
+0: - `python#.#-dev`: includes development headers for building C extensions
+0: - `python#.#-venv`: provides the standard library `venv` module
+0: - `python#.#-distutils`: provides the standard library `distutils` module
+0: - `python#.#-lib2to3`: provides the `2to3-#.#` utility as well as the standard library `lib2to3` module
+0: - `python#.#-gdbm`: provides the standard library `dbm.gnu` module
+0: - `python#.#-tk`: provides the standard library `tkinter` module
+0: 
+0: Third-Party Python Modules
+0: ==========================
+0: 
+0: Python modules in the official Ubuntu repositories are packaged to work with the Python interpreters from the official repositories. Accordingly, they generally won't work with the Python interpreters from this PPA. As an exception, pure-Python modules for Python 3 will work, but any compiled extension modules won't.
+0: 
+0: To install 3rd-party Python modules, you should use the common Python packaging tools.  For an introduction into the Python packaging ecosystem and its tools, refer to the Python Packaging User Guide:
+0: https://packaging.python.org/installing/
+0: 
+0: Sources
+0: =======
+0: The package sources are available at:
+0: https://github.com/deadsnakes/
+0: 
+0: Nightly Builds
+0: ==============
+0: 
+0: For nightly builds, see ppa:deadsnakes/nightly https://launchpad.net/~deadsnakes/+archive/ubuntu/nightly
+0: More info: https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa
+0: Adding repository.
+0: Found existing deb entry in /etc/apt/sources.list.d/deadsnakes-ubuntu-ppa-noble.sources
+0: + sudo apt install -y python3.10
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: python3.10 is already the newest version (3.10.18-1+noble1).
+0: 0 upgraded, 0 newly installed, 0 to remove and 61 not upgraded.
+0: 4 not fully installed or removed.
+0: After this operation, 0 B of additional disk space will be used.
+0: Setting up linux-image-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: Setting up linux-headers-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: /etc/kernel/header_postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.8.0-1031-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: dkms autoinstall on 6.8.0-1031-aws/x86_64 succeeded for aws-neuronx efa
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.8.0-1031-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/header_postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-headers-6.8.0-1031-aws (--configure):
+0:  installed linux-headers-6.8.0-1031-aws package post-installation script subprocess returned error exit status 11
+0: dpkg: dependency problems prevent configuration of linux-headers-aws:
+0:  linux-headers-aws depends on linux-headers-6.8.0-1031-aws; however:
+0:   Package linux-headers-6.8.0-1031-aws is not configured yet.
+0: 
+0: dpkg: error processing package linux-headers-aws (--configure):
+0:  dependency problems - leaving unconfigured
+0: dpkg: dependency problems prevent configuration of linux-aws:
+0:  linux-aws depends on linux-headers-aws (= 6.8.0-1031.33); however:
+0:   Package linux-headers-aws is not configured yet.
+0: 
+0: dpkg: error processing package linux-aws (--configure):
+0:  dependency problems - leaving unconfigured
+0: No apport report written because the error message indicates its a followup error from a previous failure.
+0: No apport report written because the error message indicates its a followup error from a previous failure.
+0: Processing triggers for linux-image-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: /etc/kernel/postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.8.0-1031-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: dkms autoinstall on 6.8.0-1031-aws/x86_64 succeeded for aws-neuronx efa
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.8.0-1031-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-image-6.8.0-1031-aws (--configure):
+0:  installed linux-image-6.8.0-1031-aws package post-installation script subprocess returned error exit status 11
+0: No apport report written because MaxReports is reached already
+0: Errors were encountered while processing:
+0:  linux-headers-6.8.0-1031-aws
+0:  linux-headers-aws
+0:  linux-aws
+0:  linux-image-6.8.0-1031-aws
+0: needrestart is being skipped since dpkg has failed
+0: E: Sub-process /usr/bin/dpkg returned an error code (1)
+0: + sudo apt update
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: Hit:1 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble InRelease
+0: Hit:2 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble-updates InRelease
+0: Hit:3 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble-backports InRelease
+0: Hit:4 https://download.docker.com/linux/ubuntu noble InRelease
+0: Hit:5 http://security.ubuntu.com/ubuntu noble-security InRelease
+0: Get:6 https://apt.repos.neuron.amazonaws.com jammy InRelease [1445 B]
+0: Err:6 https://apt.repos.neuron.amazonaws.com jammy InRelease
+0:   The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 5749CAD8646D9185
+0: Hit:7 https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu noble InRelease
+0: Hit:8 https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble InRelease
+0: Reading package lists...
+0: W: GPG error: https://apt.repos.neuron.amazonaws.com jammy InRelease: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 5749CAD8646D9185
+0: E: The repository 'https://apt.repos.neuron.amazonaws.com jammy InRelease' is not signed.
+0: + sudo apt install -y python3.10-venv python3.10-dev python3-pip
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: python3.10-venv is already the newest version (3.10.18-1+noble1).
+0: python3.10-dev is already the newest version (3.10.18-1+noble1).
+0: python3-pip is already the newest version (24.0+dfsg-1ubuntu1.2).
+0: 0 upgraded, 0 newly installed, 0 to remove and 61 not upgraded.
+0: 4 not fully installed or removed.
+0: After this operation, 0 B of additional disk space will be used.
+0: Setting up linux-image-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: Setting up linux-headers-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: /etc/kernel/header_postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.8.0-1031-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: dkms autoinstall on 6.8.0-1031-aws/x86_64 succeeded for aws-neuronx efa
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.8.0-1031-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/header_postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-headers-6.8.0-1031-aws (--configure):
+0:  installed linux-headers-6.8.0-1031-aws package post-installation script subprocess returned error exit status 11
+0: dpkg: dependency problems prevent configuration of linux-headers-aws:
+0:  linux-headers-aws depends on linux-headers-6.8.0-1031-aws; however:
+0:   Package linux-headers-6.8.0-1031-aws is not configured yet.
+0: 
+0: dpkg: error processing package linux-headers-aws (--configure):
+0:  dependency problems - leaving unconfigured
+0: dpkg: dependency problems prevent configuration of linux-aws:
+0:  linux-aws depends on linux-headers-aws (= 6.8.0-1031.33); however:
+0:   Package linux-headers-aws is not configured yet.
+0: 
+0: dpkg: error processing package linux-aws (--configure):
+0:  dependency problems - leaving unconfigured
+0: No apport report written because the error message indicates its a followup error from a previous failure.
+0: No apport report written because the error message indicates its a followup error from a previous failure.
+0: Processing triggers for linux-image-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: /etc/kernel/postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.8.0-1031-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: dkms autoinstall on 6.8.0-1031-aws/x86_64 succeeded for aws-neuronx efa
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.8.0-1031-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-image-6.8.0-1031-aws (--configure):
+0:  installed linux-image-6.8.0-1031-aws package post-installation script subprocess returned error exit status 11
+0: No apport report written because MaxReports is reached already
+0: Errors were encountered while processing:
+0:  linux-headers-6.8.0-1031-aws
+0:  linux-headers-aws
+0:  linux-aws
+0:  linux-image-6.8.0-1031-aws
+0: needrestart is being skipped since dpkg has failed
+0: E: Sub-process /usr/bin/dpkg returned an error code (1)
+0: + sudo apt-get -f install -y
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: 0 upgraded, 0 newly installed, 0 to remove and 61 not upgraded.
+0: 4 not fully installed or removed.
+0: After this operation, 0 B of additional disk space will be used.
+0: Setting up linux-image-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: Setting up linux-headers-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: /etc/kernel/header_postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.8.0-1031-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: dkms autoinstall on 6.8.0-1031-aws/x86_64 succeeded for aws-neuronx efa
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.8.0-1031-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/header_postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-headers-6.8.0-1031-aws (--configure):
+0:  installed linux-headers-6.8.0-1031-aws package post-installation script subprocess returned error exit status 11
+0: dpkg: dependency problems prevent configuration of linux-headers-aws:
+0:  linux-headers-aws depends on linux-headers-6.8.0-1031-aws; however:
+0:   Package linux-headers-6.8.0-1031-aws is not configured yet.
+0: 
+0: dpkg: error processing package linux-headers-aws (--configure):
+0:  dependency problems - leaving unconfigured
+0: dpkg: dependency problems prevent configuration of linux-aws:
+0:  linux-aws depends on linux-headers-aws (= 6.8.0-1031.33); however:
+0:   Package linux-headers-aws is not configured yet.
+0: 
+0: dpkg: error processing package linux-aws (--configure):
+0:  dependency problems - leaving unconfigured
+0: No apport report written because the error message indicates its a followup error from a previous failure.
+0: No apport report written because the error message indicates its a followup error from a previous failure.
+0: Processing triggers for linux-image-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: /etc/kernel/postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.8.0-1031-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: dkms autoinstall on 6.8.0-1031-aws/x86_64 succeeded for aws-neuronx efa
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.8.0-1031-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-image-6.8.0-1031-aws (--configure):
+0:  installed linux-image-6.8.0-1031-aws package post-installation script subprocess returned error exit status 11
+0: No apport report written because MaxReports is reached already
+0: Errors were encountered while processing:
+0:  linux-headers-6.8.0-1031-aws
+0:  linux-headers-aws
+0:  linux-aws
+0:  linux-image-6.8.0-1031-aws
+0: needrestart is being skipped since dpkg has failed
+0: E: Sub-process /usr/bin/dpkg returned an error code (1)
+0: + sudo apt-get install -y google-perftools
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: google-perftools is already the newest version (2.15-3build1).
+0: 0 upgraded, 0 newly installed, 0 to remove and 61 not upgraded.
+0: 4 not fully installed or removed.
+0: After this operation, 0 B of additional disk space will be used.
+0: Setting up linux-image-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: Setting up linux-headers-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: /etc/kernel/header_postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.8.0-1031-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: dkms autoinstall on 6.8.0-1031-aws/x86_64 succeeded for aws-neuronx efa
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.8.0-1031-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/header_postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-headers-6.8.0-1031-aws (--configure):
+0:  installed linux-headers-6.8.0-1031-aws package post-installation script subprocess returned error exit status 11
+0: dpkg: dependency problems prevent configuration of linux-headers-aws:
+0:  linux-headers-aws depends on linux-headers-6.8.0-1031-aws; however:
+0:   Package linux-headers-6.8.0-1031-aws is not configured yet.
+0: 
+0: dpkg: error processing package linux-headers-aws (--configure):
+0:  dependency problems - leaving unconfigured
+0: dpkg: dependency problems prevent configuration of linux-aws:
+0:  linux-aws depends on linux-headers-aws (= 6.8.0-1031.33); however:
+0:   Package linux-headers-aws is not configured yet.
+0: 
+0: dpkg: error processing package linux-aws (--configure):
+0:  dependency problems - leaving unconfigured
+0: No apport report written because the error message indicates its a followup error from a previous failure.
+0: No apport report written because the error message indicates its a followup error from a previous failure.
+0: Processing triggers for linux-image-6.8.0-1031-aws (6.8.0-1031.33) ...
+0: /etc/kernel/postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.8.0-1031-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: dkms autoinstall on 6.8.0-1031-aws/x86_64 succeeded for aws-neuronx efa
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.8.0-1031-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-image-6.8.0-1031-aws (--configure):
+0:  installed linux-image-6.8.0-1031-aws package post-installation script subprocess returned error exit status 11
+0: No apport report written because MaxReports is reached already
+0: Errors were encountered while processing:
+0:  linux-headers-6.8.0-1031-aws
+0:  linux-headers-aws
+0:  linux-aws
+0:  linux-image-6.8.0-1031-aws
+0: needrestart is being skipped since dpkg has failed
+0: E: Sub-process /usr/bin/dpkg returned an error code (1)
+0: + ENV_DROP_DIR=../jul-end-artifacts/
+0: + RUNTIME='../jul-end-artifacts//aws-neuronx-runtime-lib-*.deb'
+0: + COLLECTIVES='../jul-end-artifacts//aws-neuronx-collectives-*.deb'
+0: + TOOLS='../jul-end-artifacts//aws-neuronx-tools-*.deb'
+0: + DKMS='../jul-end-artifacts//aws-neuronx-dkms_*.deb'
+0: + sudo dpkg -i ../jul-end-artifacts//aws-neuronx-runtime-lib-2.x.30619.0-735d5ee25.deb ../jul-end-artifacts//aws-neuronx-collectives-2.x.32119.0-9686b27ce.deb '../jul-end-artifacts//aws-neuronx-tools-*.deb'
+0: dpkg: error: cannot access archive '../jul-end-artifacts//aws-neuronx-tools-*.deb': No such file or directory
+0: + sudo dpkg -i ../jul-end-artifacts//aws-neuronx-runtime-lib-2.x.30619.0-735d5ee25.deb ../jul-end-artifacts//aws-neuronx-collectives-2.x.32119.0-9686b27ce.deb
+0: (Reading database ... 184400 files and directories currently installed.)
+0: Preparing to unpack .../aws-neuronx-runtime-lib-2.x.30619.0-735d5ee25.deb ...
+0: Unpacking aws-neuronx-runtime-lib (2.x.30619.0-735d5ee25) over (2.x.29632.0-5b11fddb8) ...
+0: Preparing to unpack .../aws-neuronx-collectives-2.x.32119.0-9686b27ce.deb ...
+0: Unpacking aws-neuronx-collectives (2.x.32119.0-9686b27ce) over (2.x.31306.0-76169865b) ...
+0: Setting up aws-neuronx-runtime-lib (2.x.30619.0-735d5ee25) ...
+0: Setting up aws-neuronx-collectives (2.x.32119.0-9686b27ce) ...
+0: ++ curl -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600'
+0:   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+0:                                  Dload  Upload   Total   Spent    Left  Speed
+0:   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    56  100    56    0     0  38461      0 --:--:-- --:--:-- --:--:-- 56000
+0: + TOKEN=AQAEAFVfjwiOephNYM8uS8_47SdBkGLwzZ11esxrEReU6KwJyQr8zQ==
+0: ++ curl -H 'X-aws-ec2-metadata-token: AQAEAFVfjwiOephNYM8uS8_47SdBkGLwzZ11esxrEReU6KwJyQr8zQ==' -s http://169.254.169.254/latest/meta-data/instance-id
+0: + INSTANCE_ID=i-0fc413bd17dfbc316
+0: ++ hostname
+0: instance_id:i-0fc413bd17dfbc316 hostname:ip-10-0-129-191
+0: runtime versions
+0: ===============================================
+0: Dependency versions
+0: ===============================================
+0: + echo 'instance_id:i-0fc413bd17dfbc316 hostname:ip-10-0-129-191'
+0: + echo 'runtime versions'
+0: + echo ===============================================
+0: + echo 'Dependency versions'
+0: + echo ===============================================
+0: + apt list
+0: + grep installed
+0: + grep neuron
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: aws-neuronx-collectives/now 2.x.32119.0-9686b27ce amd64 [installed,local]
+0: aws-neuronx-devtools/now 2.0.17632.0 amd64 [installed,local]
+0: aws-neuronx-dkms/now 2.x.6276.0 all [installed,local]
+0: aws-neuronx-gpsimd-tools/now 0.13.2.0-94ba34927 amd64 [installed,local]
+0: aws-neuronx-gpsimd-xocd/now 14.09.x amd64 [installed,local]
+0: aws-neuronx-runtime-lib/now 2.x.30619.0-735d5ee25 amd64 [installed,local]
+0: aws-neuronx-tools/now 2.0.16698.0 amd64 [installed,local]
+0: Setup took 37 s
+0: + echo 'Setup took 37 s'
+0: /fsx/yoamol/axlearn/./aws-testing/unit_test.sh: line 8: jaxmoe/bin/activate: No such file or directory
+srun: error: ip-10-0-129-191: task 0: Exited with exit code 1
+srun: Terminating StepId=41361.1

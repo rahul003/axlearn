@@ -1,0 +1,1558 @@
++ srun -l setup_node.sh /fsx/huilgolr/jul-end-artifacts/
+0: + SECONDS=0
+0: + sudo apt-get update -
+0: E: The repository 'https://apt.repos.neuron.amazonaws.com noble Release' does not have a Release file.
+0: + sudo apt install -y software-properties-common
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: software-properties-common is already the newest version (0.99.49.3).
+0: The following packages were automatically installed and are no longer required:
+0:   amd64-microcode bpfcc-tools bpftrace ieee-data libbpfcc libclang-cpp18
+0:   libclang1-18 libllvm18 microcode-initrd python3-bpfcc python3-netaddr
+0:   ubuntu-kernel-accessories
+0: Use 'sudo apt autoremove' to remove them.
+0: 0 upgraded, 0 newly installed, 0 to remove and 33 not upgraded.
+0: 1 not fully installed or removed.
+0: After this operation, 0 B of additional disk space will be used.
+0: Setting up linux-headers-6.14.0-1009-aws (6.14.0-1009.9~24.04.1) ...
+0: /etc/kernel/header_postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.14.0-1009-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Sign command: /usr/bin/kmodsign
+0: Signing key: /var/lib/shim-signed/mok/MOK.priv
+0: Public certificate (MOK): /var/lib/shim-signed/mok/MOK.der
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: 
+0: Building module:
+0: Cleaning build area...
+0: make -j192 KERNELRELEASE=6.14.0-1009-aws -C /lib/modules/6.14.0-1009-aws/build M=/var/lib/dkms/aws-neuronx/2.x.6276.0/build...(bad exit status: 2)
+0: ERROR: Cannot create report: [Errno 17] File exists: '/var/crash/aws-neuronx-dkms.0.crash'
+0: Error! Bad return status for module build on kernel: 6.14.0-1009-aws (x86_64)
+0: Consult /var/lib/dkms/aws-neuronx/2.x.6276.0/build/make.log for more information.
+0: dkms autoinstall on 6.14.0-1009-aws/x86_64 succeeded for efa
+0: dkms autoinstall on 6.14.0-1009-aws/x86_64 failed for aws-neuronx(10)
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.14.0-1009-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/header_postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-headers-6.14.0-1009-aws (--configure):
+0:  installed linux-headers-6.14.0-1009-aws package post-installation script subprocess returned error exit status 11
+0: Errors were encountered while processing:
+0:  linux-headers-6.14.0-1009-aws
+0: needrestart is being skipped since dpkg has failed
+0: E: Sub-process /usr/bin/dpkg returned an error code (1)
+0: + sudo add-apt-repository -y ppa:deadsnakes/ppa
+0: Hit:1 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble InRelease
+0: Hit:2 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble-updates InRelease
+0: Hit:3 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble-backports InRelease
+0: Hit:4 https://download.docker.com/linux/ubuntu noble InRelease
+0: Hit:5 http://security.ubuntu.com/ubuntu noble-security InRelease
+0: Hit:6 https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu noble InRelease
+0: Ign:7 https://apt.repos.neuron.amazonaws.com noble InRelease
+0: Hit:8 https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble InRelease
+0: Err:9 https://apt.repos.neuron.amazonaws.com noble Release
+0:   404  Not Found [IP: 13.249.74.14 443]
+0: Reading package lists...
+0: E: The repository 'https://apt.repos.neuron.amazonaws.com noble Release' does not have a Release file.
+0: Repository: 'Types: deb
+0: URIs: https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu/
+0: Suites: noble
+0: Components: main
+0: '
+0: Description:
+0: This PPA contains more recent Python versions packaged for Ubuntu.
+0: 
+0: Disclaimer: there's no guarantee of timely updates in case of security problems or other issues. If you want to use them in a security-or-otherwise-critical environment (say, on a production server), you do so at your own risk.
+0: 
+0: Update Note
+0: ===========
+0: Please use this repository instead of ppa:fkrull/deadsnakes.
+0: 
+0: Reporting Issues
+0: ================
+0: 
+0: Issues can be reported in the master issue tracker at:
+0: https://github.com/deadsnakes/issues/issues
+0: 
+0: Supported Ubuntu and Python Versions
+0: ====================================
+0: 
+0: - Ubuntu 20.04 (focal) Python3.5 - Python3.7, Python3.9 - Python3.13
+0: - Ubuntu 22.04 (jammy) Python3.7 - Python3.9, Python3.11 - Python3.13
+0: - Ubuntu 24.04 (noble) Python3.7 - Python3.11, Python3.13
+0: - Note: Python2.7 (focal, jammy), Python 3.8 (focal), Python 3.10 (jammy), Python3.12 (noble) are not provided by deadsnakes as upstream ubuntu provides those packages.
+0: 
+0: Why some packages aren't built:
+0: - Note: for focal, older python versions require libssl<1.1 so they are not currently built
+0: - Note: for jammy and noble, older python versions requre libssl<3 so they are not currently built
+0: - If you need these, reach out to asottile to set up a private ppa
+0: 
+0: The packages may also work on other versions of Ubuntu or Debian, but that is not tested or supported.
+0: 
+0: Packages
+0: ========
+0: 
+0: The packages provided here are loosely based on the debian upstream packages with some modifications to make them more usable as non-default pythons and on ubuntu.  As such, the packages follow debian's patterns and often do not include a full python distribution with just `apt install python#.#`.  Here is a list of packages that may be useful along with the default install:
+0: 
+0: - `python#.#-dev`: includes development headers for building C extensions
+0: - `python#.#-venv`: provides the standard library `venv` module
+0: - `python#.#-distutils`: provides the standard library `distutils` module
+0: - `python#.#-lib2to3`: provides the `2to3-#.#` utility as well as the standard library `lib2to3` module
+0: - `python#.#-gdbm`: provides the standard library `dbm.gnu` module
+0: - `python#.#-tk`: provides the standard library `tkinter` module
+0: 
+0: Third-Party Python Modules
+0: ==========================
+0: 
+0: Python modules in the official Ubuntu repositories are packaged to work with the Python interpreters from the official repositories. Accordingly, they generally won't work with the Python interpreters from this PPA. As an exception, pure-Python modules for Python 3 will work, but any compiled extension modules won't.
+0: 
+0: To install 3rd-party Python modules, you should use the common Python packaging tools.  For an introduction into the Python packaging ecosystem and its tools, refer to the Python Packaging User Guide:
+0: https://packaging.python.org/installing/
+0: 
+0: Sources
+0: =======
+0: The package sources are available at:
+0: https://github.com/deadsnakes/
+0: 
+0: Nightly Builds
+0: ==============
+0: 
+0: For nightly builds, see ppa:deadsnakes/nightly https://launchpad.net/~deadsnakes/+archive/ubuntu/nightly
+0: More info: https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa
+0: Adding repository.
+0: Found existing deb entry in /etc/apt/sources.list.d/deadsnakes-ubuntu-ppa-noble.sources
+0: + sudo apt install -y python3.10
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: python3.10 is already the newest version (3.10.18-1+noble1).
+0: The following packages were automatically installed and are no longer required:
+0:   amd64-microcode bpfcc-tools bpftrace ieee-data libbpfcc libclang-cpp18
+0:   libclang1-18 libllvm18 microcode-initrd python3-bpfcc python3-netaddr
+0:   ubuntu-kernel-accessories
+0: Use 'sudo apt autoremove' to remove them.
+0: 0 upgraded, 0 newly installed, 0 to remove and 33 not upgraded.
+0: 1 not fully installed or removed.
+0: After this operation, 0 B of additional disk space will be used.
+0: Setting up linux-headers-6.14.0-1009-aws (6.14.0-1009.9~24.04.1) ...
+0: /etc/kernel/header_postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.14.0-1009-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Sign command: /usr/bin/kmodsign
+0: Signing key: /var/lib/shim-signed/mok/MOK.priv
+0: Public certificate (MOK): /var/lib/shim-signed/mok/MOK.der
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: 
+0: Building module:
+0: Cleaning build area...
+0: make -j192 KERNELRELEASE=6.14.0-1009-aws -C /lib/modules/6.14.0-1009-aws/build M=/var/lib/dkms/aws-neuronx/2.x.6276.0/build...(bad exit status: 2)
+0: ERROR: Cannot create report: [Errno 17] File exists: '/var/crash/aws-neuronx-dkms.0.crash'
+0: Error! Bad return status for module build on kernel: 6.14.0-1009-aws (x86_64)
+0: Consult /var/lib/dkms/aws-neuronx/2.x.6276.0/build/make.log for more information.
+0: dkms autoinstall on 6.14.0-1009-aws/x86_64 succeeded for efa
+0: dkms autoinstall on 6.14.0-1009-aws/x86_64 failed for aws-neuronx(10)
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.14.0-1009-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/header_postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-headers-6.14.0-1009-aws (--configure):
+0:  installed linux-headers-6.14.0-1009-aws package post-installation script subprocess returned error exit status 11
+0: Errors were encountered while processing:
+0:  linux-headers-6.14.0-1009-aws
+0: needrestart is being skipped since dpkg has failed
+0: E: Sub-process /usr/bin/dpkg returned an error code (1)
+0: + sudo apt update
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: Hit:1 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble InRelease
+0: Hit:2 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble-updates InRelease
+0: Hit:3 http://ap-southeast-4.ec2.archive.ubuntu.com/ubuntu noble-backports InRelease
+0: Hit:4 https://download.docker.com/linux/ubuntu noble InRelease
+0: Hit:5 http://security.ubuntu.com/ubuntu noble-security InRelease
+0: Ign:6 https://apt.repos.neuron.amazonaws.com noble InRelease
+0: Err:7 https://apt.repos.neuron.amazonaws.com noble Release
+0:   404  Not Found [IP: 13.249.74.98 443]
+0: Hit:8 https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu noble InRelease
+0: Hit:9 https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble InRelease
+0: Reading package lists...
+0: E: The repository 'https://apt.repos.neuron.amazonaws.com noble Release' does not have a Release file.
+0: + sudo apt install -y python3.10-venv python3.10-dev python3-pip
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: python3.10-venv is already the newest version (3.10.18-1+noble1).
+0: python3.10-dev is already the newest version (3.10.18-1+noble1).
+0: python3-pip is already the newest version (24.0+dfsg-1ubuntu1.3).
+0: The following packages were automatically installed and are no longer required:
+0:   amd64-microcode bpfcc-tools bpftrace ieee-data libbpfcc libclang-cpp18
+0:   libclang1-18 libllvm18 microcode-initrd python3-bpfcc python3-netaddr
+0:   ubuntu-kernel-accessories
+0: Use 'sudo apt autoremove' to remove them.
+0: 0 upgraded, 0 newly installed, 0 to remove and 33 not upgraded.
+0: 1 not fully installed or removed.
+0: After this operation, 0 B of additional disk space will be used.
+0: Setting up linux-headers-6.14.0-1009-aws (6.14.0-1009.9~24.04.1) ...
+0: /etc/kernel/header_postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.14.0-1009-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Sign command: /usr/bin/kmodsign
+0: Signing key: /var/lib/shim-signed/mok/MOK.priv
+0: Public certificate (MOK): /var/lib/shim-signed/mok/MOK.der
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: 
+0: Building module:
+0: Cleaning build area...
+0: make -j192 KERNELRELEASE=6.14.0-1009-aws -C /lib/modules/6.14.0-1009-aws/build M=/var/lib/dkms/aws-neuronx/2.x.6276.0/build...(bad exit status: 2)
+0: ERROR: Cannot create report: [Errno 17] File exists: '/var/crash/aws-neuronx-dkms.0.crash'
+0: Error! Bad return status for module build on kernel: 6.14.0-1009-aws (x86_64)
+0: Consult /var/lib/dkms/aws-neuronx/2.x.6276.0/build/make.log for more information.
+0: dkms autoinstall on 6.14.0-1009-aws/x86_64 succeeded for efa
+0: dkms autoinstall on 6.14.0-1009-aws/x86_64 failed for aws-neuronx(10)
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.14.0-1009-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/header_postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-headers-6.14.0-1009-aws (--configure):
+0:  installed linux-headers-6.14.0-1009-aws package post-installation script subprocess returned error exit status 11
+0: Errors were encountered while processing:
+0:  linux-headers-6.14.0-1009-aws
+0: needrestart is being skipped since dpkg has failed
+0: E: Sub-process /usr/bin/dpkg returned an error code (1)
+0: + sudo apt-get -f install -y
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: The following packages were automatically installed and are no longer required:
+0:   amd64-microcode bpfcc-tools bpftrace ieee-data libbpfcc libclang-cpp18
+0:   libclang1-18 libllvm18 microcode-initrd python3-bpfcc python3-netaddr
+0:   ubuntu-kernel-accessories
+0: Use 'sudo apt autoremove' to remove them.
+0: 0 upgraded, 0 newly installed, 0 to remove and 33 not upgraded.
+0: 1 not fully installed or removed.
+0: After this operation, 0 B of additional disk space will be used.
+0: Setting up linux-headers-6.14.0-1009-aws (6.14.0-1009.9~24.04.1) ...
+0: /etc/kernel/header_postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.14.0-1009-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Sign command: /usr/bin/kmodsign
+0: Signing key: /var/lib/shim-signed/mok/MOK.priv
+0: Public certificate (MOK): /var/lib/shim-signed/mok/MOK.der
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: 
+0: Building module:
+0: Cleaning build area...
+0: make -j192 KERNELRELEASE=6.14.0-1009-aws -C /lib/modules/6.14.0-1009-aws/build M=/var/lib/dkms/aws-neuronx/2.x.6276.0/build...(bad exit status: 2)
+0: ERROR: Cannot create report: [Errno 17] File exists: '/var/crash/aws-neuronx-dkms.0.crash'
+0: Error! Bad return status for module build on kernel: 6.14.0-1009-aws (x86_64)
+0: Consult /var/lib/dkms/aws-neuronx/2.x.6276.0/build/make.log for more information.
+0: dkms autoinstall on 6.14.0-1009-aws/x86_64 succeeded for efa
+0: dkms autoinstall on 6.14.0-1009-aws/x86_64 failed for aws-neuronx(10)
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.14.0-1009-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/header_postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-headers-6.14.0-1009-aws (--configure):
+0:  installed linux-headers-6.14.0-1009-aws package post-installation script subprocess returned error exit status 11
+0: Errors were encountered while processing:
+0:  linux-headers-6.14.0-1009-aws
+0: needrestart is being skipped since dpkg has failed
+0: E: Sub-process /usr/bin/dpkg returned an error code (1)
+0: + sudo apt-get install -y google-perftools
+0: Reading package lists...
+0: Building dependency tree...
+0: Reading state information...
+0: google-perftools is already the newest version (2.15-3build1).
+0: The following packages were automatically installed and are no longer required:
+0:   amd64-microcode bpfcc-tools bpftrace ieee-data libbpfcc libclang-cpp18
+0:   libclang1-18 libllvm18 microcode-initrd python3-bpfcc python3-netaddr
+0:   ubuntu-kernel-accessories
+0: Use 'sudo apt autoremove' to remove them.
+0: 0 upgraded, 0 newly installed, 0 to remove and 33 not upgraded.
+0: 1 not fully installed or removed.
+0: After this operation, 0 B of additional disk space will be used.
+0: Setting up linux-headers-6.14.0-1009-aws (6.14.0-1009.9~24.04.1) ...
+0: /etc/kernel/header_postinst.d/dkms:
+0:  * dkms: running auto installation service for kernel 6.14.0-1009-aws
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: Sign command: /usr/bin/kmodsign
+0: Signing key: /var/lib/shim-signed/mok/MOK.priv
+0: Public certificate (MOK): /var/lib/shim-signed/mok/MOK.der
+0: Deprecated feature: REMAKE_INITRD (/var/lib/dkms/aws-neuronx/2.x.6276.0/source/dkms.conf)
+0: 
+0: Building module:
+0: Cleaning build area...
+0: make -j192 KERNELRELEASE=6.14.0-1009-aws -C /lib/modules/6.14.0-1009-aws/build M=/var/lib/dkms/aws-neuronx/2.x.6276.0/build...(bad exit status: 2)
+0: ERROR: Cannot create report: [Errno 17] File exists: '/var/crash/aws-neuronx-dkms.0.crash'
+0: Error! Bad return status for module build on kernel: 6.14.0-1009-aws (x86_64)
+0: Consult /var/lib/dkms/aws-neuronx/2.x.6276.0/build/make.log for more information.
+0: dkms autoinstall on 6.14.0-1009-aws/x86_64 succeeded for efa
+0: dkms autoinstall on 6.14.0-1009-aws/x86_64 failed for aws-neuronx(10)
+0: efa-nv-peermem/1.1.1 autoinstall failed due to missing dependencies: nvidia
+0: Error! One or more modules failed to install during autoinstall.
+0: Refer to previous errors for more information.
+0:  * dkms: autoinstall for kernel 6.14.0-1009-aws
+0:    ...fail!
+0: run-parts: /etc/kernel/header_postinst.d/dkms exited with return code 11
+0: dpkg: error processing package linux-headers-6.14.0-1009-aws (--configure):
+0:  installed linux-headers-6.14.0-1009-aws package post-installation script subprocess returned error exit status 11
+0: Errors were encountered while processing:
+0:  linux-headers-6.14.0-1009-aws
+0: needrestart is being skipped since dpkg has failed
+0: E: Sub-process /usr/bin/dpkg returned an error code (1)
+0: + ENV_DROP_DIR=/fsx/huilgolr/jul-end-artifacts/
+0: + RUNTIME='/fsx/huilgolr/jul-end-artifacts//aws-neuronx-runtime-lib-*.deb'
+0: + COLLECTIVES='/fsx/huilgolr/jul-end-artifacts//aws-neuronx-collectives-*.deb'
+0: + TOOLS='/fsx/huilgolr/jul-end-artifacts//aws-neuronx-tools-*.deb'
+0: + DKMS='/fsx/huilgolr/jul-end-artifacts//aws-neuronx-dkms_*.deb'
+0: + sudo dpkg -i /fsx/huilgolr/jul-end-artifacts//aws-neuronx-runtime-lib-2.x.30619.0-735d5ee25.deb /fsx/huilgolr/jul-end-artifacts//aws-neuronx-collectives-2.x.32119.0-9686b27ce.deb '/fsx/huilgolr/jul-end-artifacts//aws-neuronx-tools-*.deb'
+0: dpkg: error: cannot access archive '/fsx/huilgolr/jul-end-artifacts//aws-neuronx-tools-*.deb': No such file or directory
+0: + sudo dpkg -i /fsx/huilgolr/jul-end-artifacts//aws-neuronx-runtime-lib-2.x.30619.0-735d5ee25.deb /fsx/huilgolr/jul-end-artifacts//aws-neuronx-collectives-2.x.32119.0-9686b27ce.deb
+0: (Reading database ... 183983 files and directories currently installed.)
+0: Preparing to unpack .../aws-neuronx-runtime-lib-2.x.30619.0-735d5ee25.deb ...
+0: Unpacking aws-neuronx-runtime-lib (2.x.30619.0-735d5ee25) over (2.x.29632.0-5b11fddb8) ...
+0: Preparing to unpack .../aws-neuronx-collectives-2.x.32119.0-9686b27ce.deb ...
+0: Unpacking aws-neuronx-collectives (2.x.32119.0-9686b27ce) over (2.x.31306.0-76169865b) ...
+0: Setting up aws-neuronx-runtime-lib (2.x.30619.0-735d5ee25) ...
+0: Setting up aws-neuronx-collectives (2.x.32119.0-9686b27ce) ...
+0: ++ curl -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600'
+0:   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+0:                                  Dload  Upload   Total   Spent    Left  Speed
+0:   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    56  100    56    0     0  36745      0 --:--:-- --:--:-- --:--:-- 56000
+0: + TOKEN=AQAEANS9pUJM72d7bGLrySRwLlOpJWe2_heRunxhwH7xmwbE5FdgNg==
+0: ++ curl -H 'X-aws-ec2-metadata-token: AQAEANS9pUJM72d7bGLrySRwLlOpJWe2_heRunxhwH7xmwbE5FdgNg==' -s http://169.254.169.254/latest/meta-data/instance-id
+0: + INSTANCE_ID=i-0bdac9dce335b869a
+0: ++ hostname
+0: instance_id:i-0bdac9dce335b869a hostname:ip-10-0-139-165
+0: runtime versions
+0: ===============================================
+0: Dependency versions
+0: ===============================================
+0: + echo 'instance_id:i-0bdac9dce335b869a hostname:ip-10-0-139-165'
+0: + echo 'runtime versions'
+0: + echo ===============================================
+0: + echo 'Dependency versions'
+0: + echo ===============================================
+0: + apt list
+0: + grep neuron
+0: + grep installed
+0: 
+0: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+0: 
+0: aws-neuronx-collectives/now 2.x.32119.0-9686b27ce amd64 [installed,local]
+0: aws-neuronx-dkms/now 2.x.6276.0 all [installed,local]
+0: aws-neuronx-runtime-lib/now 2.x.30619.0-735d5ee25 amd64 [installed,local]
+0: aws-neuronx-tools/now 2.0.16698.0 amd64 [installed,local]
+0: Setup took 38 s
+0: + echo 'Setup took 38 s'
++ SUITE_ARG=gpt-oss
++ TEST_LOGDIR=test_artifacts/20250930_215514
++ GOLDENS_DIR=/fsx/huilgolr/axlearn/test_goldens
++ JAX_CC_DIR=test_jax_cc
++ '[' -z gpt-oss ']'
++ mkdir -p test_artifacts/20250930_215514
++ run_suite gpt-oss
++ suite=gpt-oss
++ echo 'Running test suite: gpt-oss'
+Running test suite: gpt-oss
++ mkdir -p test_artifacts/20250930_215514/gpt-oss
++ '[' gpt-oss = 150b ']'
++ srun -l ./aws-testing/unit_test.sh integ gpt-oss test_artifacts/20250930_215514 /fsx/huilgolr/axlearn/test_goldens test_jax_cc
++ tee test_artifacts/20250930_215514/gpt-oss/integ.log
+0: Splitting tests into 10 parts
+0: + TEST_SUITE_PART=0
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20250930_215514/gpt-oss/integ_0.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-09-30 22:19:54,372:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: Part[0/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16']
+0: No previous results found in test_artifacts/20250930_215514 for gpt-oss, running all tests
+0: Part[0/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16']
+0: No previous results found in test_artifacts/20250930_215514 for gpt-oss, running all tests
+0: collected 10 items / 8 deselected / 2 selected
+0: 
+0: aws-testing/moe_layer_integ_test.py s
+0: -------------------
+0: Test: MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16
+0: > Test device: neuron Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGatingGatherBlockwise.Config)
+0: > Golden device: cpu Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGating.Config)
+0: moe_layer_integ_test.TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16 TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16 Could not find cache for test
+0: F
+0: 
+0: =================================== FAILURES ===================================
+0: _ TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16 _
+0: jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+0: 
+0: The above exception was the direct cause of the following exception:
+0: aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+0:     self.helper_bwd(cfg)
+0: aws-testing/test_cases.py:134: in helper_bwd
+0:     test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+0: aws-testing/test_cases.py:116: in test_bwd_call
+0:     (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+0: aws-testing/test_cases.py:114: in loss_fn
+0:     output, aux = self._fwd_call(test_layer, state, test_inputs)
+0: aws-testing/test_cases.py:15: in _fwd_call
+0:     return F(
+0: axlearn/common/module.py:1096: in functional
+0:     method_outputs, output_collection = fn(*args, **kwargs)
+0: axlearn/common/module.py:1037: in __call__
+0:     method_outputs = self.method_fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:598: in wrap_method_fn
+0:     return method_fn_in_context(self, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:168: in in_context_exception_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:560: in _call_method_in_context
+0:     return method_fn(module, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/mixture_of_experts.py:1697: in forward
+0:     x = self._dispatch_and_combine(inputs)
+0: axlearn/common/mixture_of_experts.py:1914: in _dispatch_and_combine
+0:     x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
+0: axlearn/common/mixture_of_experts.py:1857: in _dispatch_and_combine_with_gather_blockwise_gating
+0:     outputs = partitioned_blockwise_mm(
+0: axlearn/common/mixture_of_experts.py:159: in blockwise_mlp
+0:     output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+0: axlearn/common/neuron_blockwise_mlp.py:88: in blockwise_mm
+0:     out, _ = _blockwise_mm_fwd(hidden_states, expert_affinities_masked, gate_up_weight,
+0: axlearn/common/neuron_blockwise_mlp.py:117: in _blockwise_mm_fwd
+0:     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+0: neuronxcc/nki/compile.py:103: in neuronxcc.nki.compile.GenericKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:64: in neuronxcc.nki._jax.JAXKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:103: in neuronxcc.nki._jax.nki_call_eval
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:289: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:290: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:301: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config_with_boundargs
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:337: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:339: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:347: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:367: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:352: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1619: in blockwise_mm_selective_cp
+0:     blockwise_mm_baseline_shard_hidden(
+0: neuronxcc/nki/compiler/backends/neuron/TraceContext.py:114: in neuronxcc.nki.compiler.backends.neuron.TraceContext.TraceContext.call
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1666: in blockwise_mm_baseline_shard_hidden
+0:     check_blockwise_mm_kernel_compatibility(H, B, I_TP)
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:68: in check_blockwise_mm_kernel_compatibility
+0:     assert block_size in available_block_sizes, f"Only support block_size in {available_block_sizes}, found {block_size}"
+0: E   AssertionError: Only support block_size in [128, 256, 512, 1024], found 64
+0: ------------------------------ Captured log call -------------------------------
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.router. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_capacity. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_index. Consider using keyword arguments instead.
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20250930_215514/gpt-oss/integ_0.xml -
+0: =========================== short test summary info ============================
+0: SKIPPED [1] ../jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:303: skip v1 tests as v2 is the focus
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16
+0: ============ 1 failed, 1 skipped, 8 deselected in 209.94s (0:03:29) ============
+0: + status_part=1
+0: + status=1
+0: + set +x
+0: + TEST_SUITE_PART=1
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20250930_215514/gpt-oss/integ_1.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-09-30 22:23:01,337:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: Part[1/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', <utils_neuron.ExperimentConfig object at 0x7090168b0a30>)]
+0: Part[1/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', <utils_neuron.ExperimentConfig object at 0x7090168b27d0>)]
+0: collected 10 items / 8 deselected / 2 selected
+0: 
+0: E0930 22:23:47.265833 1707301 collective_ops_utils.h:346] This thread has been waiting for 5000ms for and may be stuck: participant AllToAllParticipantData{rank=1, devices=[17, 21, 25, 29], source_buffers=[0x704e5b6da040, 0x704e5b6da040, 0x704e5b6da040, 0x704e5b6da040], destination_buffers=[0x704e57791040, 0x708cba225040, 0x704e557ec180, 0x704e567be180], chunk_size=16588800} waiting for all participants to arrive at rendezvous RendezvousKey{run_id=RunId: 6, global_devices=[17,21,25,29], num_local_participants=4, collective_op_kind=cross_module, op_id=1}
+0: E0930 22:23:47.331787 1707301 collective_ops_utils.h:349] Thread is unstuck! Warning above was a false-positive. Perhaps the timeout is too short: participant AllToAllParticipantData{rank=1, devices=[17, 21, 25, 29], source_buffers=[0x704e5b6da040, 0x704e5b6da040, 0x704e5b6da040, 0x704e5b6da040], destination_buffers=[0x704e57791040, 0x708cba225040, 0x704e557ec180, 0x704e567be180], chunk_size=16588800} waiting for all participants to arrive at rendezvous RendezvousKey{run_id=RunId: 6, global_devices=[17,21,25,29], num_local_participants=4, collective_op_kind=cross_module, op_id=1}
+0: aws-testing/moe_layer_integ_test.py s
+0: -------------------
+0: Test: MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16
+0: > Test device: neuron Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGatingGatherBlockwise.Config)
+0: > Golden device: cpu Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGating.Config)
+0: moe_layer_integ_test.TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16 TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16 Could not find cache for test
+0: F
+0: 
+0: =================================== FAILURES ===================================
+0: _ TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16 _
+0: jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+0: 
+0: The above exception was the direct cause of the following exception:
+0: aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+0:     self.helper_bwd(cfg)
+0: aws-testing/test_cases.py:134: in helper_bwd
+0:     test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+0: aws-testing/test_cases.py:116: in test_bwd_call
+0:     (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+0: aws-testing/test_cases.py:114: in loss_fn
+0:     output, aux = self._fwd_call(test_layer, state, test_inputs)
+0: aws-testing/test_cases.py:15: in _fwd_call
+0:     return F(
+0: axlearn/common/module.py:1096: in functional
+0:     method_outputs, output_collection = fn(*args, **kwargs)
+0: axlearn/common/module.py:1037: in __call__
+0:     method_outputs = self.method_fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:598: in wrap_method_fn
+0:     return method_fn_in_context(self, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:168: in in_context_exception_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:560: in _call_method_in_context
+0:     return method_fn(module, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/mixture_of_experts.py:1697: in forward
+0:     x = self._dispatch_and_combine(inputs)
+0: axlearn/common/mixture_of_experts.py:1914: in _dispatch_and_combine
+0:     x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
+0: axlearn/common/mixture_of_experts.py:1857: in _dispatch_and_combine_with_gather_blockwise_gating
+0:     outputs = partitioned_blockwise_mm(
+0: axlearn/common/mixture_of_experts.py:159: in blockwise_mlp
+0:     output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+0: axlearn/common/neuron_blockwise_mlp.py:88: in blockwise_mm
+0:     out, _ = _blockwise_mm_fwd(hidden_states, expert_affinities_masked, gate_up_weight,
+0: axlearn/common/neuron_blockwise_mlp.py:117: in _blockwise_mm_fwd
+0:     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+0: neuronxcc/nki/compile.py:103: in neuronxcc.nki.compile.GenericKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:64: in neuronxcc.nki._jax.JAXKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:103: in neuronxcc.nki._jax.nki_call_eval
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:289: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:290: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:301: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config_with_boundargs
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:337: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:339: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:347: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:367: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:352: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1619: in blockwise_mm_selective_cp
+0:     blockwise_mm_baseline_shard_hidden(
+0: neuronxcc/nki/compiler/backends/neuron/TraceContext.py:114: in neuronxcc.nki.compiler.backends.neuron.TraceContext.TraceContext.call
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1666: in blockwise_mm_baseline_shard_hidden
+0:     check_blockwise_mm_kernel_compatibility(H, B, I_TP)
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:68: in check_blockwise_mm_kernel_compatibility
+0:     assert block_size in available_block_sizes, f"Only support block_size in {available_block_sizes}, found {block_size}"
+0: E   AssertionError: Only support block_size in [128, 256, 512, 1024], found 64
+0: ------------------------------ Captured log call -------------------------------
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.router. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_capacity. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_index. Consider using keyword arguments instead.
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20250930_215514/gpt-oss/integ_1.xml -
+0: =========================== short test summary info ============================
+0: SKIPPED [1] ../jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:303: skip v1 tests as v2 is the focus
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16
+0: ============ 1 failed, 1 skipped, 8 deselected in 115.42s (0:01:55) ============
+0: + status_part=1
+0: + status=2
+0: + set +x
+0: + TEST_SUITE_PART=2
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20250930_215514/gpt-oss/integ_2.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-09-30 22:25:01,352:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: Part[2/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', <utils_neuron.ExperimentConfig object at 0x718564abcdf0>)]
+0: Part[2/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', <utils_neuron.ExperimentConfig object at 0x718564abee00>)]
+0: collected 10 items / 8 deselected / 2 selected
+0: 
+0: aws-testing/moe_layer_integ_test.py s
+0: -------------------
+0: Test: MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16
+0: > Test device: neuron Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGatingGatherBlockwise.Config)
+0: > Golden device: cpu Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGating.Config)
+0: moe_layer_integ_test.TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16 TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16 Could not find cache for test
+0: F
+0: 
+0: =================================== FAILURES ===================================
+0: _ TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16 _
+0: jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+0: 
+0: The above exception was the direct cause of the following exception:
+0: aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+0:     self.helper_bwd(cfg)
+0: aws-testing/test_cases.py:134: in helper_bwd
+0:     test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+0: aws-testing/test_cases.py:116: in test_bwd_call
+0:     (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+0: aws-testing/test_cases.py:114: in loss_fn
+0:     output, aux = self._fwd_call(test_layer, state, test_inputs)
+0: aws-testing/test_cases.py:15: in _fwd_call
+0:     return F(
+0: axlearn/common/module.py:1096: in functional
+0:     method_outputs, output_collection = fn(*args, **kwargs)
+0: axlearn/common/module.py:1037: in __call__
+0:     method_outputs = self.method_fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:598: in wrap_method_fn
+0:     return method_fn_in_context(self, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:168: in in_context_exception_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:560: in _call_method_in_context
+0:     return method_fn(module, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/mixture_of_experts.py:1697: in forward
+0:     x = self._dispatch_and_combine(inputs)
+0: axlearn/common/mixture_of_experts.py:1914: in _dispatch_and_combine
+0:     x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
+0: axlearn/common/mixture_of_experts.py:1857: in _dispatch_and_combine_with_gather_blockwise_gating
+0:     outputs = partitioned_blockwise_mm(
+0: axlearn/common/mixture_of_experts.py:159: in blockwise_mlp
+0:     output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+0: axlearn/common/neuron_blockwise_mlp.py:88: in blockwise_mm
+0:     out, _ = _blockwise_mm_fwd(hidden_states, expert_affinities_masked, gate_up_weight,
+0: axlearn/common/neuron_blockwise_mlp.py:117: in _blockwise_mm_fwd
+0:     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+0: neuronxcc/nki/compile.py:103: in neuronxcc.nki.compile.GenericKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:64: in neuronxcc.nki._jax.JAXKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:103: in neuronxcc.nki._jax.nki_call_eval
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:289: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:290: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:301: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config_with_boundargs
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:337: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:339: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:347: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:367: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:352: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1619: in blockwise_mm_selective_cp
+0:     blockwise_mm_baseline_shard_hidden(
+0: neuronxcc/nki/compiler/backends/neuron/TraceContext.py:114: in neuronxcc.nki.compiler.backends.neuron.TraceContext.TraceContext.call
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1666: in blockwise_mm_baseline_shard_hidden
+0:     check_blockwise_mm_kernel_compatibility(H, B, I_TP)
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:68: in check_blockwise_mm_kernel_compatibility
+0:     assert block_size in available_block_sizes, f"Only support block_size in {available_block_sizes}, found {block_size}"
+0: E   AssertionError: Only support block_size in [128, 256, 512, 1024], found 64
+0: ------------------------------ Captured log call -------------------------------
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.router. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_capacity. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_index. Consider using keyword arguments instead.
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20250930_215514/gpt-oss/integ_2.xml -
+0: =========================== short test summary info ============================
+0: SKIPPED [1] ../jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:303: skip v1 tests as v2 is the focus
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16
+0: ============ 1 failed, 1 skipped, 8 deselected in 114.25s (0:01:54) ============
+0: + status_part=1
+0: + status=3
+0: + set +x
+0: + TEST_SUITE_PART=3
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20250930_215514/gpt-oss/integ_3.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-09-30 22:26:59,655:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: Part[3/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', <utils_neuron.ExperimentConfig object at 0x77b04a709720>)]
+0: Part[3/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', <utils_neuron.ExperimentConfig object at 0x77b04a70bdc0>)]
+0: collected 10 items / 8 deselected / 2 selected
+0: 
+0: aws-testing/moe_layer_integ_test.py s
+0: -------------------
+0: Test: MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16
+0: > Test device: neuron Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGatingGatherBlockwise.Config)
+0: > Golden device: cpu Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGating.Config)
+0: moe_layer_integ_test.TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16 TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16 Could not find cache for test
+0: F
+0: 
+0: =================================== FAILURES ===================================
+0: _ TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16 _
+0: jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+0: 
+0: The above exception was the direct cause of the following exception:
+0: aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+0:     self.helper_bwd(cfg)
+0: aws-testing/test_cases.py:134: in helper_bwd
+0:     test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+0: aws-testing/test_cases.py:116: in test_bwd_call
+0:     (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+0: aws-testing/test_cases.py:114: in loss_fn
+0:     output, aux = self._fwd_call(test_layer, state, test_inputs)
+0: aws-testing/test_cases.py:15: in _fwd_call
+0:     return F(
+0: axlearn/common/module.py:1096: in functional
+0:     method_outputs, output_collection = fn(*args, **kwargs)
+0: axlearn/common/module.py:1037: in __call__
+0:     method_outputs = self.method_fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:598: in wrap_method_fn
+0:     return method_fn_in_context(self, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:168: in in_context_exception_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:560: in _call_method_in_context
+0:     return method_fn(module, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/mixture_of_experts.py:1697: in forward
+0:     x = self._dispatch_and_combine(inputs)
+0: axlearn/common/mixture_of_experts.py:1914: in _dispatch_and_combine
+0:     x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
+0: axlearn/common/mixture_of_experts.py:1857: in _dispatch_and_combine_with_gather_blockwise_gating
+0:     outputs = partitioned_blockwise_mm(
+0: axlearn/common/mixture_of_experts.py:159: in blockwise_mlp
+0:     output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+0: axlearn/common/neuron_blockwise_mlp.py:88: in blockwise_mm
+0:     out, _ = _blockwise_mm_fwd(hidden_states, expert_affinities_masked, gate_up_weight,
+0: axlearn/common/neuron_blockwise_mlp.py:117: in _blockwise_mm_fwd
+0:     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+0: neuronxcc/nki/compile.py:103: in neuronxcc.nki.compile.GenericKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:64: in neuronxcc.nki._jax.JAXKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:103: in neuronxcc.nki._jax.nki_call_eval
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:289: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:290: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:301: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config_with_boundargs
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:337: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:339: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:347: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:367: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:352: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1619: in blockwise_mm_selective_cp
+0:     blockwise_mm_baseline_shard_hidden(
+0: neuronxcc/nki/compiler/backends/neuron/TraceContext.py:114: in neuronxcc.nki.compiler.backends.neuron.TraceContext.TraceContext.call
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1666: in blockwise_mm_baseline_shard_hidden
+0:     check_blockwise_mm_kernel_compatibility(H, B, I_TP)
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:68: in check_blockwise_mm_kernel_compatibility
+0:     assert block_size in available_block_sizes, f"Only support block_size in {available_block_sizes}, found {block_size}"
+0: E   AssertionError: Only support block_size in [128, 256, 512, 1024], found 64
+0: ------------------------------ Captured log call -------------------------------
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.router. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_capacity. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_index. Consider using keyword arguments instead.
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20250930_215514/gpt-oss/integ_3.xml -
+0: =========================== short test summary info ============================
+0: SKIPPED [1] ../jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:303: skip v1 tests as v2 is the focus
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16
+0: ============ 1 failed, 1 skipped, 8 deselected in 111.97s (0:01:51) ============
+0: + status_part=1
+0: + status=4
+0: + set +x
+0: + TEST_SUITE_PART=4
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20250930_215514/gpt-oss/integ_4.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-09-30 22:28:56,043:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: Part[4/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', <utils_neuron.ExperimentConfig object at 0x7c95564ad360>)]
+0: Part[4/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', <utils_neuron.ExperimentConfig object at 0x7c95564affa0>)]
+0: collected 10 items / 8 deselected / 2 selected
+0: 
+0: aws-testing/moe_layer_integ_test.py s
+0: -------------------
+0: Test: MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16
+0: > Test device: neuron Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGatingGatherBlockwise.Config)
+0: > Golden device: cpu Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGating.Config)
+0: moe_layer_integ_test.TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16 TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16 Could not find cache for test
+0: F
+0: 
+0: =================================== FAILURES ===================================
+0: _ TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16 _
+0: jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+0: 
+0: The above exception was the direct cause of the following exception:
+0: aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+0:     self.helper_bwd(cfg)
+0: aws-testing/test_cases.py:134: in helper_bwd
+0:     test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+0: aws-testing/test_cases.py:116: in test_bwd_call
+0:     (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+0: aws-testing/test_cases.py:114: in loss_fn
+0:     output, aux = self._fwd_call(test_layer, state, test_inputs)
+0: aws-testing/test_cases.py:15: in _fwd_call
+0:     return F(
+0: axlearn/common/module.py:1096: in functional
+0:     method_outputs, output_collection = fn(*args, **kwargs)
+0: axlearn/common/module.py:1037: in __call__
+0:     method_outputs = self.method_fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:598: in wrap_method_fn
+0:     return method_fn_in_context(self, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:168: in in_context_exception_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:560: in _call_method_in_context
+0:     return method_fn(module, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/mixture_of_experts.py:1697: in forward
+0:     x = self._dispatch_and_combine(inputs)
+0: axlearn/common/mixture_of_experts.py:1914: in _dispatch_and_combine
+0:     x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
+0: axlearn/common/mixture_of_experts.py:1857: in _dispatch_and_combine_with_gather_blockwise_gating
+0:     outputs = partitioned_blockwise_mm(
+0: axlearn/common/mixture_of_experts.py:159: in blockwise_mlp
+0:     output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+0: axlearn/common/neuron_blockwise_mlp.py:88: in blockwise_mm
+0:     out, _ = _blockwise_mm_fwd(hidden_states, expert_affinities_masked, gate_up_weight,
+0: axlearn/common/neuron_blockwise_mlp.py:117: in _blockwise_mm_fwd
+0:     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+0: neuronxcc/nki/compile.py:103: in neuronxcc.nki.compile.GenericKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:64: in neuronxcc.nki._jax.JAXKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:103: in neuronxcc.nki._jax.nki_call_eval
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:289: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:290: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:301: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config_with_boundargs
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:337: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:339: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:347: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:367: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:352: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1619: in blockwise_mm_selective_cp
+0:     blockwise_mm_baseline_shard_hidden(
+0: neuronxcc/nki/compiler/backends/neuron/TraceContext.py:114: in neuronxcc.nki.compiler.backends.neuron.TraceContext.TraceContext.call
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1666: in blockwise_mm_baseline_shard_hidden
+0:     check_blockwise_mm_kernel_compatibility(H, B, I_TP)
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:70: in check_blockwise_mm_kernel_compatibility
+0:     assert hidden_size % PSUM_SIZE == 0, f"Hidden dim size must be multiples of {PSUM_SIZE}, found {hidden_size} "
+0: E   AssertionError: Hidden dim size must be multiples of 512, found 2880
+0: ------------------------------ Captured log call -------------------------------
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.router. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_capacity. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_index. Consider using keyword arguments instead.
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20250930_215514/gpt-oss/integ_4.xml -
+0: =========================== short test summary info ============================
+0: SKIPPED [1] ../jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:303: skip v1 tests as v2 is the focus
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16
+0: ============ 1 failed, 1 skipped, 8 deselected in 96.82s (0:01:36) =============
+0: + status_part=1
+0: + status=5
+0: + set +x
+0: + TEST_SUITE_PART=5
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20250930_215514/gpt-oss/integ_5.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-09-30 22:30:38,085:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: Part[5/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', <utils_neuron.ExperimentConfig object at 0x78cfd68e9c90>)]
+0: Part[5/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', <utils_neuron.ExperimentConfig object at 0x78cfd68eba30>)]
+0: collected 10 items / 8 deselected / 2 selected
+0: 
+0: aws-testing/moe_layer_integ_test.py s
+0: -------------------
+0: Test: MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16
+0: > Test device: neuron Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGatingGatherBlockwise.Config)
+0: > Golden device: cpu Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGating.Config)
+0: moe_layer_integ_test.TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16 TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16 Could not find cache for test
+0: F
+0: 
+0: =================================== FAILURES ===================================
+0: _ TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16 _
+0: jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+0: 
+0: The above exception was the direct cause of the following exception:
+0: aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+0:     self.helper_bwd(cfg)
+0: aws-testing/test_cases.py:134: in helper_bwd
+0:     test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+0: aws-testing/test_cases.py:116: in test_bwd_call
+0:     (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+0: aws-testing/test_cases.py:114: in loss_fn
+0:     output, aux = self._fwd_call(test_layer, state, test_inputs)
+0: aws-testing/test_cases.py:15: in _fwd_call
+0:     return F(
+0: axlearn/common/module.py:1096: in functional
+0:     method_outputs, output_collection = fn(*args, **kwargs)
+0: axlearn/common/module.py:1037: in __call__
+0:     method_outputs = self.method_fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:598: in wrap_method_fn
+0:     return method_fn_in_context(self, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:168: in in_context_exception_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:560: in _call_method_in_context
+0:     return method_fn(module, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/mixture_of_experts.py:1697: in forward
+0:     x = self._dispatch_and_combine(inputs)
+0: axlearn/common/mixture_of_experts.py:1914: in _dispatch_and_combine
+0:     x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
+0: axlearn/common/mixture_of_experts.py:1857: in _dispatch_and_combine_with_gather_blockwise_gating
+0:     outputs = partitioned_blockwise_mm(
+0: axlearn/common/mixture_of_experts.py:159: in blockwise_mlp
+0:     output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+0: axlearn/common/neuron_blockwise_mlp.py:88: in blockwise_mm
+0:     out, _ = _blockwise_mm_fwd(hidden_states, expert_affinities_masked, gate_up_weight,
+0: axlearn/common/neuron_blockwise_mlp.py:117: in _blockwise_mm_fwd
+0:     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+0: neuronxcc/nki/compile.py:103: in neuronxcc.nki.compile.GenericKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:64: in neuronxcc.nki._jax.JAXKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:103: in neuronxcc.nki._jax.nki_call_eval
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:289: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:290: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:301: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config_with_boundargs
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:337: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:339: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:347: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:367: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:352: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1619: in blockwise_mm_selective_cp
+0:     blockwise_mm_baseline_shard_hidden(
+0: neuronxcc/nki/compiler/backends/neuron/TraceContext.py:114: in neuronxcc.nki.compiler.backends.neuron.TraceContext.TraceContext.call
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1666: in blockwise_mm_baseline_shard_hidden
+0:     check_blockwise_mm_kernel_compatibility(H, B, I_TP)
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:70: in check_blockwise_mm_kernel_compatibility
+0:     assert hidden_size % PSUM_SIZE == 0, f"Hidden dim size must be multiples of {PSUM_SIZE}, found {hidden_size} "
+0: E   AssertionError: Hidden dim size must be multiples of 512, found 2880
+0: ------------------------------ Captured log call -------------------------------
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.router. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_capacity. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_index. Consider using keyword arguments instead.
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20250930_215514/gpt-oss/integ_5.xml -
+0: =========================== short test summary info ============================
+0: SKIPPED [1] ../jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:303: skip v1 tests as v2 is the focus
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16
+0: ============ 1 failed, 1 skipped, 8 deselected in 95.38s (0:01:35) =============
+0: + status_part=1
+0: + status=6
+0: + set +x
+0: + TEST_SUITE_PART=6
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20250930_215514/gpt-oss/integ_6.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-09-30 22:32:19,670:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: Part[6/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', <utils_neuron.ExperimentConfig object at 0x768b5221a6b0>)]
+0: Part[6/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', <utils_neuron.ExperimentConfig object at 0x768b5204cb20>)]
+0: collected 10 items / 8 deselected / 2 selected
+0: 
+0: aws-testing/moe_layer_integ_test.py s
+0: -------------------
+0: Test: MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16
+0: > Test device: neuron Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGatingGatherBlockwise.Config)
+0: > Golden device: cpu Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGating.Config)
+0: moe_layer_integ_test.TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16 TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16 Could not find cache for test
+0: F
+0: 
+0: =================================== FAILURES ===================================
+0: _ TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16 _
+0: jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+0: 
+0: The above exception was the direct cause of the following exception:
+0: aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+0:     self.helper_bwd(cfg)
+0: aws-testing/test_cases.py:134: in helper_bwd
+0:     test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+0: aws-testing/test_cases.py:116: in test_bwd_call
+0:     (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+0: aws-testing/test_cases.py:114: in loss_fn
+0:     output, aux = self._fwd_call(test_layer, state, test_inputs)
+0: aws-testing/test_cases.py:15: in _fwd_call
+0:     return F(
+0: axlearn/common/module.py:1096: in functional
+0:     method_outputs, output_collection = fn(*args, **kwargs)
+0: axlearn/common/module.py:1037: in __call__
+0:     method_outputs = self.method_fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:598: in wrap_method_fn
+0:     return method_fn_in_context(self, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:168: in in_context_exception_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:560: in _call_method_in_context
+0:     return method_fn(module, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/mixture_of_experts.py:1697: in forward
+0:     x = self._dispatch_and_combine(inputs)
+0: axlearn/common/mixture_of_experts.py:1914: in _dispatch_and_combine
+0:     x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
+0: axlearn/common/mixture_of_experts.py:1857: in _dispatch_and_combine_with_gather_blockwise_gating
+0:     outputs = partitioned_blockwise_mm(
+0: axlearn/common/mixture_of_experts.py:159: in blockwise_mlp
+0:     output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+0: axlearn/common/neuron_blockwise_mlp.py:88: in blockwise_mm
+0:     out, _ = _blockwise_mm_fwd(hidden_states, expert_affinities_masked, gate_up_weight,
+0: axlearn/common/neuron_blockwise_mlp.py:117: in _blockwise_mm_fwd
+0:     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+0: neuronxcc/nki/compile.py:103: in neuronxcc.nki.compile.GenericKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:64: in neuronxcc.nki._jax.JAXKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:103: in neuronxcc.nki._jax.nki_call_eval
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:289: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:290: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:301: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config_with_boundargs
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:337: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:339: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:347: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:367: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:352: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1619: in blockwise_mm_selective_cp
+0:     blockwise_mm_baseline_shard_hidden(
+0: neuronxcc/nki/compiler/backends/neuron/TraceContext.py:114: in neuronxcc.nki.compiler.backends.neuron.TraceContext.TraceContext.call
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1666: in blockwise_mm_baseline_shard_hidden
+0:     check_blockwise_mm_kernel_compatibility(H, B, I_TP)
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:70: in check_blockwise_mm_kernel_compatibility
+0:     assert hidden_size % PSUM_SIZE == 0, f"Hidden dim size must be multiples of {PSUM_SIZE}, found {hidden_size} "
+0: E   AssertionError: Hidden dim size must be multiples of 512, found 2880
+0: ------------------------------ Captured log call -------------------------------
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.router. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_capacity. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_index. Consider using keyword arguments instead.
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20250930_215514/gpt-oss/integ_6.xml -
+0: =========================== short test summary info ============================
+0: SKIPPED [1] ../jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:303: skip v1 tests as v2 is the focus
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16
+0: ============ 1 failed, 1 skipped, 8 deselected in 93.12s (0:01:33) =============
+0: + status_part=1
+0: + status=7
+0: + set +x
+0: + TEST_SUITE_PART=7
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20250930_215514/gpt-oss/integ_7.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-09-30 22:33:58,808:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: Part[7/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', <utils_neuron.ExperimentConfig object at 0x70584e496770>)]
+0: Part[7/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', <utils_neuron.ExperimentConfig object at 0x70584e4c4be0>)]
+0: collected 10 items / 8 deselected / 2 selected
+0: 
+0: aws-testing/moe_layer_integ_test.py s
+0: -------------------
+0: Test: MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16
+0: > Test device: neuron Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGatingGatherBlockwise.Config)
+0: > Golden device: cpu Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGating.Config)
+0: moe_layer_integ_test.TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16 TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16 Could not find cache for test
+0: F
+0: 
+0: =================================== FAILURES ===================================
+0: _ TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16 _
+0: jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+0: 
+0: The above exception was the direct cause of the following exception:
+0: aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+0:     self.helper_bwd(cfg)
+0: aws-testing/test_cases.py:134: in helper_bwd
+0:     test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+0: aws-testing/test_cases.py:116: in test_bwd_call
+0:     (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+0: aws-testing/test_cases.py:114: in loss_fn
+0:     output, aux = self._fwd_call(test_layer, state, test_inputs)
+0: aws-testing/test_cases.py:15: in _fwd_call
+0:     return F(
+0: axlearn/common/module.py:1096: in functional
+0:     method_outputs, output_collection = fn(*args, **kwargs)
+0: axlearn/common/module.py:1037: in __call__
+0:     method_outputs = self.method_fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:598: in wrap_method_fn
+0:     return method_fn_in_context(self, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:168: in in_context_exception_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:560: in _call_method_in_context
+0:     return method_fn(module, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/mixture_of_experts.py:1697: in forward
+0:     x = self._dispatch_and_combine(inputs)
+0: axlearn/common/mixture_of_experts.py:1914: in _dispatch_and_combine
+0:     x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
+0: axlearn/common/mixture_of_experts.py:1857: in _dispatch_and_combine_with_gather_blockwise_gating
+0:     outputs = partitioned_blockwise_mm(
+0: axlearn/common/mixture_of_experts.py:159: in blockwise_mlp
+0:     output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+0: axlearn/common/neuron_blockwise_mlp.py:88: in blockwise_mm
+0:     out, _ = _blockwise_mm_fwd(hidden_states, expert_affinities_masked, gate_up_weight,
+0: axlearn/common/neuron_blockwise_mlp.py:117: in _blockwise_mm_fwd
+0:     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+0: neuronxcc/nki/compile.py:103: in neuronxcc.nki.compile.GenericKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:64: in neuronxcc.nki._jax.JAXKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:103: in neuronxcc.nki._jax.nki_call_eval
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:289: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:290: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:301: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config_with_boundargs
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:337: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:339: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:347: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:367: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:352: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1619: in blockwise_mm_selective_cp
+0:     blockwise_mm_baseline_shard_hidden(
+0: neuronxcc/nki/compiler/backends/neuron/TraceContext.py:114: in neuronxcc.nki.compiler.backends.neuron.TraceContext.TraceContext.call
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1666: in blockwise_mm_baseline_shard_hidden
+0:     check_blockwise_mm_kernel_compatibility(H, B, I_TP)
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:70: in check_blockwise_mm_kernel_compatibility
+0:     assert hidden_size % PSUM_SIZE == 0, f"Hidden dim size must be multiples of {PSUM_SIZE}, found {hidden_size} "
+0: E   AssertionError: Hidden dim size must be multiples of 512, found 2880
+0: ------------------------------ Captured log call -------------------------------
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.router. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_capacity. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_index. Consider using keyword arguments instead.
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20250930_215514/gpt-oss/integ_7.xml -
+0: =========================== short test summary info ============================
+0: SKIPPED [1] ../jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:303: skip v1 tests as v2 is the focus
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16
+0: ============ 1 failed, 1 skipped, 8 deselected in 93.40s (0:01:33) =============
+0: + status_part=1
+0: + status=8
+0: + set +x
+0: + TEST_SUITE_PART=8
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20250930_215514/gpt-oss/integ_8.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-09-30 22:35:38,047:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: Part[8/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk1_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk1_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16', <utils_neuron.ExperimentConfig object at 0x7b7cfe37f4c0>)]
+0: Part[8/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk1_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk1_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16', <utils_neuron.ExperimentConfig object at 0x7b7cfe1ad930>)]
+0: collected 10 items / 8 deselected / 2 selected
+0: 
+0: aws-testing/moe_layer_integ_test.py s
+0: -------------------
+0: Test: MoE_i2880_h2880_e128_topk1_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16
+0: > Test device: neuron Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGatingGatherBlockwise.Config)
+0: > Golden device: cpu Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGating.Config)
+0: moe_layer_integ_test.TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16 TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16 Could not find cache for test
+0: F
+0: 
+0: =================================== FAILURES ===================================
+0: _ TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16 _
+0: jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+0: 
+0: The above exception was the direct cause of the following exception:
+0: aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+0:     self.helper_bwd(cfg)
+0: aws-testing/test_cases.py:134: in helper_bwd
+0:     test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+0: aws-testing/test_cases.py:116: in test_bwd_call
+0:     (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+0: aws-testing/test_cases.py:114: in loss_fn
+0:     output, aux = self._fwd_call(test_layer, state, test_inputs)
+0: aws-testing/test_cases.py:15: in _fwd_call
+0:     return F(
+0: axlearn/common/module.py:1096: in functional
+0:     method_outputs, output_collection = fn(*args, **kwargs)
+0: axlearn/common/module.py:1037: in __call__
+0:     method_outputs = self.method_fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:598: in wrap_method_fn
+0:     return method_fn_in_context(self, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:168: in in_context_exception_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:560: in _call_method_in_context
+0:     return method_fn(module, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/mixture_of_experts.py:1697: in forward
+0:     x = self._dispatch_and_combine(inputs)
+0: axlearn/common/mixture_of_experts.py:1914: in _dispatch_and_combine
+0:     x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
+0: axlearn/common/mixture_of_experts.py:1857: in _dispatch_and_combine_with_gather_blockwise_gating
+0:     outputs = partitioned_blockwise_mm(
+0: axlearn/common/mixture_of_experts.py:159: in blockwise_mlp
+0:     output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+0: axlearn/common/neuron_blockwise_mlp.py:88: in blockwise_mm
+0:     out, _ = _blockwise_mm_fwd(hidden_states, expert_affinities_masked, gate_up_weight,
+0: axlearn/common/neuron_blockwise_mlp.py:117: in _blockwise_mm_fwd
+0:     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+0: neuronxcc/nki/compile.py:103: in neuronxcc.nki.compile.GenericKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:64: in neuronxcc.nki._jax.JAXKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:103: in neuronxcc.nki._jax.nki_call_eval
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:289: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:290: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:301: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config_with_boundargs
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:337: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:339: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:347: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:367: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:352: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1619: in blockwise_mm_selective_cp
+0:     blockwise_mm_baseline_shard_hidden(
+0: neuronxcc/nki/compiler/backends/neuron/TraceContext.py:114: in neuronxcc.nki.compiler.backends.neuron.TraceContext.TraceContext.call
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1666: in blockwise_mm_baseline_shard_hidden
+0:     check_blockwise_mm_kernel_compatibility(H, B, I_TP)
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:70: in check_blockwise_mm_kernel_compatibility
+0:     assert hidden_size % PSUM_SIZE == 0, f"Hidden dim size must be multiples of {PSUM_SIZE}, found {hidden_size} "
+0: E   AssertionError: Hidden dim size must be multiples of 512, found 2880
+0: ------------------------------ Captured log call -------------------------------
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.router. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_capacity. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_index. Consider using keyword arguments instead.
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20250930_215514/gpt-oss/integ_8.xml -
+0: =========================== short test summary info ============================
+0: SKIPPED [1] ../jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:303: skip v1 tests as v2 is the focus
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16
+0: ============ 1 failed, 1 skipped, 8 deselected in 102.21s (0:01:42) ============
+0: + status_part=1
+0: + status=9
+0: + set +x
+0: + TEST_SUITE_PART=9
+0: + pytest -rsA --tb=short --junitxml=test_artifacts/20250930_215514/gpt-oss/integ_9.xml aws-testing/moe_layer_integ_test.py -k TestLayerOnTrn
+0: WARNING:2025-09-30 22:37:25,196:jax._src.xla_bridge:1000: Platform 'neuron' is experimental and not all JAX functionality may be correctly supported!
+0: ============================= test session starts ==============================
+0: platform linux -- Python 3.10.18, pytest-8.4.1, pluggy-1.6.0
+0: rootdir: /fsx/yoamol/axlearn
+0: configfile: pyproject.toml
+0: plugins: timeout-2.4.0, rerunfailures-15.1, xdist-3.8.0
+0: Part[9/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk2_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk1_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk2_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16', <utils_neuron.ExperimentConfig object at 0x74cccadfb490>)]
+0: Part[9/10] of test suite gpt-oss with 12 tests
+0: Candidate tests ['MoE_i2880_h2880_e128_topk2_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16']
+0: Failed tests {'MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16', 'MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16', 'MoE_i2880_h2880_e128_topk1_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16'}
+0: Filtered tests [('MoE_i2880_h2880_e128_topk2_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16', <utils_neuron.ExperimentConfig object at 0x74cccae25900>)]
+0: collected 10 items / 8 deselected / 2 selected
+0: 
+0: aws-testing/moe_layer_integ_test.py s
+0: -------------------
+0: Test: MoE_i2880_h2880_e128_topk2_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16
+0: > Test device: neuron Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGatingGatherBlockwise.Config)
+0: > Golden device: cpu Layer: MoE Gating: config_class(axlearn.common.mixture_of_experts.TopKGating.Config)
+0: moe_layer_integ_test.TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16 TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16 Could not find cache for test
+0: F
+0: 
+0: =================================== FAILURES ===================================
+0: _ TestLayerOnTrn.test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16 _
+0: jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+0: 
+0: The above exception was the direct cause of the following exception:
+0: aws-testing/moe_layer_integ_test.py:62: in test_fwdbwd_blockwisev2
+0:     self.helper_bwd(cfg)
+0: aws-testing/test_cases.py:134: in helper_bwd
+0:     test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+0: aws-testing/test_cases.py:116: in test_bwd_call
+0:     (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
+0: aws-testing/test_cases.py:114: in loss_fn
+0:     output, aux = self._fwd_call(test_layer, state, test_inputs)
+0: aws-testing/test_cases.py:15: in _fwd_call
+0:     return F(
+0: axlearn/common/module.py:1096: in functional
+0:     method_outputs, output_collection = fn(*args, **kwargs)
+0: axlearn/common/module.py:1037: in __call__
+0:     method_outputs = self.method_fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:598: in wrap_method_fn
+0:     return method_fn_in_context(self, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:168: in in_context_exception_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/module.py:560: in _call_method_in_context
+0:     return method_fn(module, *args, **kwargs)
+0: axlearn/common/traceback_util.py:293: in stack_annotation_wrapper
+0:     return fn(*args, **kwargs)
+0: axlearn/common/mixture_of_experts.py:1697: in forward
+0:     x = self._dispatch_and_combine(inputs)
+0: axlearn/common/mixture_of_experts.py:1914: in _dispatch_and_combine
+0:     x = self._dispatch_and_combine_with_gather_blockwise_gating(cfg, gating, x)
+0: axlearn/common/mixture_of_experts.py:1857: in _dispatch_and_combine_with_gather_blockwise_gating
+0:     outputs = partitioned_blockwise_mm(
+0: axlearn/common/mixture_of_experts.py:159: in blockwise_mlp
+0:     output = blockwise_mlp_per_group(hidden_states_og, expert_affinities_masked_og, gate_up_proj_weight, down_proj_weights, token_position_to_id_og, block_to_expert_og, block_size)
+0: axlearn/common/neuron_blockwise_mlp.py:88: in blockwise_mm
+0:     out, _ = _blockwise_mm_fwd(hidden_states, expert_affinities_masked, gate_up_weight,
+0: axlearn/common/neuron_blockwise_mlp.py:117: in _blockwise_mm_fwd
+0:     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
+0: neuronxcc/nki/compile.py:103: in neuronxcc.nki.compile.GenericKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:64: in neuronxcc.nki._jax.JAXKernel.__call__
+0:     ???
+0: neuronxcc/nki/_jax.py:103: in neuronxcc.nki._jax.nki_call_eval
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:289: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:290: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/FrameworkKernel.py:301: in neuronxcc.nki.compiler.backends.neuron.FrameworkKernel.FrameworkKernel.dump_config_with_boundargs
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:337: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:339: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.specialize_and_call
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:347: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:367: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: neuronxcc/nki/compiler/backends/neuron/TraceKernel.py:352: in neuronxcc.nki.compiler.backends.neuron.TraceKernel.TraceKernel.expand_kernel_with_ctx
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1619: in blockwise_mm_selective_cp
+0:     blockwise_mm_baseline_shard_hidden(
+0: neuronxcc/nki/compiler/backends/neuron/TraceContext.py:114: in neuronxcc.nki.compiler.backends.neuron.TraceContext.TraceContext.call
+0:     ???
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:1666: in blockwise_mm_baseline_shard_hidden
+0:     check_blockwise_mm_kernel_compatibility(H, B, I_TP)
+0: ../jaxmoe/lib/python3.10/site-packages/neuronxcc/nki/_pre_prod_kernels/blockwise_mm.py:70: in check_blockwise_mm_kernel_compatibility
+0:     assert hidden_size % PSUM_SIZE == 0, f"Hidden dim size must be multiples of {PSUM_SIZE}, found {hidden_size} "
+0: E   AssertionError: Hidden dim size must be multiples of 512, found 2880
+0: ------------------------------ Captured log call -------------------------------
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.router. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_capacity. Consider using keyword arguments instead.
+0: WARNING  absl:module.py:514 Multiple positional arguments for <class 'axlearn.common.mixture_of_experts.TopKGatingGatherBlockwiseV2'>.compute_expert_index. Consider using keyword arguments instead.
+0: - generated xml file: /fsx/yoamol/axlearn/test_artifacts/20250930_215514/gpt-oss/integ_9.xml -
+0: =========================== short test summary info ============================
+0: SKIPPED [1] ../jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:303: skip v1 tests as v2 is the focus
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16
+0: ============ 1 failed, 1 skipped, 8 deselected in 95.67s (0:01:35) =============
+0: + status_part=1
+0: + status=10
+0: + set +x
+srun: error: ip-10-0-139-165: task 0: Exited with exit code 1
+srun: Terminating StepId=49600.1
++ summary gpt-oss
++ echo ---------------------------------
+---------------------------------
++ suite=gpt-oss
+++ wc -l
+++ grep -re PASSED test_artifacts/20250930_215514/gpt-oss/integ.log
++ num_passed=0
+++ grep -re FAILED test_artifacts/20250930_215514/gpt-oss/integ.log
+++ wc -l
++ num_failed=10
++ total_num=10
++ echo 'Test suite: gpt-oss, Total tests 10'
+Test suite: gpt-oss, Total tests 10
++ echo 'Number of tests passed: 0'
+Number of tests passed: 0
++ echo 'Number of tests failed: 10'
+Number of tests failed: 10
++ '[' 10 -gt 0 ']'
++ echo 'Failed tests:'
+Failed tests:
++ grep -hre FAILED test_artifacts/20250930_215514/gpt-oss/integ.log
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk4_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk8_g1_ec2_blocksize512_b16_s4096_meshfsdp-1tp4_bf16
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk4_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk8_g64_ec2_blocksize512_b16_s4096_meshfsdp-1ep64_bf16
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk1_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16
+0: FAILED aws-testing/moe_layer_integ_test.py::TestLayerOnTrn::test_fwdbwd_blockwisev2_MoE_i2880_h2880_e128_topk2_g16_ec2_blocksize512_b16_s4096_meshfsdp-1tp4ep16_bf16

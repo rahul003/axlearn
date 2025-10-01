@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1" time="20.823" timestamp="2025-09-02T18:32:27.459481+00:00" hostname="ip-10-0-4-121"><testcase classname="" name="aws-testing.moe_layer_integ_test" time="0.000"><error message="collection failure">aws-testing/moe_layer_integ_test.py:29: in &lt;module&gt;
+    class TestLayerOnTrn(LayerTestCase):
+aws-testing/moe_layer_integ_test.py:55: in TestLayerOnTrn
+    @parameterized.named_parameters(get_training_configs(test_suite=TEST_SUITE, test=TopKGatingGatherBlockwise, golden=TopKGating, test_device="neuron", golden_device="cpu"))
+../jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:484: in named_parameters
+    return _parameter_decorator(_NAMED, testcases)
+../jaxmoe/lib/python3.10/site-packages/absl/testing/parameterized.py:438: in _parameter_decorator
+    raise NoTestsError(
+E   absl.testing.parameterized.NoTestsError: parameterized test decorators did not generate any tests. Make sure you specify non-empty parameters, and do not reuse generators more than once.</error></testcase></testsuite></testsuites>
