@@ -1112,6 +1112,46 @@ class BastionTest(parameterized.TestCase):
                 updated_job.state, JobState(status=JobStatus.CLEANING, metadata={"tier": 1})
             )
 
+    @mock.patch("subprocess.Popen")
+    def test_active_command_malformed(self, mock_popen):
+        """If the command is malformed, bastion should gracefully move the job to CLEANING state."""
+        job = Job(
+            spec=new_jobspec(
+                name="test_job",
+                command="command",
+                cleanup_command="cleanup",
+                metadata=JobMetadata(
+                    user_id="test_user",
+                    project_id="test_job",
+                    creation_time=datetime.now(),
+                    resources={"v4": 8},
+                ),
+            ),
+            state=JobState(status=JobStatus.ACTIVE, metadata={"tier": 1}),
+            command_proc=None,  # Initially, command is None.
+            cleanup_proc=None,
+        )
+        patch_fns = mock.patch.multiple(
+            bastion.__name__,
+            _upload_job_state=mock.DEFAULT,
+        )
+        mock_popen.side_effect = ValueError("Command malformed")
+
+        with patch_fns, self._patch_bastion(None) as mock_bastion:
+            # Initially, job should have no command.
+            self.assertIsNone(job.command_proc)
+
+            # Run single update step to start the job.
+            updated_job = mock_bastion._update_single_job(job)
+
+            # Command failed to be started.
+            self.assertIsNone(updated_job.command_proc)
+
+            # Job state should be CLEANING.
+            self.assertEqual(
+                updated_job.state, JobState(status=JobStatus.CLEANING, metadata={"tier": 1})
+            )
+
     # pylint: disable-next=too-many-branches
     def test_update_jobs(self):
         """Tests the global update step."""
@@ -1573,15 +1613,17 @@ class BastionTest(parameterized.TestCase):
     def test_exception(self):
         patch_signal = mock.patch(f"{bastion.__name__}.send_signal")
         with patch_signal, self._patch_bastion() as mock_bastion:
+            mock_command_proc = mock.Mock()
+            mock_cleanup_proc = mock.Mock()
             mock_job = Job(
                 spec=mock.Mock(),
                 state=mock.Mock(),
-                command_proc=mock.Mock(),
-                cleanup_proc=mock.Mock(),
+                command_proc=mock_command_proc,
+                cleanup_proc=mock_cleanup_proc,
             )
 
             def mock_execute():
-                mock_bastion._active_jobs["test"] = mock_job
+                mock_bastion._active_jobs[mock_job.spec.name] = mock_job
                 raise ValueError("Mock error")
 
             with mock.patch.multiple(
@@ -1591,14 +1633,19 @@ class BastionTest(parameterized.TestCase):
             ) as mock_methods:
                 with self.assertRaisesRegex(ValueError, "Mock error"):
                     mock_bastion.execute()
-                self.assertIn(
-                    mock_job.command_proc, mock_methods["_wait_and_close_proc"].call_args_list[0][0]
-                )
-                self.assertIn(
-                    mock_job.cleanup_proc, mock_methods["_wait_and_close_proc"].call_args_list[1][0]
-                )
+                mock_wait_and_close_proc = mock_methods["_wait_and_close_proc"]
+                self.assertIn(mock_command_proc, mock_wait_and_close_proc.call_args_list[0][0])
+                self.assertIn(mock_cleanup_proc, mock_wait_and_close_proc.call_args_list[1][0])
 
-    def test_execute_with_exception_and_job_failure(self):
+    @parameterized.product(
+        kill_job1_error=[None, Exception("Cannot kill job1")],
+        kill_job2_error=[None, Exception("Cannot kill job2")],
+    )
+    def test_execute_with_exception_and_job_failure(
+        self,
+        kill_job1_error: Optional[Exception],
+        kill_job2_error: Optional[Exception],
+    ):
         job_1 = Job(
             spec=mock.Mock(),
             state=mock.Mock(),
@@ -1612,22 +1659,31 @@ class BastionTest(parameterized.TestCase):
             cleanup_proc=mock.Mock(),
         )
         active_jobs = {
-            "job1": job_1,
-            "job2": job_2,
+            job_1.spec.name: job_1,
+            job_2.spec.name: job_2,
         }
 
         with self._patch_bastion() as mock_bastion:
             mock_bastion._execute = mock.Mock(side_effect=Exception("Execution failed"))
-            mock_bastion._kill_job = mock.Mock(side_effect=[Exception("Cannot kill job"), None])
-
+            mock_bastion._kill_job = mock.Mock(side_effect=[kill_job1_error, kill_job2_error])
+            mock_bastion._remove_local_job = mock.Mock(wraps=mock_bastion._remove_local_job)
             mock_bastion._active_jobs = active_jobs
 
             with self.assertRaises(Exception):
                 mock_bastion.execute()
 
-            self.assertEqual(mock_bastion._kill_job.call_count, 2)
+            self.assertEqual(mock_bastion._remove_local_job.call_count, 2)
             expected_calls = [mock.call(job_1), mock.call(job_2)]
-            self.assertEqual(mock_bastion._kill_job.call_args_list, expected_calls)
+            self.assertEqual(mock_bastion._remove_local_job.call_args_list, expected_calls)
+            # A job remains if and only if there is exception during the clean up process.
+            self.assertEqual(
+                job_1 in mock_bastion._active_jobs.values(),
+                kill_job1_error is not None,
+            )
+            self.assertEqual(
+                job_2 in mock_bastion._active_jobs.values(),
+                kill_job2_error is not None,
+            )
 
     def test_sync_jobs_for_valid_pending_to_sudden_invalid_jobs(self):
         """Test behavior of state transition for pending invalid jobs."""
@@ -1874,14 +1930,16 @@ class BastionDirectoryTest(parameterized.TestCase):
         else:
             ctx = self.assertRaisesRegex(ValueError, "not a valid job name")
         with ctx, patch_tfio as mock_tfio:
-            bastion_dir.submit_job(job_name, job_spec_file=job_spec_file)
             if not spec_exists:
+                bastion_dir.submit_job(job_name, job_spec_file=job_spec_file)
                 mock_tfio["copy"].assert_called_with(
                     job_spec_file,
                     os.path.join(bastion_dir.active_job_dir, job_name),
                 )
             else:
-                mock_tfio["copy"].assert_not_called()
+                with self.assertRaises(ValueError):
+                    bastion_dir.submit_job(job_name, job_spec_file=job_spec_file)
+                    mock_tfio["copy"].assert_not_called()
 
     @parameterized.product(
         spec_exists=[True, False],

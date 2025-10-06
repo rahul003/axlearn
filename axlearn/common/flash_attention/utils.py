@@ -16,6 +16,9 @@ from axlearn.common.flash_attention.gpu_decoding import GPUDecoding
 from axlearn.common.flash_attention.gpu_paged_attention import GPUPagedAttention
 from axlearn.common.flash_attention.tpu_attention import LegacyTPUFlashAttention, TPUSplashAttention
 from axlearn.common.flash_attention.tpu_decoding import TPUDecoding
+from axlearn.common.flash_attention.tpu_paged_attention import TPUPagedAttention
+from axlearn.common.kv_cache.base_kv_cache import BaseKVCache
+from axlearn.common.kv_cache.paged_kv_cache import PagedKVCache
 from axlearn.common.utils import Tensor
 
 BACKENDS = dict(
@@ -35,6 +38,11 @@ BACKENDS = dict(
     cpu=[ReferenceMHA],
     xla=[ReferenceMHA],
 )
+PAGED_ATTN_BACKENDS = dict(
+    tpu=[TPUPagedAttention],
+    gpu=[GPUPagedAttention],
+    cpu=[ReferenceMHA],
+)
 
 
 def flash_attention_implementation(
@@ -44,8 +52,9 @@ def flash_attention_implementation(
     key: Tensor,
     value: Tensor,
     bias: BaseAttentionBias,
+    logit_sink: Optional[Tensor] = None,
     softmax_scale: float = 1.0,
-    is_decoding: bool = False,
+    kv_cache_type: Optional[type[BaseKVCache]] = None,
     tpu_block_size: int = 512,
     gpu_block_size: int = 128,
     dropout_rate: Optional[float] = 0.0,
@@ -71,8 +80,9 @@ def flash_attention_implementation(
             for paged attention; a physical-page layout where each value page
             has exactly `page_size` tokens.
         bias: Attention bias to apply.
+        logit_sink: An optional Tensor of shape [num_heads].
         softmax_scale: A scalar value applied to the logits before softmax.
-        is_decoding: Whether it is in decoding.
+        kv_cache_type: KV cache type. If None, it is on a forward pass.
         tpu_block_size: The size of the computation-block unit for 'tpu' backend.
             A multiple of 128, and should be less than the target sequence length.
             Smaller values are more memory efficient but less compute efficient.
@@ -105,16 +115,10 @@ def flash_attention_implementation(
         BACKENDS["neuron"] = [NeuronFlashAttention]
 
     attn_configs = BACKENDS.get(backend, [])
-    if page_tables is not None and is_decoding:
-        # TODO(senyut): add TPU backend integration and integrate backend properly
-        if backend not in ("gpu", "cpu"):
-            raise NotImplementedError("Paged Attention currently only supports CPU and GPU.")
-        # Override backend as GPUPagedAttention
-        if backend == "gpu":
-            attn_configs = [GPUPagedAttention]
+    if kv_cache_type == PagedKVCache:
+        attn_configs = PAGED_ATTN_BACKENDS.get(backend, [])
 
     common_cfg = dict(
-        is_decoding=is_decoding,
         dropout_rate=dropout_rate,
         interpret=_interpret(backend),
         softmax_scale=softmax_scale,
@@ -127,13 +131,13 @@ def flash_attention_implementation(
         value=value,
         page_tables=page_tables,
         bias=bias,
+        logit_sink=logit_sink,
     )
     for cfg in attn_configs:
         attn_fn = cfg.default_config().set(**common_cfg).instantiate()
-        is_supported = attn_fn.is_supported(
-            input_batch=input_batch,
-        )
+        is_supported = attn_fn.is_supported(input_batch=input_batch, kv_cache_type=kv_cache_type)
         if is_supported:
+            logging.info("Using %s for flash attention.", attn_fn.name())
             return attn_fn
     # Fall back to standard attention if no backend kernels are supported for the given
     # configuration.

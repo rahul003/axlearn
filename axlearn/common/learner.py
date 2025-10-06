@@ -8,12 +8,11 @@
 """
 
 from __future__ import annotations
-
 import dataclasses
 import enum
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable, Optional, cast
-
+import os
 import jax
 import optax
 from jax import numpy as jnp
@@ -55,7 +54,7 @@ from axlearn.common.utils import (
 
 # A `ForwardFnTransformation` transforms one forward function to another.
 ForwardFnTransformation = Callable[[ForwardFn], ForwardFn]
-
+N_LAYERS = int(os.getenv("N_LAYERS", 4))
 
 class UpdateType(enum.Enum):
     """UpdateType specifies which update types are allowed for the parameter.
@@ -168,7 +167,8 @@ class Learner(BaseLearner):
         ema: InstantiableConfig = config_for_function(param_ema)
         # Whether to add per variable gradient and norm summaries. Enable it will make
         # the training slower since the summary is computed for every step.
-        enable_per_variable_summaries: bool = False
+        # enable_per_variable_summaries: bool = False
+        enable_per_variable_summaries: bool = True
         # Optional decorator for the ForwardFn. An example use would be to enable gradient
         # accumulation by using `with_minibatch_steps` decorator defined below. E.g.
         # learner.forward_fn_transformation = config.config_for_function(with_minibatch_steps).set(
@@ -269,17 +269,56 @@ class Learner(BaseLearner):
         state_updates: Nested[Tensor],
     ) -> Nested[Tensor]:
         cfg = self.config
+        print(f"DEBUG: enable_per_variable_summaries = {cfg.enable_per_variable_summaries}")  
+
         if cfg.enable_per_variable_summaries:
+            
             param_rms = jax.tree.map(
                 lambda p: optax.safe_root_mean_squares(p.value, min_rms=1e-3), opt_params
             )
             for p, p_n in flatten_items(param_rms):
                 self.add_summary(f"param_rms/{p}", p_n)
+                
             grad_rms = jax.tree.map(
                 lambda p: optax.safe_root_mean_squares(p, min_rms=1e-3), gradients
             )
             for p, g_n in flatten_items(grad_rms):
                 self.add_summary(f"grad_rms/{p}", g_n)
+            
+            def print_tree_paths_and_shapes(tree):
+                def print_leaf(path, x):
+                    path_str = '/'.join(str(p) for p in path) if path else 'root'
+                    shape = getattr(x, 'shape', None)
+                    print(f"Path: {path_str:<30} Shape: {shape}")
+                    return x                
+                jax.tree_util.tree_map_with_path(print_leaf, tree)
+            
+            # # Uncomment to log  (fine-grained) gradient norms
+            # grad_norms = jax.tree_map(
+            #     lambda g: (jnp.linalg.norm(g.reshape(g.shape[0], -1), axis=1) if (g is not None and g.shape[0] == N_LAYERS)
+            #             else jnp.linalg.norm(g.flatten()) if g is not None else 0.0),
+            #     gradients
+            # )
+            # for p, g_norm in flatten_items(grad_norms):
+            #     if isinstance(g_norm, jnp.ndarray) and g_norm.shape == (N_LAYERS,):
+            #         for i, layer_norm in enumerate(g_norm):
+            #             layer_path = f"{p}/layer_{i}"
+            #             self.add_summary(f"grad_norm/{layer_path}", layer_norm)
+            #     else:
+            #         self.add_summary(f"grad_norm/{p}", g_norm)
+
+            # Log gradients
+            for p, g in flatten_items(gradients):
+                if g is not None:
+                    if g.shape[0] == N_LAYERS:  # Check if the gradient is layer-wise
+                        # For layer-wise parameters, log each layer separately
+                        for i in range(N_LAYERS):
+                            layer_grad = g[i]
+                            layer_path = f"{p}/layer_{i}"
+                            self.add_summary(f"grad/{layer_path}", layer_grad)
+                    else:
+                        # For non-layer-wise parameters, log the entire gradient matrix 
+                        self.add_summary(f"grad/{p}", g)
 
         # Set `parameter_updates` to 0 if the param is not updated by the optimizer.
         parameter_updates = jax.tree.map(

@@ -6,6 +6,7 @@ import collections
 import copy
 import dataclasses
 import functools
+import importlib
 import logging as pylogging
 import os
 import shlex
@@ -15,7 +16,6 @@ import uuid
 from collections.abc import Sequence
 from typing import Any, Callable, Optional, TypeVar, Union
 
-import pkg_resources
 import psutil
 from absl import app, flags, logging
 
@@ -108,7 +108,7 @@ def get_package_root(root_module_name: str = ROOT_MODULE_NAME) -> str:
 def get_pyproject_version() -> str:
     """Returns the project version, e.g. X.Y.Z."""
     # TODO(markblee): Fix for nightly
-    return pkg_resources.get_distribution(ROOT_MODULE_NAME).version
+    return importlib.metadata.version(ROOT_MODULE_NAME)
 
 
 def parse_kv_flags(kv_flags: Sequence[str], *, delimiter: str = ":") -> dict[str, str]:
@@ -292,6 +292,19 @@ def merge(base: dict, overrides: dict):
     return base
 
 
+def to_bool(value: Any) -> bool:
+    """Converts a string representation of truth to a bool."""
+    if isinstance(value, bool):
+        return value
+    elif isinstance(value, str):
+        val_lower = value.lower()
+        if val_lower == "true":
+            return True
+        elif val_lower == "false":
+            return False
+    raise ValueError(f"Invalid truth value: '{value}'")
+
+
 _Row = list[Any]
 
 
@@ -366,6 +379,7 @@ class AcceleratorConfig(ConfigBase):
 
     instance_type: Required[str] = REQUIRED
     num_replicas: int = 1
+    topology: Optional[str] = None
 
 
 def accelerator_flags(flag_values: flags.FlagValues, **kwargs):
@@ -373,6 +387,14 @@ def accelerator_flags(flag_values: flags.FlagValues, **kwargs):
     flags.DEFINE_string("instance_type", None, "Instance type.", flag_values=flag_values, **kwargs)
     flags.DEFINE_integer(
         "num_replicas", 1, "Number of replicas.", flag_values=flag_values, **kwargs
+    )
+    flags.DEFINE_string(
+        "topology",
+        None,
+        "Custom topology to provide to the TPU node pool. If not set, the default topology "
+        "defined in axlearn/cloud/gcp/system_characteristics.py will be used.",
+        flag_values=flag_values,
+        **kwargs,
     )
 
 
@@ -393,7 +415,10 @@ def infer_resources(cfg: ConfigBase) -> ResourceMap[int]:
 
     def visit_fn(_, value):
         if isinstance(value, AcceleratorConfig):
-            if value.instance_type.startswith("tpu-"):
+            if value.instance_type == "cpu":
+                # CPU quota is not enforced.
+                pass
+            elif value.instance_type.startswith("tpu-"):
                 resources = infer_tpu_resources(value.instance_type, value.num_replicas)
                 for resource, usage in resources.items():
                     total_resources[resource] += usage

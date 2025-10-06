@@ -5,13 +5,15 @@
 import math
 import re
 from typing import Callable, Optional, Union
-
+import os
+import numpy as np
+from pathlib import Path
 import jax
 from absl import logging
 from jax import numpy as jnp
 from jax._src.mesh import thread_resources
 from jax.sharding import PartitionSpec
-
+from axlearn.common.module import current_context
 from axlearn.common.attention import (
     LearnedPositionalEmbedding,
     PipelinedTransformerLayer,
@@ -49,6 +51,14 @@ def layer_norm_config(eps=1e-5):
     return LayerNorm.default_config().set(eps=eps)
 
 
+def _infer_live_targets(input_batch: Nested[Tensor]) -> Tensor:
+    """Uses `live_targets` (if present), otherwise infers from `target_labels >= 0`."""
+    live_targets: Optional[Tensor] = input_batch.get("live_targets")
+    if live_targets is None:
+        live_targets = input_batch["target_labels"] >= 0
+    return live_targets
+
+
 # TODO(markblee): Move these to `axlearn.common.loss_metrics` and update golden configs.
 class CrossEntropyLossMetrics(BaseLossMetrics):
     """Computes cross entropy loss and related training summaries."""
@@ -70,7 +80,7 @@ class CrossEntropyLossMetrics(BaseLossMetrics):
         *,
         predict_outputs: Nested[Tensor],
         module_outputs: Nested[Tensor],
-    ) -> tuple[Tensor, Nested[Tensor]]:
+    ) -> tuple[WeightedScalar, dict[str, WeightedScalar | Tensor]]:
         """Computes cross entropy loss.
 
         Args:
@@ -83,8 +93,9 @@ class CrossEntropyLossMetrics(BaseLossMetrics):
 
         Returns:
             A tuple (loss, metrics):
-                loss: A scalar float Tensor corresponding to cross entropy loss, including auxiliary
-                    z-loss if `cfg.z_loss_scale` is provided.
+                loss: A WeightedScalar corresponding to cross entropy loss, including auxiliary
+                    z-loss if `cfg.z_loss_scale` is provided. Callers should call loss.value()
+                    for gradient.
                 metrics: A dict containing:
                     cross_entropy: Same as loss.
                     per_token_loss: A float Tensor of same shape as `target_labels`. Ignored targets
@@ -101,15 +112,9 @@ class CrossEntropyLossMetrics(BaseLossMetrics):
 
         target_labels: Tensor = input_batch["target_labels"]
         target_num_bytes: Optional[Tensor] = input_batch.get("target_num_bytes")
-        live_targets: Optional[Tensor] = input_batch.get("live_targets")
         logits = predict_outputs["logits"]
-
-        if live_targets is None:
-            live_targets = target_labels >= 0
+        live_targets = _infer_live_targets(input_batch)
         num_targets = live_targets.sum()
-        accuracy = (
-            jnp.equal(jnp.argmax(logits, axis=-1), target_labels) * live_targets
-        ).sum() / jnp.maximum(1, num_targets)
 
         loss, loss_dict = cross_entropy(
             logits=logits,
@@ -118,7 +123,7 @@ class CrossEntropyLossMetrics(BaseLossMetrics):
             z_loss_scale=cfg.z_loss_scale if cfg.z_loss_scale is not None else 0.0,
         )
         per_token_loss = loss_dict["per_target_loss"] * live_targets
-        self.add_summary("accuracy", WeightedScalar(accuracy, num_targets))
+        self.add_summary("accuracy", WeightedScalar(loss_dict["accuracy"], num_targets))
         self.add_summary("z_loss", WeightedScalar(loss_dict["z_loss"], num_targets))
         if target_num_bytes is not None:
             # N.B. we calculate bpb following Appendix D.2. of <https://arxiv.org/abs/2112.11446>,
@@ -127,20 +132,21 @@ class CrossEntropyLossMetrics(BaseLossMetrics):
             total_bytes = target_num_bytes.sum()
             bits_per_byte = per_token_loss.sum() / jnp.maximum(1, total_bytes) / jnp.log(2)
             self.add_summary("bits_per_byte", WeightedScalar(bits_per_byte, total_bytes))
-        metrics = {
-            "cross_entropy": loss,
-            "per_token_loss": per_token_loss,
-            "live_targets": live_targets,
-            "num_targets": num_targets,
-        }
-        self.add_summary("cross_entropy_loss", WeightedScalar(loss, num_targets))
+        loss_weighted = WeightedScalar(loss, num_targets)
+        self.add_summary("cross_entropy_loss", loss_weighted)
         self.add_summary("perplexity", WeightedScalar(jnp.exp(loss), num_targets))
-        self.add_summary("loss", WeightedScalar(loss, num_targets))
+        self.add_summary("loss", loss_weighted)
         self.add_summary(
             "train_live_targets",
             WeightedScalar(num_targets / target_labels.shape[0], target_labels.shape[0]),
         )
-        return loss, metrics
+        metrics = {
+            "cross_entropy": loss_weighted,
+            "per_token_loss": per_token_loss,
+            "live_targets": live_targets,
+            "num_targets": num_targets,
+        }
+        return loss_weighted, metrics
 
 
 class AuxLossMetrics(BaseLossMetrics):
@@ -169,7 +175,7 @@ class AuxLossMetrics(BaseLossMetrics):
         *,
         predict_outputs: Nested[Tensor],
         module_outputs: Nested[Tensor],
-    ) -> tuple[Tensor, Nested[Tensor]]:
+    ) -> tuple[WeightedScalar, dict[str, WeightedScalar | Tensor]]:
         """Computes aux loss by aggregating module outputs from all layers.
 
         Args:
@@ -182,7 +188,7 @@ class AuxLossMetrics(BaseLossMetrics):
 
         Returns:
             A tuple (loss, metrics):
-                loss: A scalar float Tensor corresponding to the aux loss.
+                loss: A WeightedScalar corresponding to the aux loss.
                 metrics: A dict containing:
                     aux_loss: Same as loss.
         """
@@ -192,11 +198,10 @@ class AuxLossMetrics(BaseLossMetrics):
         regex = cfg.aux_loss_regex
 
         if regex is None:
-            return 0.0, {}
+            return WeightedScalar(0.0, 0.0), {}
 
         validate_contains_paths(input_batch, paths=["target_labels"])
-        target_labels: Tensor = input_batch["target_labels"]
-        live_targets = target_labels >= 0
+        live_targets = _infer_live_targets(input_batch)
         num_targets = live_targets.sum()
 
         logging.info("Module outputs: %s", jax.tree_structure(module_outputs))
@@ -214,8 +219,9 @@ class AuxLossMetrics(BaseLossMetrics):
             logging.warning("Aux loss not found: %s", cfg.aux_loss_regex)
             aux_loss = 0.0
 
-        self.add_summary("aux_loss", WeightedScalar(aux_loss, num_targets))
-        return aux_loss, {"aux_loss": aux_loss}
+        aux_loss_weighted = WeightedScalar(aux_loss, num_targets)
+        self.add_summary("aux_loss", aux_loss_weighted)
+        return aux_loss_weighted, {"aux_loss": aux_loss_weighted}
 
 
 def _update(x: dict, updates: dict):
@@ -276,7 +282,7 @@ class CompositeLossMetrics(BaseLossMetrics):
         *,
         predict_outputs: Nested[Tensor],
         module_outputs: Nested[Tensor],
-    ) -> tuple[Tensor, Nested[Tensor]]:
+    ) -> tuple[WeightedScalar, dict[str, WeightedScalar | Tensor]]:
         """Combines losses and metrics from the configured children.
 
         By default, losses are summed and metrics/summaries are flattened, raising if any keys
@@ -297,12 +303,14 @@ class CompositeLossMetrics(BaseLossMetrics):
         else:
             loss_weights = None
 
-        loss = 0
+        losses = []
         metrics = {}
         for name, (child_loss, child_metrics) in all_child_metrics.items():
+            # Downstream wants unweighted losses.
+            child_metrics[f"loss_{name}"] = child_loss
             if loss_weights is not None and loss_weights.get(name, None) is not None:
-                child_loss *= loss_weights[name]
-            loss = loss + child_loss
+                child_loss = WeightedScalar(child_loss.mean * loss_weights[name], child_loss.weight)
+            losses.append(child_loss)
 
             ctx = self.get_invocation_context()
 
@@ -312,6 +320,19 @@ class CompositeLossMetrics(BaseLossMetrics):
                 _update(ctx.output_collection.summaries, ctx.output_collection.summaries.pop(name))
                 _update(metrics, child_metrics)
 
+        def _aggregate(losses):
+            if not losses:
+                return WeightedScalar(0.0, 0.0)
+
+            # For backward compatibility, aggregation is done using sum(each.mean) instead of
+            # sum(each.mean * each.weight) / sum(each.weight).
+            loss = weight = 0.0
+            for each in losses:
+                loss += each.mean
+                weight += each.weight
+            return WeightedScalar(loss, weight)
+
+        loss = _aggregate(losses)
         return loss, metrics
 
 
@@ -410,7 +431,7 @@ class Model(BaseModel):
                 hidden_states: a float Tensor of shape [batch_size, seq_len, hidden_dim].
                 metrics: a nested Tensor. See corresponding `metrics` implementation for details.
         """
-        predictions = self.predict(input_batch)
+        predictions = self.predict(input_batch) 
         aux_outputs = {**predictions}
         loss = None
         target_labels: Tensor = input_batch.get("target_labels")
@@ -549,7 +570,11 @@ class Model(BaseModel):
         # Decoder hidden states: [batch_size, target_len, hidden_dim].
         decoder_batch = {**input_batch}
         decoder_batch["positions"] = input_batch.get("input_positions")
-        return self.decoder(input_batch=decoder_batch)
+        predictions = self.decoder(input_batch=decoder_batch)
+        context = current_context()
+        if context:
+            context.add_summary(f"{self.path()}/logits", predictions["logits"])
+        return predictions
 
     def _metrics(
         self, input_batch: Nested[Tensor], *, predict_outputs: Nested[Tensor]
@@ -569,7 +594,12 @@ class Model(BaseModel):
         # Flatten summaries for backwards compatibility.
         _update(ctx.output_collection.summaries, ctx.output_collection.summaries.pop("metrics"))
 
-        return loss, metrics
+        def _to_scalar(x):
+            if isinstance(x, WeightedScalar):
+                return x.value()
+            return x
+
+        return loss.value(), jax.tree.map(_to_scalar, metrics)
 
     def _constrain_input_batch(self, input_batch: NestedTensor):
         """Applies sharding constraints in-place for relevant named tensors in the input batch."""
@@ -631,6 +661,7 @@ def residual_initializer_cfg(num_layers, scale=0.02):
     return init_cfg
 
 
+# pylint: disable=too-many-positional-arguments
 def gpt_decoder_config(
     stack_cfg: TransformerStackConfig,
     num_layers: int,

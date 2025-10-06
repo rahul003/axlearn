@@ -9,7 +9,7 @@ functions are used to build the args for `get_get_trainer_config_fn`, including 
 
 See c4_trainer.py for how they are used.
 """
-import os
+
 import math
 from collections.abc import Sequence
 from typing import Literal, Optional, Protocol, Union
@@ -46,6 +46,7 @@ from axlearn.common.config import (
     ConfigOr,
     FunctionConfigBase,
     InstantiableConfig,
+    TrainerConfigFn,
     config_for_function,
     maybe_instantiate,
     maybe_set_config,
@@ -64,7 +65,6 @@ from axlearn.common.summary_writer import BaseWriter
 from axlearn.common.trainer import MeshShape, SpmdTrainer
 from axlearn.common.utils import HybridMeshShape, Nested, get_data_dir
 from axlearn.experiments.text.common import DataMixtureComponent, tfds_text_source
-from axlearn.experiments.trainer_config_utils import TrainerConfigFn
 
 REPLACE_NEWLINES_WITH = "<n>"
 EVAL_EVERY_N_STEPS = 5_000
@@ -72,7 +72,8 @@ EVAL_EVERY_N_STEPS = 5_000
 
 # We typically use bfloat16 as the step dtype,
 # (but usually keep parameters and optimizer state in float32).
-STEP_DTYPE = jnp.bfloat16
+# STEP_DTYPE = jnp.bfloat16
+STEP_DTYPE = jnp.float32
 
 
 # The default mesh-axis names for LM training, from least to most communication intensive.
@@ -231,7 +232,7 @@ def model_config(
     pad_token_id: Optional[int] = None,
     eos_token_id: Optional[int] = None,
     ffn_layer_types: Optional[Sequence[Literal["dense", "sparse"]]] = None,
-    expert_cfg: TransformerFeedForwardMoE = TransformerFeedForwardMoE.default_config(),
+    expert_cfg: TransformerFeedForwardMoE.Config = TransformerFeedForwardMoE.default_config(),
 ) -> causal_lm.Model.Config:
     """Returns an LM model config based on the given hyperparams.
 
@@ -265,15 +266,14 @@ def model_config(
         remat_offload_dst: Destination of remat checkptoing offloading.
         pad_token_id: Int ID of the inputs to be masked for self-attention.
         eos_token_id: Int ID of the end of sequence token id.
-        ffn_layer_types: The types of layers in the FFN. Options: [dense, sparse].
-        expert_cfg: The expert config for the MoE FFN.
+        ffn_layer_types: The types of layers in the FFN. If None, defaults to "dense".
+            Otherwise, `ffn_layer_types` should be one of [dense, sparse].
+        expert_cfg: The expert config for the MoE FFN. This is only used if at least one layer
+            type is sparse.
+
     Returns:
         A causal LM config.
     """
-    # Feed-forward.
-    # layer_cfg.feed_forward.activation = activation_fn
-    # layer_cfg.feed_forward.hidden_dim = ffn_dim
-    # layer_cfg.feed_forward.structure = ffn_structure
     # First configure the base layer_cfg.
     # Attention.
     if attention_cfg is not None:
@@ -286,11 +286,9 @@ def model_config(
         layer_cfg.self_attention.attention.kv_cache = attention_kv_cache
     layer_cfg.self_attention.structure = atten_structure
     layer_cfg.self_attention.attention.atten_logit_cap = atten_logit_cap
-    # if os.getenv('AXLEARN_REMAT_LAYER', 'true') == 'true':
-    #     if issubclass(stack_cfg.klass, (RepeatedTransformerLayer, StackedTransformerLayer)):
-    #         update_model_remat_config(stack_cfg=stack_cfg, layer_cfg=layer_cfg)
-    # Stack.
-    # transformer_cfg = stack_cfg.set(num_layers=num_layers, layer=layer_cfg)
+    if issubclass(stack_cfg.klass, (RepeatedTransformerLayer, StackedTransformerLayer)):
+        update_model_remat_config(stack_cfg=stack_cfg, layer_cfg=layer_cfg)
+
     # Shard some FFN and attention weights over multiple axes.
     batch_axis_names = ("data", "expert", "fsdp")
     set_double_shard_weights_config(
@@ -300,6 +298,7 @@ def model_config(
         tp_axis_names="model",
         seq_axis_names="seq",
     )
+
     def config_dense(cfg: TransformerLayer.Config) -> TransformerLayer.Config:
         cfg = layer_cfg.clone()
         cfg.feed_forward.activation = activation_fn
@@ -315,14 +314,16 @@ def model_config(
         cfg.feed_forward.structure = ffn_structure
         return cfg
 
-    fn = {
+    ffn_layer_type_to_config = {
         "dense": config_dense,
         "sparse": config_sparse,
     }
     if ffn_layer_types is None:
         lm_layer_cfg = config_dense(layer_cfg)
     else:
-        lm_layer_cfg = [fn[layer_type](layer_cfg) for layer_type in ffn_layer_types]
+        lm_layer_cfg = [
+            ffn_layer_type_to_config[layer_type](layer_cfg) for layer_type in ffn_layer_types
+        ]
 
     # Single layer repeated num_layers times.
     if not isinstance(lm_layer_cfg, Sequence):
@@ -339,9 +340,6 @@ def model_config(
                 num_layers=num_layers_cfgs, layer=list(lm_layer_cfg)
             ),
         )
-
-
-
     decoder_cfg = Decoder.default_config().set(
         transformer=transformer_cfg,
         attention_mask=attention_mask,
@@ -363,7 +361,8 @@ def model_config(
             )
         }
     )
-    batch_axis_names = ("data", "expert", "fsdp")
+
+    # A few more model-level settings.
     cfg: causal_lm.Model.Config = causal_lm.Model.default_config().set(
         decoder=decoder_cfg,
         param_init=model_param_init,
@@ -490,7 +489,7 @@ def adastar_learner_config(
             update_schedule=update_schedule,
             adam_update_transformation=adam_update_transformation,
         ),
-        drop_norm=100,
+        drop_norm=1,
         max_norm=1,
     )
     return learner.Learner.default_config().set(optimizer=optimizer_cfg)
@@ -725,10 +724,7 @@ def get_trainer_config_fn(
         cfg.model = model_cfg
         cfg.learner = learner_cfg
         cfg.max_step = max_step
-        if os.getenv("AXLEARN_TRAIN_DTYPE", "bfloat16") == "float32":
-            cfg.train_dtype = jnp.float32
-        else:
-            cfg.train_dtype = STEP_DTYPE
+        cfg.train_dtype = STEP_DTYPE
         cfg.input = input_tf_data.Input.default_config().set(
             is_training=True,
             source=train_input_source,
@@ -749,10 +745,11 @@ def get_trainer_config_fn(
                 }
             ),
         )
+
         cfg.evalers = {}
         for name, evaler_cfg in evalers.items():
-            evaler_cfg.input.input_dispatcher.global_logical_batch_size = (
-                eval_batch_size or train_batch_size
+            evaler_cfg.input.input_dispatcher = InputDispatcher.default_config().set(
+                global_logical_batch_size=eval_batch_size or train_batch_size
             )
             evaler_cfg.set(
                 eval_policy=config_for_function(eval_every_n_steps_policy).set(
@@ -768,7 +765,8 @@ def get_trainer_config_fn(
         )
         cfg.checkpointer.keep_every_n_steps = min(max_step, keep_every_n_steps)
         cfg.checkpointer.keep_last_n = 3
-        cfg.summary_writer.write_every_n_steps = 1
+        # cfg.summary_writer.write_every_n_steps = min(eval_every_n_steps, 100)
+        cfg.summary_writer.write_every_n_steps = min(eval_every_n_steps, 1)
         cfg.summary_writer.max_queue = 1000
         if len(mesh_axis_names) != len(mesh_shape):
             raise ValueError(

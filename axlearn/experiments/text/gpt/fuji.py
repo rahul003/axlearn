@@ -9,7 +9,7 @@ The fuji models are set up to imitate LLaMA models:
 * LLaMA 2: https://arxiv.org/abs/2307.09288
 * LLaMA 3: https://github.com/meta-llama/llama3
 """
-import os
+
 import enum
 import functools
 import itertools
@@ -32,7 +32,7 @@ from axlearn.common.attention import (
     StackedTransformerLayer,
 )
 from axlearn.common.base_layer import RematSpec
-from axlearn.common.config import config_for_function
+from axlearn.common.config import TrainerConfigFn, config_for_function
 from axlearn.common.decoder import LmHead
 from axlearn.common.embedding import TransformerTextEmbeddings
 from axlearn.common.flash_attention.layer import FlashBlockSizeModifier
@@ -41,6 +41,7 @@ from axlearn.common.layers import RMSNorm
 from axlearn.common.trainer import SpmdTrainer
 from axlearn.common.trainer_config_modifier import (
     ChainConfigModifier,
+    FP8ConfigModifier,
     GradientAccumulationModifier,
     MeshShapeModifier,
     ModuleConfigModifier,
@@ -64,10 +65,11 @@ from axlearn.experiments.text.gpt.common import (
 )
 from axlearn.experiments.text.gpt.common import model_config as common_model_config
 from axlearn.experiments.text.gpt.common import scaled_hidden_dim
-from axlearn.experiments.trainer_config_utils import TrainerConfigFn, V6eFlashConfigModifier
+from axlearn.experiments.trainer_config_utils import V6eFlashConfigModifier
 
-# Import the FP8ConfigModifier below if using FP8 training. See config for A3 / A4 instances below
-# from axlearn.common.trainer_config_modifier import FP8ConfigModifier
+import re
+import os
+from absl import logging
 
 MODEL_SIZES = ("test", "1B", "3B", "7B", "8B", "70B")
 
@@ -108,12 +110,16 @@ ROPE_THETA = {
 TOTAL_TOKENS = {
     Version.V1: {
         "test": 1 * (1024**4),  # 1T tokens
+        "1B": 1 * (1024**4),  # 1T tokens
         "7B": 1 * (1024**4),  # 1T tokens
         "70B": int(1.4 * (1024**4)),  # 1.4T tokens
     },
     Version.V2: {
         "test": 2 * (1024**4),  # 2T tokens
+        "1B": 2 * (1024**4),  # 2T tokens
+        "3B": 2 * (1024**4),  # 2T tokens
         "7B": 2 * (1024**4),  # 2T tokens
+        "8B": 2 * (1024**4),  # 2T tokens
         "70B": 2 * (1024**4),  # 2T tokens
     },
     Version.V3: {
@@ -121,6 +127,7 @@ TOTAL_TOKENS = {
         "1B": 15 * (1024**4),  # 15T tokens
         "3B": 15 * (1024**4),  # 15T tokens
         "7B": 15 * (1024**4),  # 15T tokens
+        "8B": 15 * (1024**4),  # 15T tokens
         "70B": 15 * (1024**4),  # 15T tokens
     },
     Version.V3_TIKTOKEN: {
@@ -132,6 +139,47 @@ TOTAL_TOKENS = {
     },
 }
 
+
+def offload_dots_saveable_policy(*_, **__):
+    """A rematerialization policy function used in RematSpec to offload dot_general_p
+    operations from device to pinned host memory.
+
+    Args:
+        *_: Ignored positional arguments.
+        **__: Ignored keyword arguments.
+
+    Returns:
+        A policy function that offloads dot_general_p from device to pinned host
+    memory.
+    """
+    return config_for_function(extended_checkpoint_policies.offload_dots_saveable).set(
+        offload_src="device", offload_dst="pinned_host"
+    )
+
+
+def offload_attention_proj_policy(*_, **__):
+    """A rematerialization policy function used in RematSpec to offload attention
+    projection intermediates during model execution.
+
+    Args:
+        *_: Ignored positional arguments.
+        **__: Ignored keyword arguments.
+
+    Returns:
+        A checkpoint policy function that offloads native attention projection intermediates
+        from device to pinned host memory, enabling memory-efficient training with checkpoint
+        support.
+    """
+    return config_for_function(
+        extended_checkpoint_policies.save_and_offload_only_these_names_regex
+    ).set(
+        names_which_can_be_saved=None,
+        names_which_can_be_offloaded=RematRegexSavePatterns.NATIVE_ATTENTION.value,
+        offload_src="device",
+        offload_dst="pinned_host",
+    )
+
+
 # Llama3 uses 16m tokens after 2.87T tokens.
 # https://arxiv.org/pdf/2407.21783
 TOKENS_PER_BATCH = {
@@ -141,6 +189,61 @@ TOKENS_PER_BATCH = {
     Version.V3_TIKTOKEN: 16 * (1024**2),
 }
 
+ 
+def contains_70B(string):
+    pattern = r'70B'
+    if re.search(pattern, string):
+        return True
+    else:
+        return False
+
+def check_env_vars():
+    required_vars = ["PIPELINE", "DATA", "EXPERT", "FSDP", "SEQ", "MODEL", "N_LAYERS", "TRAIN_GBS",
+        "OPTIMIZER_LR_EXP", "OPTIMIZER_LR_BASE", "OPTIMIZER_WD", "SAVE_EVERY_N_STEPS", "EVAL_EVERY_N_STEPS"]
+    missing_vars = [var for var in required_vars if os.getenv(var) is None]
+    if missing_vars:
+        raise EnvironmentError(f"The following environment variables are expected but not found: {', '.join(missing_vars)}")
+
+def get_mesh_shape_from_axes():
+    PIPELINE = int(os.getenv("PIPELINE", 1))
+    DATA = int(os.getenv("DATA", 1))
+    EXPERT = int(os.getenv("EXPERT", 1))
+    FSDP = int(os.getenv("FSDP", 1))
+    SEQ = int(os.getenv("SEQ", 1))
+    MODEL = int(os.getenv("MODEL", 1))
+    return mesh_shape_from_axes(pipeline=PIPELINE, data=DATA, expert=EXPERT, fsdp=FSDP, seq=SEQ, model=MODEL)
+
+def callback_modify_trainer_kwargs_env_vars(trainer_kwargs):
+    """
+    Update trainer_kwargs based on environment variables.
+
+    Args:
+        trainer_kwargs (dict): Trainer configuration to modify.
+
+    Returns:
+        dict: Updated trainer_kwargs.
+    """
+
+    if N_LAYERS := os.getenv("N_LAYERS"):
+        trainer_kwargs["model_kwargs"]["num_layers"] = int(N_LAYERS)
+    if TRAIN_GBS := os.getenv("TRAIN_GBS"):
+        trainer_kwargs["train_batch_size"] = int(TRAIN_GBS)
+    if EVAL_GBS := os.getenv("EVAL_GBS"):
+        trainer_kwargs["eval_batch_size"] = int(EVAL_GBS)
+
+    if all(os.getenv(var) for var in ["OPTIMIZER_LR_BASE", "OPTIMIZER_LR_EXP"]):
+        lr_exp = int(os.getenv("OPTIMIZER_LR_EXP"))
+        opt_lr = float(os.getenv("OPTIMIZER_LR_BASE")) * (10 ** lr_exp)
+        trainer_kwargs["learner_kwargs"]["peak_lr"] = opt_lr
+    if OPTIMIZER_WD := os.getenv("OPTIMIZER_WD"):
+        trainer_kwargs["learner_kwargs"]["weight_decay"] = float(OPTIMIZER_WD)
+
+    if SAVE_EVERY_N_STEPS := os.getenv("SAVE_EVERY_N_STEPS"):
+        trainer_kwargs["save_every_n_steps"] = int(SAVE_EVERY_N_STEPS)
+    if EVAL_EVERY_N_STEPS := os.getenv("EVAL_EVERY_N_STEPS"):
+        trainer_kwargs["eval_every_n_steps"] = int(EVAL_EVERY_N_STEPS)
+
+    return trainer_kwargs
 
 class _Trn2CustomConfig(NamedTuple):
     """Config modifications required to run Fuji models on TRN2."""
@@ -166,14 +269,17 @@ def _generate_trn2_custom_configs(
         A _Trn2CustomConfig object that contains the generated modifications.
     """
     # TRN2 specific model config modifications.
-    trn2_module_modifications = [
-        # Neuron compiler has a module to detect repeating blocks and reuse them during compilation.
-        # So compile time does not grow with the number of layers.
-        ModuleConfigModifier.default_config().set(
-            target_config="model.decoder.transformer",
-            modification=StackedTransformerLayer.default_config(),
-        )
-    ]
+    if int(os.getenv("NEURON_FSDP_REPEATED", 0)) == 0:
+        trn2_module_modifications = [
+            # Neuron compiler has a module to detect repeating blocks and reuse them during compilation.
+            # So compile time does not grow with the number of layers.
+            ModuleConfigModifier.default_config().set(
+                target_config="model.decoder.transformer",
+                modification=StackedTransformerLayer.default_config(),
+            )
+        ]
+    else:
+        trn2_module_modifications = []
     # Grouped QKV is only used in fuji-v3 except in fuji-v2 if model is 70B.
     if version == Version.V3 or (model_size == "70B" and version != Version.V1):
         trn2_module_modifications.append(
@@ -192,9 +298,11 @@ def _generate_trn2_custom_configs(
                     "param_partition_spec": (
                         "model",
                         ("expert", "fsdp", "seq"),
+                        #None
                     ),
                     "input_partition_spec": (("data", "fsdp"), None),
                     "output_partition_spec": (("data", "fsdp"), None, None),
+                    # "embedding_partition_spec": (None, None),
                     "embedding_partition_spec": ("model", None),
                 },
                 # Sequence parallel shardings for norms.
@@ -260,20 +368,10 @@ def get_trainer_kwargs(
     rope_theta = ROPE_THETA[version]
 
     trn2_config = _generate_trn2_custom_configs(model_size, version=version)
-    offload_dots_saveable_policy = config_for_function(
-        extended_checkpoint_policies.offload_dots_saveable
-    ).set(offload_src="device", offload_dst="pinned_host")
-    # To make it work better with v3 8k sequence length.
-    offload_attention_proj_policy = config_for_function(
-        extended_checkpoint_policies.save_and_offload_only_these_names_regex
-    ).set(
-        names_which_can_be_saved=None,
-        names_which_can_be_offloaded=RematRegexSavePatterns.NATIVE_ATTENTION.value,
-        offload_src="device",
-        offload_dst="pinned_host",
-    )
+
     # dict() is more readable here.
     # pylint: disable=use-dict-literal
+    check_env_vars()
     if model_size == "test":
         trainer_kwargs = dict(
             model_kwargs=dict(
@@ -294,15 +392,15 @@ def get_trainer_kwargs(
             max_step=3000,
             eval_every_n_steps=1500,
             save_every_n_steps=500,
-            mesh_shape=mesh_shape_from_axes(data=-1),
+            mesh_shape=get_mesh_shape_from_axes(),
         )
     elif model_size == "1B":
         trainer_kwargs = dict(
             model_kwargs=dict(
-                num_layers=int(os.getenv("AXLEARN_NUM_LAYERS", 16)),
+                num_layers=16,
                 hidden_dim=2048,
                 num_heads=32,
-                num_kv_heads=max(num_kv_heads, int(os.getenv("AXLEARN_TP_DEGREE", 4))),
+                num_kv_heads=num_kv_heads,
                 ffn_dim=8192,
                 rope_theta=rope_theta,
                 shared_lm_head=True,
@@ -312,7 +410,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=get_mesh_shape_from_axes(),
             mesh_rules=(
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",
@@ -321,10 +419,13 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=int(os.getenv("AXLEARN_TP_DEGREE", 4)))
+                                mesh_shape=get_mesh_shape_from_axes(),
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
+                            *(GradientAccumulationModifier.default_config().set(
+                                grad_acc_steps=int(GRAD_ACCUM),
+                            ) for GRAD_ACCUM in [os.getenv("GRAD_ACCUM")] if GRAD_ACCUM),
                         ],
                     ),
                 ),
@@ -346,7 +447,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=get_mesh_shape_from_axes(),
             mesh_rules=(
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",
@@ -355,13 +456,13 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=int(os.getenv("AXLEARN_TP_DEGREE", 4)))
+                                mesh_shape=get_mesh_shape_from_axes(),
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
-                            GradientAccumulationModifier.default_config().set(
-                                grad_acc_steps=4,
-                            ),
+                            *(GradientAccumulationModifier.default_config().set(
+                                grad_acc_steps=int(GRAD_ACCUM),
+                            ) for GRAD_ACCUM in [os.getenv("GRAD_ACCUM")] if GRAD_ACCUM),
                         ],
                     ),
                 ),
@@ -382,7 +483,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=get_mesh_shape_from_axes(),
             mesh_rules=(
                 # Step time:
                 # v1 on tpu-v4-1024 (512 chips):            3.03s
@@ -500,18 +601,13 @@ def get_trainer_kwargs(
                     "gpu-(p5.48xlarge|p4de.24xlarge)-(256|512|1024)",
                     mesh_shape_from_axes(data=-1, fsdp=8),
                 ),
-                # Enable support for FP8 training on H100/200 instance types
                 (
                     "gpu-(a3-highgpu-8g|a3-megagpu-8g|a3-ultragpu-8g)-(256|512|1024)",
                     ChainConfigModifier.default_config().set(
                         config_modifiers=[
                             MeshShapeModifier.default_config().set(
                                 mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8)
-                            ),
-                            # Uncomment the FP8ConfigModifier block to use FP8 training.
-                            # FP8ConfigModifier.default_config().set(
-                            #    fp8_amax_history_length=128
-                            # )
+                            )
                         ],
                     ),
                 ),
@@ -525,10 +621,6 @@ def get_trainer_kwargs(
                             ),
                             # Modify the GPU block-size for B200 platform (Pallas kernels)
                             FlashBlockSizeModifier.default_config().set(gpu_block_size=64),
-                            # Uncomment the FP8ConfigModifier block to use FP8 training.
-                            # FP8ConfigModifier.default_config().set(
-                            #    fp8_amax_history_length=128
-                            # ),
                         ],
                     ),
                 ),
@@ -539,10 +631,13 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=int(os.getenv("AXLEARN_TP_DEGREE", 4)))
+                                mesh_shape=get_mesh_shape_from_axes(),
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
+                            *(GradientAccumulationModifier.default_config().set(
+                                grad_acc_steps=int(GRAD_ACCUM),
+                            ) for GRAD_ACCUM in [os.getenv("GRAD_ACCUM")] if GRAD_ACCUM),
                         ],
                     ),
                 ),
@@ -564,7 +659,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=get_mesh_shape_from_axes(),
             mesh_rules=(
                 ("tpu-v4-(1024|2048)", mesh_shape_from_axes(data=-1, fsdp=16)),
                 (
@@ -623,7 +718,8 @@ def get_trainer_kwargs(
                 ),
                 ("tpu-v5p-.*", mesh_shape_from_axes(data=-1, fsdp=8)),
                 (
-                    "gpu-(p5.48xlarge|p4de.24xlarge|a3-highgpu-8g|a3-megagpu-8g)-(256|512|1024)",
+                    # pylint: disable=line-too-long
+                    "gpu-(p5.48xlarge|p4de.24xlarge|a3-highgpu-8g|a3-megagpu-8g|a3-ultragpu-8g|a4-highgpu-8g)-(256|512|1024)",
                     mesh_shape_from_axes(data=-1, fsdp=8),
                 ),
                 (
@@ -633,10 +729,13 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=int(os.getenv("AXLEARN_TP_DEGREE", 4)))
+                                mesh_shape=get_mesh_shape_from_axes(),
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
+                            *(GradientAccumulationModifier.default_config().set(
+                                grad_acc_steps=int(GRAD_ACCUM),
+                            ) for GRAD_ACCUM in [os.getenv("GRAD_ACCUM")] if GRAD_ACCUM),
                         ],
                     ),
                 ),
@@ -660,7 +759,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(fsdp=-1),
+            mesh_shape=get_mesh_shape_from_axes(),
             mesh_rules=(
                 # TPU V5e maximum per device batch is 1.
                 # with all activation offloading, HBM usage: 14.6GB/chip.
@@ -768,10 +867,6 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 mesh_shape=mesh_shape_from_axes(data=-1, fsdp=64)
                             ),
-                            # Uncomment the FP8ConfigModifier block to use FP8 training.
-                            # FP8ConfigModifier.default_config().set(
-                            #    fp8_amax_history_length=128
-                            # )
                         ],
                     ),
                 ),
@@ -784,10 +879,6 @@ def get_trainer_kwargs(
                             ),
                             # Modify the GPU block-size for B200 platform (Pallas kernels)
                             FlashBlockSizeModifier.default_config().set(gpu_block_size=64),
-                            # Uncomment the FP8ConfigModifier block to use FP8 training.
-                            # FP8ConfigModifier.default_config().set(
-                            #    fp8_amax_history_length=128
-                            # )
                         ],
                     ),
                 ),
@@ -798,7 +889,7 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=get_mesh_shape_from_axes(),
                             ),
                             RematSpecModifier.default_config().set(
                                 remat_policies={
@@ -810,6 +901,7 @@ def get_trainer_kwargs(
                                             names_which_can_be_saved="|".join(
                                                 [
                                                     RematRegexSavePatterns.QKV_PROJ.value,
+                                                    RematRegexSavePatterns.O_PROJ.value,
                                                     RematRegexSavePatterns.LINEAR1_X.value,
                                                 ]
                                             ),
@@ -822,6 +914,9 @@ def get_trainer_kwargs(
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
+                            *(GradientAccumulationModifier.default_config().set(
+                                grad_acc_steps=int(GRAD_ACCUM),
+                            ) for GRAD_ACCUM in [os.getenv("GRAD_ACCUM")] if GRAD_ACCUM),
                         ],
                     ),
                 ),
@@ -829,6 +924,7 @@ def get_trainer_kwargs(
         )
     else:
         raise NotImplementedError(f"Unknown model size {model_size}.")
+    callback_modify_trainer_kwargs_env_vars(trainer_kwargs)
     model_kwargs = trainer_kwargs.pop("model_kwargs")
     model_kwargs.setdefault("vocab_size", vocab_size)
     if version == Version.V3_TIKTOKEN:  # tiktoken tokenizer
@@ -959,6 +1055,55 @@ def trainer_configs(
             ),
             **kwargs,
         )
+
+        def make_fp8_config(base_config_name: str) -> SpmdTrainer.Config:
+            """Make a FP8 variant of the base config.
+
+            Not all accelerators are compatible with FP8. Support is currently
+            available for NVIDIA H100, H200, and B200.
+
+            Args:
+                base_config_name: The base config name.
+
+            Returns:
+                A trainer config that uses FP8.
+            """
+
+            # pytype: disable=annotation-type-mismatch
+            cfg: SpmdTrainer.Config = config_map[base_config_name]().clone()
+            for accelerator, current_config in cfg.mesh_rules:
+                # Only create FP8 configs for accelerators that support them
+                if any(
+                    supported_accelerator in accelerator
+                    for supported_accelerator in [
+                        "a3-highgpu-8g",
+                        "a3-megagpu-8g",
+                        "a3-ultragpu-8g",
+                        "a4-highgpu-8g",
+                        "p5.48xlarge",
+                        "p4de.24xlarge",
+                    ]
+                ):
+                    # If we already are using ChainConfigModifier, just append the FP8ConfigModifier
+                    if isinstance(current_config, ChainConfigModifier.Config):
+                        current_config.config_modifiers.append(
+                            FP8ConfigModifier.default_config().set(fp8_amax_history_length=128)
+                        )
+                    else:
+                        # Create a new ChainConfigModifier, preserving the mesh_shape
+                        current_config = ChainConfigModifier.default_config().set(
+                            config_modifiers=[
+                                MeshShapeModifier.default_config().set(mesh_shape=current_config),
+                                FP8ConfigModifier.default_config().set(fp8_amax_history_length=128),
+                            ]
+                        )
+            return cfg
+
+        # Make FP8 config, excluding the test model size
+        make_fp8_config_func = functools.partial(make_fp8_config, config_name)
+        if model_size != "test":
+            config_map[f"{config_name}-fp8"] = make_fp8_config_func
+
         if model_size == "test":
 
             def wrapper(config_name: str = config_name):
@@ -1013,5 +1158,12 @@ def trainer_configs(
             # Make single-host config
             make_single_host_config_func = functools.partial(make_single_host_config, config_name)
             config_map[f"{config_name}-single-host"] = make_single_host_config_func
+
+            # Make single-host configs for FP8
+            if f"{config_name}-fp8" in config_map:
+                make_single_host_fp8_config_func = functools.partial(
+                    make_single_host_config, f"{config_name}-fp8"
+                )
+                config_map[f"{config_name}-fp8-single-host"] = make_single_host_fp8_config_func
 
     return config_map

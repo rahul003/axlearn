@@ -3,9 +3,8 @@
 """Embedding layers."""
 
 from typing import Optional
-
 from jax import numpy as jnp
-
+from axlearn.common.module import current_context
 from axlearn.common.base_layer import BaseLayer
 from axlearn.common.config import REQUIRED, InstantiableConfig, Required, config_class
 from axlearn.common.layers import Dropout, Embedding
@@ -78,6 +77,9 @@ class TransformerTextEmbeddings(BaseLayer):
         if cfg.norm is not None:
             x = self.norm(x)
         x = self.dropout(x)
+        context = current_context()
+        if context:
+            context.add_summary(f"{self.path()}/embeddings", x)
         return x
 
     def attend(self, x: Tensor) -> Tensor:

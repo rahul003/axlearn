@@ -203,11 +203,12 @@ def _match_summary_type(
             isinstance(raw_value, np.ndarray) and raw_value.ndim == 0
         )
     elif kind == "Tensor":
-        return isinstance(raw_value, np.ndarray) and raw_value.ndim != 4
-    elif kind == "Image":
-        return isinstance(value, ImageSummary) or (
-            isinstance(raw_value, np.ndarray) and raw_value.ndim == 4
-        )
+        return isinstance(raw_value, np.ndarray)
+        # return isinstance(raw_value, np.ndarray) and raw_value.ndim != 4
+    # elif kind == "Image":
+    #     return isinstance(value, ImageSummary) or (
+    #         isinstance(raw_value, np.ndarray) and raw_value.ndim == 4
+    #     )
     elif kind == "Audio":
         return isinstance(value, AudioSummary)
     else:
@@ -235,7 +236,6 @@ class SummaryWriter(BaseWriter):
             flush_ms: Largest interval between flushes in milliseconds.
                 If None, uses the `tf_summary` default (120,000, i.e. 2 minutes).
         """
-
         write_every_n_steps: int = 1
         write_every_n_steps_map: Optional[dict[SummaryKind, int]] = None
         max_queue: Optional[int] = None
@@ -298,10 +298,10 @@ class SummaryWriter(BaseWriter):
                 if isinstance(raw_value, jax.Array):
                     raw_value = np.asarray(raw_value)
 
-                if _match_summary_type("Image", value=value, raw_value=raw_value):
-                    if self._time_to_write(step, "Image"):
-                        tf_summary.image(path, raw_value, step=step, max_outputs=32)
-                    return
+                # if _match_summary_type("Image", value=value, raw_value=raw_value):
+                #     if self._time_to_write(step, "Image"):
+                #         tf_summary.image(path, raw_value, step=step, max_outputs=32)
+                    # return
 
                 if _match_summary_type("Audio", value=value, raw_value=raw_value):
                     if self._time_to_write(step, "Audio"):
@@ -327,7 +327,19 @@ class SummaryWriter(BaseWriter):
 
                 # Note: The tensor check must come after the audio check, since audio is a tensor.
                 if _match_summary_type("Tensor", value=value, raw_value=raw_value):
+                    # if self._time_to_write(step, "Tensor"):
+                    #     tf_summary.histogram(path, raw_value, step=step)
+                    # return
+                    raw_tensor_dir = os.environ.get("TEST_FSX_HOME" , None)
                     if self._time_to_write(step, "Tensor"):
+                        # Save raw tensor to disk if configured
+                        if raw_tensor_dir is not None and jax.process_index() == 0:
+                            # Create directory structure: raw_tensor_dir/path/
+                            tensor_dir = os.path.join(raw_tensor_dir, path)
+                            os.makedirs(tensor_dir, exist_ok=True)
+                            # Save as: raw_tensor_dir/path/step_XXXXXXXX.npy
+                            np.save(os.path.join(tensor_dir, f"step_{step:08d}.npy"), raw_value)
+                        # Then create histogram for TensorBoard
                         tf_summary.histogram(path, raw_value, step=step)
                     return
 
@@ -464,7 +476,7 @@ class WandBWriter(BaseWriter):
         elif isinstance(val, enum.Enum):
             return str(val)
         elif isinstance(val, dict):
-            return type(val)({k: WandBWriter.format_config(v) for k, v in val.items()})
+            return type(val)({str(k): WandBWriter.format_config(v) for k, v in val.items()})
         elif isinstance(val, (tuple, list)):
             # wandb config stores tuple as list so no type(val)(...)
             return [WandBWriter.format_config(v) for v in val]

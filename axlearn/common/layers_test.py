@@ -22,7 +22,6 @@ from unittest import mock
 
 import jax.random
 import numpy as np
-import tensorflow as tf
 import torch
 from absl.testing import absltest, parameterized
 from jax import nn
@@ -69,9 +68,9 @@ from axlearn.common.module import Module, Tensor, child_context
 from axlearn.common.module import functional as F
 from axlearn.common.param_converter import as_torch_tensor
 from axlearn.common.param_init import ConstantInitializer, FanAxes
-from axlearn.common.test_utils import TestCase, assert_allclose
+from axlearn.common.test_utils import TestCase, assert_allclose, assert_not_allclose
 from axlearn.common.torch_utils import parameters_from_torch_layer
-from axlearn.common.utils import as_tensor, flatten_items, shapes
+from axlearn.common.utils import as_tensor, flatten_items, safe_not, shapes
 
 
 def _copy(src: jnp.ndarray, dst: torch.nn.Parameter):
@@ -81,7 +80,7 @@ def _copy(src: jnp.ndarray, dst: torch.nn.Parameter):
         dst.copy_(src)
 
 
-class LayerTest(TestCase, tf.test.TestCase):
+class LayerTest(TestCase):
     @parameterized.parameters(
         "linear",
         "nn.relu",
@@ -180,18 +179,21 @@ class LayerTest(TestCase, tf.test.TestCase):
     @parameterized.parameters(
         [
             dict(inputs_shape=[2, 3, 6]),
-            dict(inputs_shape=[2, 3, 9], paddings=jnp.array([[0, 1, 1], [0, 0, 0]])),
-            dict(inputs_shape=[3, 3, 4, 12], paddings=jnp.array([[1, 1, 1], [0, 0, 1], [0, 1, 1]])),
+            dict(inputs_shape=[2, 3, 9], paddings=jnp.array([[0, 1, 1], [0, 0, 0]], jnp.bool)),
+            dict(
+                inputs_shape=[3, 3, 4, 12],
+                paddings=jnp.array([[1, 1, 1], [0, 0, 1], [0, 1, 1]], jnp.bool),
+            ),
             dict(inputs_shape=[2, 3, 6], scale_params=jnp.array([0, 0, 1, 1, 2, 2])),
             dict(
                 inputs_shape=[2, 3, 4],
-                paddings=jnp.array([[0, 1, 1], [0, 0, 0]]),
+                paddings=jnp.array([[0, 1, 1], [0, 0, 0]], jnp.bool),
                 num_groups=2,
                 scale_params=jnp.array([1, 1, 5, 5]),
             ),
             dict(
                 inputs_shape=[3, 3, 7, 4],
-                paddings=jnp.array([[1, 1, 1], [0, 0, 1], [0, 1, 1]]),
+                paddings=jnp.array([[1, 1, 1], [0, 0, 1], [0, 1, 1]], jnp.bool),
                 num_groups=2,
                 scale_params=jnp.array([2, 2, 3, 3]),
             ),
@@ -228,28 +230,28 @@ class LayerTest(TestCase, tf.test.TestCase):
             ),
             dict(
                 inputs_shape=[3, 3, 16],
-                paddings=jnp.array([[0, 0, 0], [0, 0, 1], [0, 1, 1]]),
+                paddings=jnp.array([[0, 0, 0], [0, 0, 1], [0, 1, 1]], jnp.bool),
                 num_groups=2,
                 norm_type=NormType.RMSNORM,
                 norm_axes=[1, -1],
             ),
             dict(
                 inputs_shape=[3, 3, 4, 16],
-                paddings=jnp.array([[0, 0, 0], [0, 0, 1], [0, 1, 1]]),
+                paddings=jnp.array([[0, 0, 0], [0, 0, 1], [0, 1, 1]], jnp.bool),
                 num_groups=2,
                 norm_type=NormType.RMSNORM,
                 norm_axes=[1, 2, -1],
             ),
             dict(
                 inputs_shape=[3, 3, 16],
-                paddings=jnp.array([[0, 0, 0], [0, 0, 1], [0, 1, 1]]),
+                paddings=jnp.array([[0, 0, 0], [0, 0, 1], [0, 1, 1]], jnp.bool),
                 num_groups=2,
                 norm_type=NormType.RMSNORM,
                 norm_axes=[-1],
             ),
             dict(
                 inputs_shape=[3, 3, 4, 16],
-                paddings=jnp.array([[0, 0, 0], [0, 0, 1], [0, 1, 1]]),
+                paddings=jnp.array([[0, 0, 0], [0, 0, 1], [0, 1, 1]], jnp.bool),
                 num_groups=2,
                 norm_type=NormType.RMSNORM,
                 norm_axes=[-1],
@@ -447,8 +449,8 @@ class LayerTest(TestCase, tf.test.TestCase):
             expected_mean = sum_x / np.maximum(count, 1)
             expected_var = sum_x2 / np.maximum(count, 1) - expected_mean**2
 
-        self.assertAllClose(jnp.squeeze(mean, axis=reduction_axis), expected_mean)
-        self.assertAllClose(jnp.squeeze(variance, axis=reduction_axis), expected_var)
+        assert_allclose(jnp.squeeze(mean, axis=reduction_axis), expected_mean)
+        assert_allclose(jnp.squeeze(variance, axis=reduction_axis), expected_var)
 
     def test_layer_norm_against_torch(self):
         dim = 6
@@ -587,8 +589,11 @@ class LayerTest(TestCase, tf.test.TestCase):
     @parameterized.parameters(
         [
             dict(inputs_shape=[2, 3, 6], paddings=None),
-            dict(inputs_shape=[2, 5, 6], paddings=jnp.array([[0, 0, 0, 0, 1], [0, 0, 1, 1, 1]])),
-            dict(inputs_shape=[2, 3, 6], paddings=jnp.array([[1, 1, 1], [1, 1, 1]])),
+            dict(
+                inputs_shape=[2, 5, 6],
+                paddings=jnp.array([[0, 0, 0, 0, 1], [0, 0, 1, 1, 1]], jnp.bool),
+            ),
+            dict(inputs_shape=[2, 3, 6], paddings=jnp.array([[1, 1, 1], [1, 1, 1]], jnp.bool)),
         ]
     )
     def test_batch_norm(self, inputs_shape, paddings):
@@ -634,13 +639,13 @@ class LayerTest(TestCase, tf.test.TestCase):
                 expected_var = np.ones_like(output_var)
                 if paddings is not None:
                     # var is 0 if there is no valid frame in the batch.
-                    expected_var *= jnp.sum(1 - paddings) > 0
+                    expected_var *= jnp.sum(safe_not(paddings)) > 0
                 assert_allclose(output_var, expected_var)
                 # Check parameter updates.
                 self.assertCountEqual(["moving_mean", "moving_variance"], param_updates.keys())
                 self.assertEqual((dim,), param_updates["moving_mean"].shape)
                 self.assertEqual((dim,), param_updates["moving_variance"].shape)
-                if paddings is None or jnp.sum(1 - paddings) > 0:
+                if paddings is None or jnp.sum(safe_not(paddings)) > 0:
                     self.assertNotAlmostEqual(
                         jnp.abs(param_updates["moving_mean"] - layer_params["moving_mean"]).max(),
                         0,
@@ -732,7 +737,7 @@ class LayerTest(TestCase, tf.test.TestCase):
             state=layer_params,
             prng_key=prng_key,
         )
-        self.assertAllClose(jnp.linalg.norm(outputs, axis=0), jnp.array([1.0, 1.0]))
+        assert_allclose(jnp.linalg.norm(outputs, axis=0), jnp.array([1.0, 1.0]))
 
     @parameterized.named_parameters(
         {
@@ -793,7 +798,7 @@ class LayerTest(TestCase, tf.test.TestCase):
         assert_allclose(outputs, ref_outputs.detach().numpy().transpose(0, 2, 3, 1))
         # Tests output_shape.
         output_shape = layer.output_shape(input_shape=inputs.shape)
-        self.assertAllEqual(outputs.shape, output_shape)
+        self.assertEqual(list(outputs.shape), list(output_shape))
 
     @parameterized.parameters(
         itertools.product(
@@ -1036,7 +1041,7 @@ class LayerTest(TestCase, tf.test.TestCase):
                 flatten_items(params), flatten_items(noisy_params)
             ):
                 self.assertEqual(orig_path, noisy_path)
-                self.assertNotAllClose(orig_value, noisy_value)
+                assert_not_allclose(orig_value, noisy_value)
 
     @parameterized.product(drop_rate=(0, 0.5), num_cls_tokens=(0, 6))
     def test_drop_tokens(self, drop_rate, num_cls_tokens):
@@ -1149,7 +1154,7 @@ class LayerTest(TestCase, tf.test.TestCase):
             state=layer_params,
             prng_key=jax.random.PRNGKey(123),
         )
-        self.assertAllEqual([*positions.shape, dim], outputs.shape)
+        self.assertEqual([*positions.shape, dim], list(outputs.shape))
 
         context = module.InvocationContext(
             name="root",
@@ -1191,7 +1196,7 @@ class LayerTest(TestCase, tf.test.TestCase):
         prng_key = jax.random.PRNGKey(123)
         prng_key, init_key = jax.random.split(prng_key)
         layer_params = layer.initialize_parameters_recursively(init_key)
-        self.assertEqual(dict(count=[], value=[]), shapes(layer_params))
+        self.assertEqual(dict(count=tuple(), value=tuple()), shapes(layer_params))
 
         # Random inputs.
         prng_key, input_key = jax.random.split(prng_key)
@@ -1225,7 +1230,7 @@ class LayerTest(TestCase, tf.test.TestCase):
             layer_params = copy.deepcopy(output_collection.state_updates)
 
         self.assertAlmostEqual(outputs, layer_params["value"])
-        self.assertAllClose(outputs, converge_to, atol=0.01, rtol=0.01)
+        assert_allclose(outputs, converge_to, atol=0.01, rtol=0.01)
 
 
 class EmbedTest(parameterized.TestCase):

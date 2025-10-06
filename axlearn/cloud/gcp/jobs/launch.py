@@ -402,7 +402,6 @@ class BaseBastionManagedJob(FlagConfigurable):
         """Submits the command to bastion."""
         cfg: BaseBastionManagedJob.Config = self.config
         self._bundler.bundle(cfg.name)
-
         logging.info("Starting run for job name %s", cfg.name)
         logging.info("Command: %s", cfg.command)
         with tempfile.NamedTemporaryFile("w") as f:
@@ -525,11 +524,11 @@ class BastionManagedGKEJob(BaseBastionManagedJob):
         """Submits the command to bastion."""
         cfg: BastionManagedGKEJob.Config = self.config
         worker_log = f"{infer_cli_name()} gcp logs --name={cfg.name} --replica=0 --worker=0"
-        print(f"\nOnce started, view log outputs with:\n{worker_log}\n")
         job_spec = super().submit()
         print(
-            "\nView running pods with:\nkubectl get pods\n"
-            "\nNote that the job may take a few minutes to start."
+            "\nNote that the job may take a few minutes to start.\n"
+            f"\nOnce started, view log outputs with:\n{worker_log}\n"
+            "\nView running pods with:\nkubectl get pods"
         )
         return job_spec
 
@@ -584,11 +583,13 @@ def _get_launcher_or_exit(
     try:
         flag_values.runner_name = _infer_runner_name(flag_values)
         launch_cfg.runner = _get_runner_or_exit(flag_values)
-    except Exception:  # pylint: disable=broad-except
+    except Exception as e:  # pylint: disable=broad-except
         if require_runner:
             raise
         logging.warning(
-            "Failed to infer runner name. Proceeding since require_runner=%s", require_runner
+            "Failed to infer runner name with error %s. Proceeding since require_runner=%s",
+            e,
+            require_runner,
         )
     return launch_cfg
 
@@ -778,6 +779,16 @@ def _wrapped_usage(
 
 
 if __name__ == "__main__":
+    # remove FLAGS injected by tensorflow and array record package during import
+    # example: import grain.python as grain
+    # TODO: remove this after we stop using the global FLAG for axlearn flags
+    flags_to_remove = []
+    modules_to_exclude = ["tensorflow", "grain", "array_record", "orbax"]
+    for module_name, flags_list in FLAGS.flags_by_module_dict().items():
+        if any(module_name.startswith(module_prefix) for module_prefix in modules_to_exclude):
+            flags_to_remove.extend(flags_list)
+    for flag_to_remove in flags_to_remove:
+        delattr(FLAGS, flag_to_remove.name)
     configure_logging(logging.INFO)
     _private_flags()
     app.run(main)

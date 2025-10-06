@@ -307,8 +307,7 @@ def tfds_dataset(
             read_config=local_read_config.instantiate(),
             decoders=maybe_instantiate(decoders),
         )
-        import os
-        if int(os.getenv("AXLEARN_SHUFFLE_FILES", "1")) == 1 and shuffle_buffer_size > 0:
+        if shuffle_buffer_size > 0:
             # Subsequent processing may merge/split examples (e.g. for T5), so shuffle examples
             # during training before any processing.
             ds = ds.shuffle(shuffle_buffer_size, reshuffle_each_iteration=True)
@@ -884,7 +883,8 @@ def batch(
             ds = ds.repeat(repeat)
         elif is_training:
             ds = ds.repeat()
-        # If `prefetch_buffer_size` is not set, use autotune.
+        if not is_training:
+            ds = ds.take(8)
         ds = ds.prefetch(prefetch_buffer_size or tf.data.experimental.AUTOTUNE)
         return ds
 
@@ -1221,9 +1221,7 @@ class Input(input_base.Input):
         """Returns the tfds element spec."""
 
         return jax.tree.map(
-            lambda tf_spec: jax.ShapeDtypeStruct(
-                shape=tf_spec.shape, dtype=tf_spec.dtype.as_numpy_dtype
-            ),
+            lambda tf_spec: jax.ShapeDtypeStruct(tf_spec.shape, dtype=tf_spec.dtype.as_numpy_dtype),
             self.dataset().element_spec,
         )
 

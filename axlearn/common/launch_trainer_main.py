@@ -3,7 +3,8 @@
 """Main function for launching the trainer."""
 
 from absl import app, flags
-
+import jax
+jax.config.update("jax_default_prng_impl", "rbg")
 from axlearn.common import launch, launch_trainer, measurement
 from axlearn.common.config import config_for_function
 
