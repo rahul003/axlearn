@@ -169,4 +169,5 @@ wandb/
 .axlearn.config
 
 artifacts
-archive
+archiveslurm-ishaniak-*.out
+slurm-ishaniak-*.out
