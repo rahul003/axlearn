@@ -171,3 +171,5 @@ wandb/
 artifacts
 archiveslurm-ishaniak-*.out
 slurm-ishaniak-*.out
+aws_neuron_venv_jax/
+initialization_checks/
