@@ -46,3 +46,4 @@ export COMP_STOP_STEP=1000
 export ATOL=0.00000001
 export RTOL=0.2
 export CONFIDENCE_INTERVAL=0.90
+export PRECISION = 'bf16'

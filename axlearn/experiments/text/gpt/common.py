@@ -9,7 +9,7 @@ functions are used to build the args for `get_get_trainer_config_fn`, including 
 
 See c4_trainer.py for how they are used.
 """
-
+import os
 import math
 from collections.abc import Sequence
 from typing import Literal, Optional, Protocol, Union
@@ -72,9 +72,11 @@ EVAL_EVERY_N_STEPS = 5_000
 
 # We typically use bfloat16 as the step dtype,
 # (but usually keep parameters and optimizer state in float32).
-# STEP_DTYPE = jnp.bfloat16
-STEP_DTYPE = jnp.float32
-
+precision = os.environ.get('PRECISION', 'fp32')
+if precision == 'fp32': 
+    STEP_DTYPE = jnp.float32
+elif precision == 'bf16': 
+    STEP_DTYPE = jnp.bfloat16
 
 # The default mesh-axis names for LM training, from least to most communication intensive.
 # See mesh_shape_from_axes() docstring for more details.

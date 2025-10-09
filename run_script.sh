@@ -13,8 +13,8 @@ set -x  # Enable command tracing
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
 num_nodes=$(echo "$nodes" | wc -l)
 # devices_per_node=64
-devices_per_node=8
-# devices_per_node=1
+# devices_per_node=8
+devices_per_node=1
 MASTER_ADDR=$(echo "$nodes" | head -n 1)
 # MASTER_ADDR=${MASTER_ADDR:-$(hostname)}
 MASTER_PORT=41000
@@ -38,7 +38,7 @@ echo "Driver installation completed (ignoring DKMS errors)"
 hostname
 
 JOB_ID=${SLURM_JOB_ID}
-ARTIFACTS_PATH="/fsx/ishaniak/artifacts"
+ARTIFACTS_PATH="/fsx/ishaniak/axlearn/artifacts"
 TEST_ARTIFACTS_PATH="${ARTIFACTS_PATH}/${JOB_ID}"
 
 mkdir -p "$TEST_ARTIFACTS_PATH"
@@ -115,11 +115,30 @@ else
 fi
 mkdir -p ${JAX_COMPILATION_CACHE_DIR}
 
+# Check if virtual environment exists and is properly set up
+if [ ! -f "./aws_neuron_venv_jax/bin/python" ]; then
+    echo "Error: Virtual environment not found or Python not available"
+    exit 1
+fi
 source aws_neuron_venv_jax/bin/activate
+
+# Debug: Check if venv activation worked properly
+echo "=== Virtual Environment Debug ==="
+echo "VIRTUAL_ENV: $VIRTUAL_ENV"
+echo "PATH: $PATH"
+echo "which python: $(which python)"
+echo "which neuronx-cc: $(which neuronx-cc)"
+echo "python executable: $(python --version)"
+echo "==================================="
+
 echo "Uninstalling old axlearn and installing from correct location..."
 pip uninstall axlearn -y || true
-cd axlearn && pip install -e . && cd ..
-echo "Axlearn reinstalled from $(pwd)/axlearn"
+pip install -e .
+
+# echo "Uninstalling old axlearn and installing from correct location..."
+# pip uninstall axlearn -y || true
+# pip install -e .
+echo "Axlearn reinstalled from $(pwd)"
 
 echo "Listing apt dependencies"
 apt list --installed | grep neuron
@@ -185,8 +204,8 @@ source env_source.sh
 
 
 mkdir -p ${OUTPUT_DIR}/checkpoints
-cp -r /fsx/ishaniak/initialization_checks/fp32_fuji_smol/checkpoints/step_00000000 ${OUTPUT_DIR}/checkpoints/
-# cp -r /fsx/ishaniak/initialization_checks/bf16_fuji_1b/checkpoints/step_00000000 ${OUTPUT_DIR}/checkpoints/
+cp -r /fsx/ishaniak/axlearn/initialization_checks/fp32_fuji_smol/checkpoints/step_00000000 ${OUTPUT_DIR}/checkpoints/
+# cp -r /fsx/ishaniak/axlearn/initialization_checks/bf16_fuji_1b/checkpoints/step_00000000 ${OUTPUT_DIR}/checkpoints/
 
 # # Create neuron dump directory and set up NEFF file copying
 # mkdir -p ${NEURON_DUMP_PATH}
@@ -198,4 +217,4 @@ python -m axlearn.common.launch_trainer_main \
     --jax_backend=neuron --mesh_selector=neuron-trn2.48xlarge-64 \
     --distributed_coordinator=$MASTER_ADDR:$JAX_COORDINATOR_PORT --num_processes=$num_nodes \
     --process_id=$NEURON_PJRT_PROCESS_INDEX \
-    --max_step=10000
+    --max_step=10
