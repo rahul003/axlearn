@@ -149,4 +149,4 @@ python -u -m axlearn.common.launch_trainer_main \
     --process_id=$NEURON_PJRT_PROCESS_INDEX \
     --mesh_selector=$MESH_SELECTOR \
     --trainer_prng_seed=$MODEL_SEED \
-    --max_step=10000
+    --max_step=10

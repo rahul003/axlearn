@@ -331,7 +331,7 @@ class SummaryWriter(BaseWriter):
                     #     tf_summary.histogram(path, raw_value, step=step)
                     # return
                     raw_tensor_dir = os.environ.get("TEST_FSX_HOME" , None)
-                    if self._time_to_write(step, "Tensor") and (step <= 5 or step % 500 == 0):
+                    if self._time_to_write(step, "Tensor") and (step <= 10 or step % 50 == 0):
                         # Save raw tensor to disk if configured
                         if raw_tensor_dir is not None and jax.process_index() == 0:
                             # Create directory structure: raw_tensor_dir/path/
