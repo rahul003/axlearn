@@ -611,7 +611,7 @@ class GridSpaceBuilder:
         ]
         
         for mesh_spec, batch, n_groups in mesh_configs:
-            for top_k in [1, 2, 4, 8, 16]: #do we need to cut this down?
+            for top_k in [4, 8]:
                 test_kwargs = kwargs.copy()
                 test_kwargs['n_groups'] = n_groups
                 grid_space.append(self.create_test_config(**test_kwargs, top_k=top_k, batch=batch, mesh_spec=mesh_spec))

@@ -87,6 +87,8 @@ elif [ "$1" = "integ" ]; then
         export TEST_SUITE_PARTS=1
     elif [ "$2" = "12b" ]; then
         export TEST_SUITE_PARTS=6
+    elif [ "$2" = "gpt-oss" ]; then
+        export TEST_SUITE_PARTS=3
     elif [ "$2" = "150b" ]; then
         export TEST_SUITE_PARTS=14
     elif [ "$2" = "deepseek-v3" ] || [ "$2" = "qwen3-30b" ] || [ "$2" = "switch-base" ]; then
