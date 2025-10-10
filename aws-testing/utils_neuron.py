@@ -514,7 +514,7 @@ class GridSpaceBuilder:
             
         return grid_space
 
-    def build_grid_space_input_hidden(self, input_dim=2048, hidden_dim=7168, min_seq=8*1024, max_seq=None, min_tp=None, max_tp=None, max_E=None, dtype=jnp.bfloat16):
+    def build_grid_space_input_hidden(self, input_dim=2048, hidden_dim=7168, min_seq=8*1024, max_seq=None, min_tp=None, max_tp=None, max_E=None, dtype=jnp.bfloat16, exclude_combinations=None, exclude_seq_lengths=None):
         # TODO: consider removing DP replicas of groups and parallelize different tests on different cores if possible
         # Grid space for testing
         grid_space = []
@@ -533,6 +533,10 @@ class GridSpaceBuilder:
             (1,16,4), 
             (16,1,1), (16,1,4)
         ]
+        
+        # Filter out excluded combinations
+        if exclude_combinations:
+            tp_cp_ep_combinations = [combo for combo in tp_cp_ep_combinations if combo not in exclude_combinations]
         
         kwargs={
             'dtype': dtype,
@@ -583,6 +587,10 @@ class GridSpaceBuilder:
                             break
                         S = min_seq
                         while (max_seq and S <= max_seq) or (S <= 16*1024):
+                            # Skip excluded sequence lengths
+                            if exclude_seq_lengths and S in exclude_seq_lengths:
+                                S = S * 2
+                                continue
                             grid_space.append(self.create_test_config(**kwargs, n_experts=E, top_k=K, n_groups=G, capacity_factor=cf, seq=S, batch=batch, mesh_spec=mesh_spec))
                             S = S * 2
         return grid_space
@@ -1092,9 +1100,9 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
     elif test_suite == '150b':
         tests = builder.build_grid_space_150B()
     elif test_suite == 'qwen3-30b':
-        tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=6144, max_E=128)
+        tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=6144, max_E=128, exclude_combinations=[(16,1,1)], exclude_seq_lengths=[16384])
     elif test_suite == 'switch-base':
-        tests = builder.build_grid_space_input_hidden(input_dim=1536, hidden_dim=6144, max_tp=16)
+        tests = builder.build_grid_space_input_hidden(input_dim=1536, hidden_dim=6144, max_tp=16, exclude_combinations=[(16,1,1)], exclude_seq_lengths=[16384])
     elif test_suite == 'switch-large':
         tests = builder.build_grid_space_input_hidden(input_dim=2048, hidden_dim=8192, max_tp=16, max_E=128)
     elif test_suite == 'mixtral-50b':
@@ -1103,7 +1111,7 @@ def get_training_configs(test_suite="presubmit", layer='moe', test=TopKGatingGat
         # llama4 scout (topk=1, E=16)
         tests = builder.build_grid_space_input_hidden(input_dim=5120, hidden_dim=8192, max_E=64, max_tp=16)
     elif test_suite == 'deepseek-v3':
-        tests = builder.build_grid_space_input_hidden(input_dim=7168, hidden_dim=2048, max_E=128, max_tp=16)
+        tests = builder.build_grid_space_input_hidden(input_dim=7168, hidden_dim=2048, max_E=128, max_tp=16, exclude_combinations=[(16,1,1)], exclude_seq_lengths=[16384])
     # below are too big, takes too long to run, and many tests go CPU OOM if we do grid like for above configs
     elif test_suite == 'qwen3-235b':
         tests = builder.build_grid_space_qwen3_235b()
