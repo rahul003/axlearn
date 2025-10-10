@@ -527,7 +527,7 @@ class GridSpaceBuilder:
             64: 1,
         }
         # All tp,cp,ep tuples
-        tp_ep_cp_combinations = [
+        tp_cp_ep_combinations = [
             #tp, cp, ep
             (4,4,4), (4,1,1),
             (1,16,4), 
@@ -540,7 +540,7 @@ class GridSpaceBuilder:
             'hidden_dim': int(hidden_dim),
         }
         
-        for tp_degree, cp_degree, ep_degree in tp_ep_cp_combinations:
+        for tp_degree, cp_degree, ep_degree in tp_cp_ep_combinations:
 
             if min_tp is not None and ep_degree == 1 and tp_degree < min_tp:
                 continue
