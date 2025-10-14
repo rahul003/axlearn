@@ -57,16 +57,16 @@ def ring_attention(
 
 
 def _stripe_sequence(x: Tensor, num_workers: int) -> Tensor:
-    """Stripe sequence dimension across workers.
+    """Stripe sequence dimension across workers with interleaving.
     
-    Converts [batch, seq, ...] to [batch, seq//num_workers, num_workers, ...]
-    then transposes to [batch, num_workers, seq//num_workers, ...].
+    Interleaves sequence elements across workers in round-robin fashion.
+    Example: [0,1,2,3,4,5,6,7] with 4 workers -> [[0,4], [1,5], [2,6], [3,7]]
+    Converts [batch, seq, ...] to [batch, num_workers, seq//num_workers, ...].
     """
     batch, seq_len = x.shape[0], x.shape[1]
     seq_per_worker = seq_len // num_workers
-    # Reshape and transpose to stripe
-    x = x.reshape(batch, seq_per_worker, num_workers, *x.shape[2:])
-    x = x.transpose(0, 2, 1, *range(3, x.ndim))
+    # Reshape to interleave: [batch, num_workers, seq//num_workers, ...]
+    x = x.reshape(batch, num_workers, seq_per_worker, *x.shape[2:])
     return x
 
 
@@ -76,8 +76,7 @@ def _unstripe_sequence(x: Tensor, num_workers: int) -> Tensor:
     Converts [batch, num_workers, seq//num_workers, ...] back to [batch, seq, ...].
     """
     batch = x.shape[0]
-    # Transpose and reshape to unstripe
-    x = x.transpose(0, 2, 1, *range(3, x.ndim))
+    # Reshape to merge sequence
     x = x.reshape(batch, -1, *x.shape[3:])
     return x
 
