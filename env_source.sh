@@ -20,19 +20,19 @@ export EVAL_GBS=1
 # export EXPERT=1
 # export SEQ=1
 
-# export FSDP=1
-# export MODEL=8
-# export PIPELINE=1
-# export DATA=-1
-# export EXPERT=1
-# export SEQ=1
-
 export FSDP=1
-export MODEL=1
+export MODEL=8
 export PIPELINE=1
-export DATA=1
+export DATA=-1
 export EXPERT=1
 export SEQ=1
+
+# export FSDP=1
+# export MODEL=1
+# export PIPELINE=1
+# export DATA=1
+# export EXPERT=1
+# export SEQ=1
 
 export OPTIMIZER_LR_BASE=3
 export OPTIMIZER_LR_EXP=-4
@@ -46,4 +46,4 @@ export COMP_STOP_STEP=1000
 export ATOL=0.00000001
 export RTOL=0.2
 export CONFIDENCE_INTERVAL=0.90
-export PRECISION = 'fp32'
+export PRECISION='bf16'

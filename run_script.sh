@@ -13,8 +13,8 @@ set -x  # Enable command tracing
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
 num_nodes=$(echo "$nodes" | wc -l)
 # devices_per_node=64
-# devices_per_node=8
-devices_per_node=1
+devices_per_node=8
+# devices_per_node=1
 MASTER_ADDR=$(echo "$nodes" | head -n 1)
 # MASTER_ADDR=${MASTER_ADDR:-$(hostname)}
 MASTER_PORT=41000
@@ -204,12 +204,12 @@ source env_source.sh
 
 
 mkdir -p ${OUTPUT_DIR}/checkpoints
-cp -r /fsx/ishaniak/axlearn/initialization_checks/fp32_fuji_smol/checkpoints/step_00000000 ${OUTPUT_DIR}/checkpoints/
+cp -r /fsx/ishaniak/axlearn/initialization_checks/fp32_fuji_smol_tp8/checkpoints/step_00000000 ${OUTPUT_DIR}/checkpoints/
 # cp -r /fsx/ishaniak/axlearn/initialization_checks/bf16_fuji_1b/checkpoints/step_00000000 ${OUTPUT_DIR}/checkpoints/
 
 # # Create neuron dump directory and set up NEFF file copying
 # mkdir -p ${NEURON_DUMP_PATH}
-# trap 'find /tmp -name "*.neff" -exec cp {} ${NEURON_DUMP_PATH}/ \; 2>/dev/null || true' EXIT
+# trap 'find /tmp -name "*.neff" -exec cp {} ${NEURON_DUMP_PATH}/ \; 2>/dev/null || true' EXIT 
 
 python -m axlearn.common.launch_trainer_main \
     --module=text.gpt.c4_trainer --config=fuji-1B-v2-flash \

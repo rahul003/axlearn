@@ -337,8 +337,9 @@ class SummaryWriter(BaseWriter):
                             # Create directory structure: raw_tensor_dir/path/
                             tensor_dir = os.path.join(raw_tensor_dir, path)
                             os.makedirs(tensor_dir, exist_ok=True)
-                            # Save as: raw_tensor_dir/path/step_XXXXXXXX.npy
-                            np.save(os.path.join(tensor_dir, f"step_{step:08d}.npy"), raw_value)
+                            # Save as: raw_tensor_dir/path/step_XXXXXXXX.npy after upcasting to fp32
+                            raw_value_fp32 = jax.numpy.asarray(raw_value, dtype=jax.numpy.float32)
+                            np.save(os.path.join(tensor_dir, f"step_{step:08d}.npy"), raw_value_fp32)
                         # Then create histogram for TensorBoard
                         tf_summary.histogram(path, raw_value, step=step)
                     return
