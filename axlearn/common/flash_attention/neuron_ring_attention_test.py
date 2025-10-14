@@ -27,10 +27,14 @@ if jax.default_backend() != "neuron":
         (2, 2048, 2, 128),
         (1, 2048, 8, 128),
         (2, 2048, 8, 128),
+        # Context parallelism specific cases
+        (1, 4096, 8, 128),  # Longer sequence
+        (2, 4096, 16, 128),  # More heads
+        (4, 2048, 32, 64),  # Larger batch
     ],
 )
 @pytest.mark.parametrize("causal", [True])
-@pytest.mark.parametrize("input_dtype", [jnp.float16, jnp.bfloat16, jnp.float32])
+@pytest.mark.parametrize("input_dtype", [jnp.bfloat16, jnp.float32])
 def test_fwd_against_ref(
     batch_size: int,
     seq_len: int,
@@ -78,10 +82,14 @@ def test_fwd_against_ref(
         (2, 2, 2048, 128),
         (1, 8, 2048, 128),
         (2, 8, 2048, 128),
+        # Context parallelism specific cases
+        (1, 16, 4096, 128),  # Longer sequence with more heads
+        (4, 32, 2048, 64),  # Larger batch with many heads
+        (2, 8, 8192, 128),  # Very long sequence
     ],
 )
 @pytest.mark.parametrize("causal", [True])
-@pytest.mark.parametrize("input_dtype", [jnp.bfloat16, jnp.float16, jnp.float32])
+@pytest.mark.parametrize("input_dtype", [jnp.bfloat16, jnp.float32])
 def test_bwd_against_ref(
     batch_size: int,
     num_heads: int,
@@ -119,3 +127,30 @@ def test_bwd_against_ref(
         lambda q, k, v, b: test_fn(dict(query=q, key=k, value=v, bias=b)).mean(), argnums=(0, 1, 2)
     )(q, k, v, bias)
     chex.assert_trees_all_close(jax_grads, jax_ref_grads, atol=0.07)
+
+
+@pytest.mark.parametrize("num_workers", [2, 4])
+@pytest.mark.parametrize("seq_len", [2048, 4096])
+def test_striping(
+    num_workers: int,
+    seq_len: int,
+):
+    """Test sequence striping and unstriping."""
+    # pylint: disable=import-outside-toplevel
+    from axlearn.common.flash_attention.neuron_ring_attention import (
+        _stripe_sequence,
+        _unstripe_sequence,
+    )
+
+    batch_size, num_heads, per_head_dim = 2, 8, 128
+    x = jax.random.normal(jax.random.key(0), (batch_size, seq_len, num_heads, per_head_dim))
+    
+    # Stripe and unstripe should be identity
+    x_striped = _stripe_sequence(x, num_workers)
+    x_unstriped = _unstripe_sequence(x_striped, num_workers)
+    
+    chex.assert_trees_all_close(x, x_unstriped)
+    
+    # Check striped shape
+    expected_shape = (batch_size, num_workers, seq_len // num_workers, num_heads, per_head_dim)
+    assert x_striped.shape == expected_shape

@@ -56,6 +56,32 @@ def ring_attention(
     return out
 
 
+def _stripe_sequence(x: Tensor, num_workers: int) -> Tensor:
+    """Stripe sequence dimension across workers.
+    
+    Converts [batch, seq, ...] to [batch, seq//num_workers, num_workers, ...]
+    then transposes to [batch, num_workers, seq//num_workers, ...].
+    """
+    batch, seq_len = x.shape[0], x.shape[1]
+    seq_per_worker = seq_len // num_workers
+    # Reshape and transpose to stripe
+    x = x.reshape(batch, seq_per_worker, num_workers, *x.shape[2:])
+    x = x.transpose(0, 2, 1, *range(3, x.ndim))
+    return x
+
+
+def _unstripe_sequence(x: Tensor, num_workers: int) -> Tensor:
+    """Unstripe sequence dimension from workers.
+    
+    Converts [batch, num_workers, seq//num_workers, ...] back to [batch, seq, ...].
+    """
+    batch = x.shape[0]
+    # Transpose and reshape to unstripe
+    x = x.transpose(0, 2, 1, *range(3, x.ndim))
+    x = x.reshape(batch, -1, *x.shape[3:])
+    return x
+
+
 def _ring_forward(
     query: Tensor,
     key: Tensor,
@@ -68,6 +94,11 @@ def _ring_forward(
     dropout_rate: float,
 ):
     """Ring attention forward pass."""
+    # Stripe inputs across workers
+    query = _stripe_sequence(query, num_workers)
+    key = _stripe_sequence(key, num_workers)
+    value = _stripe_sequence(value, num_workers)
+    
     q = query.transpose(0, 2, 3, 1)
     k = key.transpose(0, 2, 3, 1)
     v = value.transpose(0, 2, 1, 3)
@@ -87,7 +118,9 @@ def _ring_forward(
     )
 
     attn_output = attn_output.transpose(0, 3, 1, 2)
-    return attn_output, (lse, q, k, v, prng_key)
+    # Unstripe output
+    attn_output = _unstripe_sequence(attn_output, num_workers)
+    return attn_output, (lse, q, k, v, prng_key, num_workers)
 
 
 def _ring_backward(
@@ -100,8 +133,11 @@ def _ring_backward(
     d_attn_output: Tensor,
 ):
     """Ring attention backward pass."""
-    lse, q, k, v, prng_key = res
+    lse, q, k, v, prng_key, num_workers_saved = res
 
+    # Stripe gradient
+    d_attn_output = _stripe_sequence(d_attn_output, num_workers)
+    
     o = d_attn_output.transpose(0, 2, 3, 1)
     dy = d_attn_output.transpose(0, 2, 3, 1)
 
@@ -122,6 +158,11 @@ def _ring_backward(
     d_query = d_query.transpose(0, 3, 1, 2)
     d_key = d_key.transpose(0, 3, 1, 2)
     d_value = d_value.transpose(0, 3, 1, 2)
+    
+    # Unstripe gradients
+    d_query = _unstripe_sequence(d_query, num_workers)
+    d_key = _unstripe_sequence(d_key, num_workers)
+    d_value = _unstripe_sequence(d_value, num_workers)
 
     return d_query, d_key, d_value, None
 
