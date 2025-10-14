@@ -94,10 +94,11 @@ def _ring_forward(
     dropout_rate: float,
 ):
     """Ring attention forward pass."""
-    # Stripe inputs across workers
-    query = _stripe_sequence(query, num_workers)
-    key = _stripe_sequence(key, num_workers)
-    value = _stripe_sequence(value, num_workers)
+    # Stripe inputs across workers only when causal mask is used
+    if causal:
+        query = _stripe_sequence(query, num_workers)
+        key = _stripe_sequence(key, num_workers)
+        value = _stripe_sequence(value, num_workers)
     
     q = query.transpose(0, 2, 3, 1)
     k = key.transpose(0, 2, 3, 1)
@@ -112,15 +113,17 @@ def _ring_forward(
         num_workers=num_workers,
         softmax_scale=softmax_scale,
         use_causal_mask=causal,
-        striped_input=True,
+        # Inputs are striped only when causal mask is used
+        striped_input=causal,
         mixed_precision=True,
         dropout_p=dropout_rate,
     )
 
     attn_output = attn_output.transpose(0, 3, 1, 2)
-    # Unstripe output
-    attn_output = _unstripe_sequence(attn_output, num_workers)
-    return attn_output, (lse, q, k, v, prng_key, num_workers)
+    # Unstripe output only when causal
+    if causal:
+        attn_output = _unstripe_sequence(attn_output, num_workers)
+    return attn_output, (lse, q, k, v, prng_key)
 
 
 def _ring_backward(
@@ -133,10 +136,11 @@ def _ring_backward(
     d_attn_output: Tensor,
 ):
     """Ring attention backward pass."""
-    lse, q, k, v, prng_key, num_workers_saved = res
+    lse, q, k, v, prng_key = res
 
-    # Stripe gradient
-    d_attn_output = _stripe_sequence(d_attn_output, num_workers)
+    # Stripe gradient only when causal
+    if causal:
+        d_attn_output = _stripe_sequence(d_attn_output, num_workers)
     
     o = d_attn_output.transpose(0, 2, 3, 1)
     dy = d_attn_output.transpose(0, 2, 3, 1)
@@ -149,7 +153,9 @@ def _ring_backward(
         replica_groups=replica_groups,
         num_workers=num_workers,
         use_causal_mask=causal,
-        striped_input=True,
+        # Inputs are striped only when causal mask is used
+        striped_input=causal,
+        # Mixed precision is required to be True in the current impl
         mixed_precision=True,
         dropout_p=dropout_rate,
         softmax_scale=softmax_scale,
@@ -159,10 +165,11 @@ def _ring_backward(
     d_key = d_key.transpose(0, 3, 1, 2)
     d_value = d_value.transpose(0, 3, 1, 2)
     
-    # Unstripe gradients
-    d_query = _unstripe_sequence(d_query, num_workers)
-    d_key = _unstripe_sequence(d_key, num_workers)
-    d_value = _unstripe_sequence(d_value, num_workers)
+    # Unstripe gradients only when causal
+    if causal:
+        d_query = _unstripe_sequence(d_query, num_workers)
+        d_key = _unstripe_sequence(d_key, num_workers)
+        d_value = _unstripe_sequence(d_value, num_workers)
 
     return d_query, d_key, d_value, None
 
