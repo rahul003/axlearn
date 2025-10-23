@@ -12,7 +12,7 @@ if [ -z "$SLURM_JOB_NODELIST" ]; then
 fi
 
 num_nodes=$(echo "$nodes" | wc -l)
-LNC=${LNC:=2}
+LNC=${LNC:=1}
 devices_per_node=$((128 / $LNC))
 MASTER_ADDR=$(echo "$nodes" | head -n 1)
 MASTER_PORT=41000
@@ -99,17 +99,7 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --enable-mixed-precision-accumulation
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} -O1"
 
 
-if [ "$NEURON_ALL_REDUCE_UPCASTER" = 1 ]; then
-	if [ "$AXLEARN_MODEL_NAME" = "envy-Mistral-16x10B" ]; then
-		# needed for 16x10b
-		tens_opts="--enable-ccop-compute-overlap --cc-pipeline-tiling-factor=2"
-	else
-		tens_opts=""
-	fi
-else
-	tens_opts=""
-fi
-export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --tensorizer-options='--enable-hoist-fsdp-collectives $tens_opts'"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --tensorizer-options='--enable-hoist-fsdp-collectives'"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --auto-cast=none"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --hbm-scratchpad-page-size=1024"
 

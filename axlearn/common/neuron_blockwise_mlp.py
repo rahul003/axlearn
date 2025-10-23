@@ -9,6 +9,7 @@ import jax_neuronx  # pylint: disable=unused-import
 import neuronxcc.nki.language as nl
 from jax import custom_vjp
 from jax._src.mesh import thread_resources
+# shard on I
 from neuronxcc.nki._private_kernels.blockwise_mm import (
         blockwise_mm_selective_cp as blockwise_mm_nki,
         check_blockwise_mm_kernel_compatibility,
@@ -113,12 +114,6 @@ def _blockwise_mm_fwd(
         hidden_states = jnp.concat([hidden_states, padding_h], axis=0)
         expert_affinities_masked = jnp.concat([expert_affinities_masked, padding_e], axis=0)
         expert_affinities_masked = jnp.reshape(expert_affinities_masked, (-1, 1))
-    print('expert_affinshape', expert_affinities_masked.shape)
-    print('token_postoid', token_position_to_id.shape)
-    print('block_size', block_size)
-    print('block_to_expert', block_to_expert.shape)
-    print('hs', hidden_states.shape)
-    print('gate_up_weight', gate_up_weight.shape)
     out, gate_up_activations_T, down_activations = _blockwise_mm_nki_call[VNC(2)](
         hidden_states,
         expert_affinities_masked,
@@ -145,7 +140,6 @@ def _blockwise_mm_bwd(
     (hidden_states, expert_affinities_masked, gate_up_proj_weight, 
      down_proj_weight, down_activations, gate_up_activations_T, 
      token_position_to_id, block_to_expert) = res
-    
     T,H = hidden_states.shape
     E, _, _, _ = gate_up_proj_weight.shape
 
@@ -168,7 +162,6 @@ def _blockwise_mm_bwd(
             skip_dma=SkipMode(False, False),
             ktype=0 if block_to_expert.shape[-1] == down_proj_weight.shape[0] else 1,
         )
-        
         sliced_tensor = hidden_states_grad[:-1,:]
         hidden_states_grad = sliced_tensor.reshape(1, 1, -1, H)
         
