@@ -1402,7 +1402,7 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
         router_z_loss = _router_z_loss(logits)
         return self.Output(
             dispatch_tensor=block_to_expert, #[O,g,N]
-            combine_tensor=(token_position_to_id, expert_affinities_masked), #[O,g,N*B], [O,g,S,e]
+            combine_tensor=(token_position_to_id, expert_affinities_masked, expert_index), #[O,g,N*B], [O,g,S,e]
             load_balance_loss=aux_loss,
             router_z_loss=router_z_loss,
         )
