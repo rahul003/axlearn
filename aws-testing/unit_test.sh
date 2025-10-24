@@ -106,7 +106,8 @@ elif [ "$1" = "integ" ]; then
         exit 1
     fi
 elif [ "$1" = "dev" ]; then
-    # pytest -rsA -v aws-testing/gating_test.py -k "TestDev150bGatingUnit and test_unit_fwd_blockwisev2_ep"
-    pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep64" # or TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq16"
+    # pytest -rsA -v aws-testing/gating_test.py -k "TestSwitchBaseGatingUnit and test_unit_fwd_blockwisev2_ep"
+    pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDev150bInteg and test_fwdbwd_blockwisev2"
+    # pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDevSwitchBaseInteg and test_fwd_blockwise_ep4_seq4_model4" # or TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq16"
     # pytest -rsA -v aws-testing/transformer_layer_integ_test.py -k "TestDevSwitchBaseInteg and test_fwdbwd_transformer" # or TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq16"
 fi

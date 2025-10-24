@@ -332,11 +332,3 @@ class GatingTestCase(TestCase):
             atol=cfg.test.atol, rtol=cfg.test.rtol)
         self._validate_blockwise_v2(orig_expert_affinities_masked, token_position_to_id, expert_index, block_to_expert, cfg)
     
-    
-    def helper_blockwise_gating_v2_vs_gather(self, cfg):
-        outputs, golden_outputs = self._run_tests(cfg)
-        token_position_to_id, expert_affinities_masked, expert_index = outputs.combine_tensor
-        block_to_expert = outputs.dispatch_tensor
-        combine_tensor = golden_outputs.combine_tensor
-        dispatch_tensor = golden_outputs.dispatch_tensor
-        self._validate_blockwise_v2(expert_affinities_masked, token_position_to_id, expert_index, block_to_expert, cfg)

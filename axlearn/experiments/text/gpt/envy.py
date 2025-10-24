@@ -129,6 +129,9 @@ def get_moe_dim_to_mesh_axis_map(ep_degree_local, tp_degree, cp_degree):
             EP_AXIS_NAMES = "expert"
             TP_AXIS_NAMES = None
             FSDP_AXIS_NAMES = "fsdp"
+        elif ep_degree_local * tp_degree * cp_degree == 8:
+            EP_AXIS_NAMES = ("expert", "model", "seq")
+            TP_AXIS_NAMES = None
         elif ep_degree_local * tp_degree * cp_degree == 64:
             # doesn't allow tp>1
             EP_AXIS_NAMES = ("expert", "model", "seq")
@@ -174,7 +177,7 @@ def get_moe_dim_to_mesh_axis_map(ep_degree_local, tp_degree, cp_degree):
         "oexx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
         "oxxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
         "oxxe": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, EP_AXIS_NAMES),
-        "oxe": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),"oxe": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
+        "oxe": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
         "oex": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None),
         "oxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None),
         # "hoex": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None),
