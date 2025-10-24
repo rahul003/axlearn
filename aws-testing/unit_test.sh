@@ -83,8 +83,14 @@ if [ "$1" = "unit" ]; then
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/unit.xml aws-testing/moe_layer_unit_test.py
 elif [ "$1" = "integ" ]; then
     # breaking them up as we seem to leak memory across tests
-    if [ "$2" = "12b" ] || [ "$2" = "50b" ] || [ "$2" = "switch-xxl" ] || [ "$2" = "llama4-maverick" ] || [ "$2" = "qwen3-235b" ]; then
+    if [ "$2" = "50b" ]; then
         export TEST_SUITE_PARTS=1
+    elif [ "$2" = "12b" ]; then
+        export TEST_SUITE_PARTS=6
+    elif [ "$2" = "gpt-oss" ]; then
+        export TEST_SUITE_PARTS=3
+    elif [ "$2" = "150b" ]; then
+        export TEST_SUITE_PARTS=14
     elif [ "$2" = "deepseek-v3" ] || [ "$2" = "qwen3-30b" ] || [ "$2" = "switch-base" ]; then
         export TEST_SUITE_PARTS=15
     else
@@ -94,10 +100,12 @@ elif [ "$1" = "integ" ]; then
     status=0
     set +e
     for ((part=0;part<TEST_SUITE_PARTS;part++)); do
-        # --collect-only -q
-        # use above if you only want to see the tests that will be run
         set -x
-        TEST_SUITE_PART=$part pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ_$part.xml aws-testing/moe_layer_integ_test.py -k "TestLayerOnTrn"
+        if [ "$3" = "collect-only" ]; then
+            TEST_SUITE_PART=$part pytest --collect-only -q aws-testing/moe_layer_integ_test.py -k "TestLayerOnTrn"
+        else
+            TEST_SUITE_PART=$part pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ_$part.xml aws-testing/moe_layer_integ_test.py -k "TestLayerOnTrn"
+        fi
         status_part=$?
         status=$((status + status_part))
         set +x
