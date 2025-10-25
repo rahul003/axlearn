@@ -12,7 +12,7 @@ if [ -z "$SLURM_JOB_NODELIST" ]; then
 fi
 
 num_nodes=$(echo "$nodes" | wc -l)
-LNC=${LNC:=1}
+LNC=${LNC:=2}
 devices_per_node=$((128 / $LNC))
 MASTER_ADDR=$(echo "$nodes" | head -n 1)
 MASTER_PORT=41000

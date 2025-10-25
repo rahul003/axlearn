@@ -220,7 +220,7 @@ class GatingTestCase(TestCase):
                 for expert_id, num_blocks_t in num_blocks_for_expert_dict.items():
                     assert num_blocks_t == num_blocks_per_expert, f"Expert {expert_id} has {num_blocks_t} blocks, expected {num_blocks_per_expert}"
 
-    def validate_token_position_to_id(self, O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id, ep_rank):
+    def validate_token_position_to_id(self, O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id):
         # Validating token_position_to_id (O, G, N*B)
         token_position_to_id = token_position_to_id.reshape(O, G, N, block_size)
         in_range = np.where(((token_position_to_id >=0) & (token_position_to_id<=S)), True, False)
@@ -249,8 +249,7 @@ class GatingTestCase(TestCase):
         assert np.all(np.count_nonzero(expert_affinities_masked, axis=3) <= cfg.test.cfg.top_k)
 
     def _validate_blockwise_v2(self, expert_affinities_masked, token_position_to_id, expert_index, block_to_expert, cfg):
-        _, ep_size, S, E = expert_affinities_masked.shape
-        num_experts = ep_size * E
+        _, _, S, num_experts = expert_affinities_masked.shape
         expert_capacity = int(S * cfg.test.cfg.train_capacity_factor / num_experts)
         if isinstance(cfg.test.cfg, TopKGatingGatherBlockwiseV2.Config):
             block_size = expert_capacity
@@ -258,23 +257,14 @@ class GatingTestCase(TestCase):
             block_size = cfg.test.cfg.block_size
         else:
             block_size = expert_capacity
-        print('NUM_EXPERTS:', num_experts, 'EXPERT_CAPACITY:', expert_capacity, 'BLOCK_SIZE:', block_size)
         num_blocks = math.ceil(expert_capacity / block_size) * num_experts
-        print('NUM_BLOCKS:', num_blocks)
-        num_blocks_per_expert = num_blocks // num_experts
-        num_local_blocks = num_blocks_per_expert * E
-        print('b2e', block_to_expert.shape)
+        # num_local_blocks = num_blocks_per_expert * E
         O, G, N = block_to_expert.shape
         assert N == num_blocks
         with jax.default_device(jax.devices("cpu")[0]):
-            expert_affinities_masked = jnp.transpose(expert_affinities_masked, (0, 2, 1, 3))
-            expert_affinities_masked = jnp.reshape(expert_affinities_masked, (O, G, -1, E*ep_size))
-            expert_affinities_masked_chunks = jnp.split(expert_affinities_masked, ep_size, axis=-1)
-            token_position_to_id_chunks = jnp.split(token_position_to_id, ep_size, axis=-1)                
-            for ep_rank in range(ep_size):
-                self.validate_block_to_expert(block_to_expert[:,:,ep_rank:ep_rank+1], cfg, num_local_blocks, num_blocks_per_expert, ep_size=ep_size)
-                self.validate_token_position_to_id(O, G, num_local_blocks, block_size, S, block_to_expert, expert_affinities_masked_chunks[ep_rank], token_position_to_id_chunks[ep_rank], ep_rank)
-                self.validate_expert_affinties(expert_affinities_masked_chunks[ep_rank], cfg)
+            self.validate_block_to_expert(block_to_expert, cfg, num_blocks, 1)
+            self.validate_token_position_to_id(O, G, num_blocks, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
+            self.validate_expert_affinties(expert_affinities_masked, cfg)
 
     def _run_tests(self, cfg):
         cfg.instantiate(unittest.TestCase.id(self))

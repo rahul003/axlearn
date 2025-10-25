@@ -9,7 +9,7 @@ import jax_neuronx  # pylint: disable=unused-import
 import neuronxcc.nki.language as nl
 from jax import custom_vjp
 from jax._src.mesh import thread_resources
-# shard on I
+
 from neuronxcc.nki._private_kernels.blockwise_mm import (
         blockwise_mm_selective_cp as blockwise_mm_nki,
         check_blockwise_mm_kernel_compatibility,
