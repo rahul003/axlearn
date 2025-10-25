@@ -338,9 +338,6 @@ class ExperimentConfig():
     def init_layer(self, module_config, state_to_copy=None):
         devices = jax.devices(module_config.device)[:module_config.num_devices]
         module_config.mesh = Mesh(mesh_utils.create_device_mesh(module_config.mesh_dims, devices=devices), MESH_AXIS_NAMES) 
-        print(module_config.mesh)
-        print(module_config.mesh.devices)
-        
         with module_config.mesh:
             with jax.default_device(devices[0]):
                 module_config.layer = module_config.cfg.instantiate(parent=None) 
@@ -361,7 +358,7 @@ class ExperimentConfig():
                     init_fn = jax.jit(_init_state, in_shardings=(None,), out_shardings=param_partition_specs)
                     module_config.state = init_fn(jax.random.PRNGKey(123))
                 # this was causing segfault, doesn't seem like its needed?
-                # module_config.state = cast_floats(module_config.state, to_dtype=module_config.dtype)
+                module_config.state = cast_floats(module_config.state, to_dtype=module_config.dtype)
                 # TODO: Currently bf16 seeing expert index mismatch with f32. Setting routing to f32.
                 if 'gate_weight' in module_config.state:
                     module_config.state['gate_weight'] = module_config.state['gate_weight'].astype(jnp.float32)
@@ -964,11 +961,11 @@ def create_moe_test_config(test, golden, test_device, golden_device, input_dim, 
     # enabling nonorm gives us better check of the kernel logits, what's missing here is just add of residual
 
     test_cfg.structure = "nonorm"
-    test_cfg.gating = get_gating_config(test, n_experts, top_k, capacity_factor, expert_capacity=None, block_size=block_size)
+    test_cfg.gating = get_gating_config(test, n_experts, top_k, capacity_factor, expert_capacity=None, block_size=block_size, mesh_spec=mesh_spec)
 
     if golden:
         golden_cfg = test_cfg.clone(name="golden" if name is None else name)
-        golden_cfg.gating = get_gating_config(golden, n_experts, top_k, capacity_factor, expert_capacity=None)
+        golden_cfg.gating = get_gating_config(golden, n_experts, top_k, capacity_factor, expert_capacity=None, mesh_spec=mesh_spec)
     else:
         golden_cfg = None
     return test_cfg, golden_cfg

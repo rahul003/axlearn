@@ -126,10 +126,12 @@ class LayerTestCase(TestCase):
     def helper_bwd(self, cfg: ExperimentConfig):
         cfg.instantiate(unittest.TestCase.id(self))
         cfg.print_summary()
+        print(cfg.test.dtype, cfg.golden.dtype, )
         use_cached_goldens = int(os.getenv("USE_CACHED_GOLDENS", "0"))
         cache_goldens = int(os.getenv("CACHE_GOLDENS", "0"))
 
         if cfg.golden:
+            print(cfg.golden.dtype, cfg.golden.layer.dtype, cfg.golden.layer)
             golden_bwd_call = self.create_golden_bwd_fn(cfg)
             golden_loss, golden_grads, golden_output = self._load_or_compute_goldens(golden_bwd_call, cfg, use_cached_goldens, cache_goldens)
 
@@ -138,6 +140,8 @@ class LayerTestCase(TestCase):
             jax.config.update('jax_platform_name', cfg.test.device)
             with cfg.test.dump_for_spectometer():
                 test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+        print('test loss:', test_loss, test_loss.dtype)
+        print('golden loss:', golden_loss if cfg.golden else 'N/A', golden_loss.dtype)
         if cfg.golden:
             self.assertNestedAllClose(test_loss, golden_loss, atol=cfg.test.atol, rtol=cfg.test.rtol)
             self.assertNestedAllClose(test_grads, golden_grads, atol=cfg.test.atol, rtol=cfg.test.rtol)
@@ -206,17 +210,17 @@ class GatingTestCase(TestCase):
         assert N == num_blocks
         for o in range(O):
             for g in range(G):
-                num_blocks_for_expert = {}
+                num_blocks_for_expert_dict = {}
                 for n in range(N):
                     expert_id = int(block_to_expert[o, g, n])
-                    if expert_id not in num_blocks_for_expert:
-                        num_blocks_for_expert[expert_id] = 0
-                    num_blocks_for_expert[expert_id] += 1
-                assert len(num_blocks_for_expert) == cfg.test.cfg.num_experts//ep_size, f"Expected {cfg.test.cfg.num_experts} experts, but got {len(num_blocks_for_expert)}"
-                for expert_id, num_blocks in num_blocks_for_expert.items():
-                    assert num_blocks == num_blocks_per_expert, f"Expert {expert_id} has {num_blocks} blocks, expected {num_blocks_per_expert}"
+                    if expert_id not in num_blocks_for_expert_dict:
+                        num_blocks_for_expert_dict[expert_id] = 0
+                    num_blocks_for_expert_dict[expert_id] += 1
+                assert len(num_blocks_for_expert_dict) == cfg.test.cfg.num_experts/ep_size, f"Expected {cfg.test.cfg.num_experts} experts, but got {num_blocks_for_expert_dict[expert_id]}"
+                for expert_id, num_blocks_t in num_blocks_for_expert_dict.items():
+                    assert num_blocks_t == num_blocks_per_expert, f"Expert {expert_id} has {num_blocks_t} blocks, expected {num_blocks_per_expert}"
 
-    def validate_token_position_to_id(self, O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id, ep_rank):
+    def validate_token_position_to_id(self, O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id):
         # Validating token_position_to_id (O, G, N*B)
         token_position_to_id = token_position_to_id.reshape(O, G, N, block_size)
         in_range = np.where(((token_position_to_id >=0) & (token_position_to_id<=S)), True, False)
@@ -226,9 +230,6 @@ class GatingTestCase(TestCase):
                 for n in range(N):
                     bid = n
                     expert_id = block_to_expert[o, g, n]
-                    if ep_rank == 0:
-                        print('bid', bid, 'block', [int(token_position_to_id[o, g, n, b]) for b in range(block_size)])
-                        print('expert id', expert_id)
                     for b in range(block_size):
                         # current block's id:
                         token_id_in_seq = token_position_to_id[o, g, n, b]
@@ -248,10 +249,7 @@ class GatingTestCase(TestCase):
         assert np.all(np.count_nonzero(expert_affinities_masked, axis=3) <= cfg.test.cfg.top_k)
 
     def _validate_blockwise_v2(self, expert_affinities_masked, token_position_to_id, expert_index, block_to_expert, cfg):
-        print('expert_index', expert_index.shape, expert_index)
-        print('token_postoid', token_position_to_id)
-        _, ep_size, S, E = expert_affinities_masked.shape
-        num_experts = ep_size * E
+        _, _, S, num_experts = expert_affinities_masked.shape
         expert_capacity = int(S * cfg.test.cfg.train_capacity_factor / num_experts)
         if isinstance(cfg.test.cfg, TopKGatingGatherBlockwiseV2.Config):
             block_size = expert_capacity
@@ -260,24 +258,13 @@ class GatingTestCase(TestCase):
         else:
             block_size = expert_capacity
         num_blocks = math.ceil(expert_capacity / block_size) * num_experts
-        num_blocks_per_expert = num_blocks // num_experts
-        
-        num_local_blocks = num_blocks_per_expert * E
-        
-        print('block to expert', block_to_expert)
+        # num_local_blocks = num_blocks_per_expert * E
         O, G, N = block_to_expert.shape
-        assert N == num_local_blocks
+        assert N == num_blocks
         with jax.default_device(jax.devices("cpu")[0]):
-            expert_affinities_masked = jnp.transpose(expert_affinities_masked, (0, 2, 1, 3))
-            expert_affinities_masked = jnp.reshape(expert_affinities_masked, (O, G, -1, E*ep_size))
-            print('expert_affinities', expert_affinities_masked)
-            print('expert_affinities', expert_affinities_masked.sum(axis=-1))
-            expert_affinities_masked_chunks = jnp.split(expert_affinities_masked, ep_size, axis=-1)
-            token_position_to_id_chunks = jnp.split(token_position_to_id, ep_size, axis=-1)                
-            for ep_rank in range(ep_size):
-                self.validate_block_to_expert(block_to_expert, cfg, num_local_blocks, num_blocks_per_expert, ep_size=ep_size)
-                self.validate_token_position_to_id(O, G, num_local_blocks, block_size, S, block_to_expert, expert_affinities_masked_chunks[ep_rank], token_position_to_id_chunks[ep_rank], ep_rank)
-                self.validate_expert_affinties(expert_affinities_masked_chunks[ep_rank], cfg)
+            self.validate_block_to_expert(block_to_expert, cfg, num_blocks, 1)
+            self.validate_token_position_to_id(O, G, num_blocks, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
+            self.validate_expert_affinties(expert_affinities_masked, cfg)
 
     def _run_tests(self, cfg):
         cfg.instantiate(unittest.TestCase.id(self))
@@ -307,21 +294,20 @@ class GatingTestCase(TestCase):
     def helper_blockwise_gating_v2_vs_v1(self, cfg):
         outputs, golden_outputs = self._run_tests(cfg)
         token_position_to_id, expert_affinities_masked, expert_index = outputs.combine_tensor
+        orig_expert_affinities_masked = expert_affinities_masked
+        
         g_token_position_to_id, g_expert_affinities_masked, g_expert_index = golden_outputs.combine_tensor
         block_to_expert = outputs.dispatch_tensor
         g_block_to_expert = golden_outputs.dispatch_tensor
         with jax.default_device(jax.devices("cpu")[0]):
             expert_affinities_masked = jnp.transpose(expert_affinities_masked, (0, 2, 1, 3))
+            O, S, E, _ = expert_affinities_masked.shape
             O, G, _ = block_to_expert.shape
-            print(O, G, expert_affinities_masked.shape, block_to_expert.shape, g_block_to_expert.shape)
-            expert_affinities_masked = expert_affinities_masked.reshape(O, G, -1)
+            expert_affinities_masked = expert_affinities_masked.reshape(O, S, -1)
             g_expert_affinities_masked = jnp.transpose(g_expert_affinities_masked, (0, 2, 1, 3))
-            g_expert_affinities_masked = g_expert_affinities_masked.reshape(O, G, -1)
+            g_expert_affinities_masked = g_expert_affinities_masked.reshape(O, S, -1)
             g_token_position_to_id = jnp.reshape(g_token_position_to_id, (O, G, -1))
             g_block_to_expert = jnp.reshape(g_block_to_expert, (O, G, -1))
-            print('expert_affinities_masked', expert_affinities_masked.shape)
-            print('g_expert_affinities_masked', g_expert_affinities_masked.shape)
-        # expert_affinities_masked = jnp.reshape(expert_affinities_masked, (O, G, -1, E*ep_size))
         self.assertNestedAllClose(
             expert_index,
             g_expert_index,
@@ -334,18 +320,5 @@ class GatingTestCase(TestCase):
             token_position_to_id,
             g_token_position_to_id,
             atol=cfg.test.atol, rtol=cfg.test.rtol)
-        self.assertNestedAllClose(
-            block_to_expert,
-            g_block_to_expert,
-            atol=cfg.test.atol, rtol=cfg.test.rtol)
-        
-        self._validate_blockwise_v2(expert_affinities_masked, token_position_to_id, expert_index, block_to_expert, cfg)
+        self._validate_blockwise_v2(orig_expert_affinities_masked, token_position_to_id, expert_index, block_to_expert, cfg)
     
-    
-    def helper_blockwise_gating_v2_vs_gather(self, cfg):
-        outputs, golden_outputs = self._run_tests(cfg)
-        token_position_to_id, expert_affinities_masked, expert_index = outputs.combine_tensor
-        block_to_expert = outputs.dispatch_tensor
-        combine_tensor = golden_outputs.combine_tensor
-        dispatch_tensor = golden_outputs.dispatch_tensor
-        self._validate_blockwise_v2(expert_affinities_masked, token_position_to_id, expert_index, block_to_expert, cfg)

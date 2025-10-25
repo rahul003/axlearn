@@ -408,7 +408,7 @@ class ConfigBase:
             value at the path or self if path is empty.
         """
         current = self
-
+        
         for key in path:
             # TODO(markblee): Maybe use cfg.visit instead of getattr.
             if isinstance(current, list):
