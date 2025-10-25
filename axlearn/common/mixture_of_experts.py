@@ -135,7 +135,6 @@ def blockwise_mlp(
         block_to_expert = block_to_expert.reshape((O*G, 1, 1) + block_to_expert.shape[2:])
     num_local_blocks = block_to_expert.shape[-1]
     block_size = token_position_to_id.shape[-1] // num_local_blocks
-    print('num_local_blocks', num_local_blocks, block_size)
     if can_use_blockwise_matmul_nki(
         hidden_size=gate_up_proj_weight.shape[1],
         intermediate_size_tp=gate_up_proj_weight.shape[-1],

@@ -357,7 +357,6 @@ class ExperimentConfig():
                         return params
                     init_fn = jax.jit(_init_state, in_shardings=(None,), out_shardings=param_partition_specs)
                     module_config.state = init_fn(jax.random.PRNGKey(123))
-                # this was causing segfault, doesn't seem like its needed?
                 module_config.state = cast_floats(module_config.state, to_dtype=module_config.dtype)
                 # TODO: Currently bf16 seeing expert index mismatch with f32. Setting routing to f32.
                 if 'gate_weight' in module_config.state:

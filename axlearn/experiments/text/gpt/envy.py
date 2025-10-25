@@ -97,7 +97,7 @@ VOCAB_SIZE = 32 * 1024
 
 MAX_SEQUENCE_LENGTH = {
     "test": 8192,
-    "Switch-Base": 2048,
+    "Switch-Base": 8192,
     "Switch-Large": 8192,
     "Switch-XXL": 8192,
     "Mistral-toy": 256,
