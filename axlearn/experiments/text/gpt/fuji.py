@@ -321,7 +321,11 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=int(os.getenv("AXLEARN_TP_DEGREE", 4)))
+                                mesh_shape=mesh_shape_from_axes(
+                                    fsdp=-1,
+                                    model=int(os.getenv("AXLEARN_TP_DEGREE", 4)),
+                                    seq=int(os.getenv("AXLEARN_CP_DEGREE", 1)),
+                                )
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
@@ -355,7 +359,11 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=int(os.getenv("AXLEARN_TP_DEGREE", 4)))
+                                mesh_shape=mesh_shape_from_axes(
+                                    fsdp=-1,
+                                    model=int(os.getenv("AXLEARN_TP_DEGREE", 4)),
+                                    seq=int(os.getenv("AXLEARN_CP_DEGREE", 1)),
+                                )
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
@@ -539,7 +547,11 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=int(os.getenv("AXLEARN_TP_DEGREE", 4)))
+                                mesh_shape=mesh_shape_from_axes(
+                                    fsdp=-1,
+                                    model=int(os.getenv("AXLEARN_TP_DEGREE", 4)),
+                                    seq=int(os.getenv("AXLEARN_CP_DEGREE", 1)),
+                                )
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
@@ -633,7 +645,11 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=int(os.getenv("AXLEARN_TP_DEGREE", 4)))
+                                mesh_shape=mesh_shape_from_axes(
+                                    fsdp=-1,
+                                    model=int(os.getenv("AXLEARN_TP_DEGREE", 4)),
+                                    seq=int(os.getenv("AXLEARN_CP_DEGREE", 1)),
+                                )
                             ),
                             *trn2_config.module_modifications,
                             *trn2_config.partition_spec_modifications,
@@ -798,7 +814,11 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=mesh_shape_from_axes(
+                                    fsdp=-1,
+                                    model=4,
+                                    seq=int(os.getenv("AXLEARN_CP_DEGREE", 1)),
+                                )
                             ),
                             RematSpecModifier.default_config().set(
                                 remat_policies={

@@ -180,8 +180,9 @@ def mesh_shape_from_axes(
             E.g. <https://arxiv.org/abs/2006.16668>.
         fsdp: Fully-sharded-data-parallelism a.k.a. async-with-compute model-parallelism.
             E.g. <https://arxiv.org/abs/1910.02054>.
-        seq: Used for sequence-parallelism. Typically this means sharding the activation sequence
-            dimension, and possibly a subset of the weights.
+        seq: Used for sequence-parallelism and context-parallelism (ring attention).
+            Typically this means sharding the activation sequence dimension.
+            E.g. <https://arxiv.org/abs/2310.01889>.
         model: Tensor parallelism a.k.a. sync-with-compute model-parallelism.
             E.g. <https://arxiv.org/abs/1909.08053>.
 

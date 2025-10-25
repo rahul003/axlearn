@@ -101,8 +101,9 @@ def flash_attention_implementation(
         # Register neuron kernel at runtime due to extra dependencies.
         # pylint: disable-next=import-outside-toplevel
         from axlearn.common.flash_attention.neuron_attention import NeuronFlashAttention
+        from axlearn.common.flash_attention.neuron_ring_attention import NeuronRingAttention
 
-        BACKENDS["neuron"] = [NeuronFlashAttention]
+        BACKENDS["neuron"] = [NeuronRingAttention, NeuronFlashAttention]
 
     attn_configs = BACKENDS.get(backend, [])
     if page_tables is not None and is_decoding:

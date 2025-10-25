@@ -1,0 +1,156 @@
+# Copyright © 2025 Apple Inc.
+"""Tests for Ring attention on Neuron. Tested on trn2."""
+
+from typing import Literal
+
+import chex
+import jax
+import jax.numpy as jnp
+import pytest
+
+from axlearn.common.attention_bias import causal_mask
+from axlearn.common.flash_attention.common import ReferenceMHA
+from axlearn.common.flash_attention.test_utils import generate_attention_data
+
+if jax.default_backend() != "neuron":
+    pytestmark = pytest.skip(
+        reason="Incompatible hardware, AWS Neuron only test.", allow_module_level=True
+    )
+
+
+@pytest.mark.parametrize(
+    "batch_size,seq_len,num_heads,per_head_dim",
+    [
+        (1, 2048, 1, 64),
+        (2, 2048, 2, 64),
+        (1, 2048, 1, 128),
+        (2, 2048, 2, 128),
+        (1, 2048, 8, 128),
+        (2, 2048, 8, 128),
+        # Context parallelism specific cases
+        (1, 4096, 8, 128),  # Longer sequence
+        (2, 4096, 16, 128),  # More heads
+        (4, 2048, 32, 64),  # Larger batch
+    ],
+)
+@pytest.mark.parametrize("causal", [True])
+@pytest.mark.parametrize("input_dtype", [jnp.bfloat16, jnp.float32])
+def test_fwd_against_ref(
+    batch_size: int,
+    seq_len: int,
+    num_heads: int,
+    per_head_dim: int,
+    causal: bool,
+    input_dtype: jnp.dtype,
+):
+    # On demand import only if test is needed.
+    # pylint: disable=import-outside-toplevel
+    from axlearn.common.flash_attention.neuron_ring_attention import NeuronRingAttention
+
+    q, k, v, bias = generate_attention_data(
+        batch_size,
+        seq_len,
+        seq_len,
+        num_heads,
+        per_head_dim,
+        mask_fn=causal_mask if causal else None,
+        attention_bias_type=None,
+        dtype=input_dtype,
+    )
+
+    cfg = dict(
+        softmax_scale=q.shape[-1] ** -0.5,
+    )
+    # Compare outputs.
+    test_fn = NeuronRingAttention.default_config().set(**cfg).instantiate()
+    ref_fn = ReferenceMHA.default_config().set(**cfg).instantiate()
+    input_batch = dict(query=q, key=k, value=v, bias=bias)
+    o = test_fn(input_batch)
+    o_ref = ref_fn(input_batch)
+    if input_dtype == jnp.float16:
+        chex.assert_trees_all_close(o, o_ref, atol=0.07)
+    elif input_dtype == jnp.float32:
+        chex.assert_trees_all_close(o, o_ref, atol=0.03)
+
+
+@pytest.mark.parametrize(
+    "batch_size,num_heads,seq_len,per_head_dim",
+    [
+        (1, 1, 2048, 64),
+        (2, 2, 2048, 64),
+        (1, 1, 2048, 128),
+        (2, 2, 2048, 128),
+        (1, 8, 2048, 128),
+        (2, 8, 2048, 128),
+        # Context parallelism specific cases
+        (1, 16, 4096, 128),  # Longer sequence with more heads
+        (4, 32, 2048, 64),  # Larger batch with many heads
+        (2, 8, 8192, 128),  # Very long sequence
+    ],
+)
+@pytest.mark.parametrize("causal", [True])
+@pytest.mark.parametrize("input_dtype", [jnp.bfloat16, jnp.float32])
+def test_bwd_against_ref(
+    batch_size: int,
+    num_heads: int,
+    seq_len: int,
+    per_head_dim: int,
+    causal: bool,
+    input_dtype: jnp.dtype,
+):
+    # On demand import only if test is needed.
+    # pylint: disable=import-outside-toplevel
+    from axlearn.common.flash_attention.neuron_ring_attention import NeuronRingAttention
+
+    q, k, v, bias = generate_attention_data(
+        batch_size,
+        seq_len,
+        seq_len,
+        num_heads,
+        per_head_dim,
+        mask_fn=causal_mask if causal else None,
+        attention_bias_type=None,
+        dtype=input_dtype,
+    )
+
+    cfg = dict(
+        softmax_scale=q.shape[-1] ** -0.5,
+    )
+    # Compare outputs.
+    test_fn = NeuronRingAttention.default_config().set(**cfg).instantiate()
+    ref_fn = ReferenceMHA.default_config().set(**cfg).instantiate()
+
+    jax_ref_grads = jax.grad(
+        lambda q, k, v, b: ref_fn(dict(query=q, key=k, value=v, bias=b)).mean(), argnums=(0, 1, 2)
+    )(q, k, v, bias)
+    jax_grads = jax.grad(
+        lambda q, k, v, b: test_fn(dict(query=q, key=k, value=v, bias=b)).mean(), argnums=(0, 1, 2)
+    )(q, k, v, bias)
+    chex.assert_trees_all_close(jax_grads, jax_ref_grads, atol=0.07)
+
+
+@pytest.mark.parametrize("num_workers", [2, 4])
+@pytest.mark.parametrize("seq_len", [2048, 4096])
+def test_striping(
+    num_workers: int,
+    seq_len: int,
+):
+    """Test sequence striping and unstriping."""
+    # pylint: disable=import-outside-toplevel
+    from axlearn.common.flash_attention.neuron_ring_attention import (
+        _stripe_sequence,
+        _unstripe_sequence,
+    )
+
+    batch_size, num_heads, per_head_dim = 2, 8, 128
+    x = jax.random.normal(jax.random.key(0), (batch_size, seq_len, num_heads, per_head_dim))
+    
+    # Stripe and unstripe should be identity
+    x_striped = _stripe_sequence(x, num_workers)
+    x_unstriped = _unstripe_sequence(x_striped, num_workers)
+    
+    chex.assert_trees_all_close(x, x_unstriped)
+    
+    # Check striped shape
+    expected_shape = (batch_size, num_workers, seq_len // num_workers, num_heads, per_head_dim)
+    assert x_striped.shape == expected_shape
