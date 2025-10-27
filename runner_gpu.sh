@@ -2,7 +2,7 @@
 
 set -e
 
-export CUDA_VISIBLE_DEVICES=0
+# export CUDA_VISIBLE_DEVICES=0,1
 
 # HOW TO RUN
 # 1. Activate the (base) conda environment
@@ -39,7 +39,7 @@ mkdir -p "$NEURON_DUMP_PATH"
 mkdir -p "$HLO_DUMP_PATH"
 mkdir -p "$AXLEARN_PATH"
 
-export DATA_SEED=42
+export DATA_SEED=50
 export MODEL_SEED=42
 
 #export JAX_COMPILATION_CACHE_DIR="cache/"
@@ -135,9 +135,8 @@ printenv  #Complete final env just before launch
 
 source env_source.sh
 
-# mkdir -p ${AXLEARN_PATH}/checkpoints
-# cp -r /shared/ishaniak/axlearn/initialization_checks/fp32_fuji_1b/checkpoints/step_00000000 ${AXLEARN_PATH}/checkpoints/
-# cp -r /shared/ishaniak/axlearn/initialization_checks/bf16_fuji_1b/checkpoints/step_00000000 ${AXLEARN_PATH}/checkpoints/
+mkdir -p ${AXLEARN_PATH}/checkpoints
+cp -r /shared/ishaniak/axlearn/initialization_checks/fuji_4layer/checkpoints/step_00000000 ${AXLEARN_PATH}/checkpoints/
 
 python -u -m axlearn.common.launch_trainer_main \
     --module=text.gpt.c4_trainer --config=$MODEL_ARCH \
@@ -147,4 +146,4 @@ python -u -m axlearn.common.launch_trainer_main \
     --process_id=$NEURON_PJRT_PROCESS_INDEX \
     --mesh_selector=$MESH_SELECTOR \
     --trainer_prng_seed=$MODEL_SEED \
-    --max_step=10
+    --max_step=2

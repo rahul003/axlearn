@@ -10,7 +10,7 @@ from axlearn.common.config import REQUIRED, InstantiableConfig, Required, config
 from axlearn.common.layers import Dropout, Embedding
 from axlearn.common.module import Module, Tensor, child_context
 from axlearn.common.utils import Nested, validate_contains_paths
-
+from absl import logging
 
 class TransformerTextEmbeddings(BaseLayer):
     """Textual embeddings from token id, position and token type embeddings."""
@@ -80,6 +80,7 @@ class TransformerTextEmbeddings(BaseLayer):
         context = current_context()
         if context:
             context.add_summary(f"{self.path()}/embeddings", x)
+        logging.info(f"Embedding layer shape: {x.shape}")
         return x
 
     def attend(self, x: Tensor) -> Tensor:

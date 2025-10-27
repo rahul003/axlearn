@@ -10,27 +10,34 @@ export MODEL_ARCH="fuji-1B-v2-flash"
 # export N_LAYERS=16
 # export TRAIN_GBS=16
 export N_LAYERS=4
-export TRAIN_GBS=1
+export TRAIN_GBS=16
 export EVAL_GBS=1
 
-# export FSDP=16
-# export MODEL=4
-# export PIPELINE=1
-# export DATA=-1
-# export EXPERT=1
-# export SEQ=1
-
-export FSDP=1
-export MODEL=8
+export FSDP=16
+export MODEL=4
 export PIPELINE=1
 export DATA=-1
 export EXPERT=1
 export SEQ=1
 
 # export FSDP=1
+# export MODEL=8
+# export PIPELINE=1
+# export DATA=-1
+# export EXPERT=1
+# export SEQ=1
+
+# export FSDP=1
 # export MODEL=1
 # export PIPELINE=1
 # export DATA=1
+# export EXPERT=1
+# export SEQ=1
+
+# export FSDP=1
+# export MODEL=2
+# export PIPELINE=1
+# export DATA=-1
 # export EXPERT=1
 # export SEQ=1
 
@@ -46,4 +53,4 @@ export COMP_STOP_STEP=1000
 export ATOL=0.00000001
 export RTOL=0.2
 export CONFIDENCE_INTERVAL=0.90
-export PRECISION='bf16'
+export PRECISION='fp32'

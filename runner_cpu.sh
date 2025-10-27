@@ -38,7 +38,7 @@ mkdir -p "$NEURON_DUMP_PATH"
 mkdir -p "$HLO_DUMP_PATH"
 mkdir -p "$AXLEARN_PATH"
 
-export DATA_SEED=42
+export DATA_SEED=50
 export MODEL_SEED=42
 
 #export JAX_COMPILATION_CACHE_DIR="cache/"
@@ -133,13 +133,12 @@ echo "RUN CONFIG : MODEL=${MODEL_ARCH} L=${N_LAYERS} GBS=${N_GBS} ACC=${N_ACCUMU
 printenv  #Complete final env just before launch
 
 export JAX_PLATFORMS=cpu
-export XLA_FLAGS="${XLA_FLAGS} --xla_force_host_platform_device_count=1"
+export XLA_FLAGS="${XLA_FLAGS} --xla_force_host_platform_device_count=8"
 
 source env_source.sh
 
-# mkdir -p ${AXLEARN_PATH}/checkpoints
-# cp -r /shared/ishaniak/axlearn/initialization_checks/fp32_fuji_1b/checkpoints/step_00000000 ${AXLEARN_PATH}/checkpoints/
-# cp -r /shared/ishaniak/axlearn/initialization_checks/bf16_fuji_1b/checkpoints/step_00000000 ${AXLEARN_PATH}/checkpoints/
+mkdir -p ${AXLEARN_PATH}/checkpoints
+cp -r /shared/ishaniak/axlearn/initialization_checks/fuji_4layer/checkpoints/step_00000000 ${AXLEARN_PATH}/checkpoints/
 
 python -u -m axlearn.common.launch_trainer_main \
     --module=text.gpt.c4_trainer --config=$MODEL_ARCH \
@@ -149,4 +148,4 @@ python -u -m axlearn.common.launch_trainer_main \
     --process_id=$NEURON_PJRT_PROCESS_INDEX \
     --mesh_selector=$MESH_SELECTOR \
     --trainer_prng_seed=$MODEL_SEED \
-    --max_step=10
+    --max_step=1000
