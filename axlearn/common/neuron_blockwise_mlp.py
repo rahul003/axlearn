@@ -99,6 +99,7 @@ def _blockwise_mm_fwd(
     block_to_expert: Tensor,
     block_size: int, 
 ):
+    orig_expert_affin_shape = expert_affinities_masked.shape
     # Remove O, G dimensions
     with jax.named_scope("take_out_OG"):
         hidden_states = jnp.squeeze(hidden_states, axis=(0,1,))
@@ -128,7 +129,7 @@ def _blockwise_mm_fwd(
     down_activations = checkpoint_name(down_activations, "blockwise.down_activations")
     gate_up_activations_T = checkpoint_name(gate_up_activations_T, "blockwise.gate_up_activations_T")
     
-    return out[None, None, None, :-1, :], (hidden_states, expert_affinities_masked, gate_up_weight, 
+    return out[None, None, None, :-1, :], (hidden_states, expert_affinities_masked, orig_expert_affin_shape, gate_up_weight, 
                 down_proj_weight, down_activations, gate_up_activations_T, 
                 token_position_to_id, block_to_expert)
 
@@ -137,7 +138,7 @@ def _blockwise_mm_bwd(
     res,
     grad_output
 ):
-    (hidden_states, expert_affinities_masked, gate_up_proj_weight, 
+    (hidden_states, expert_affinities_masked, orig_expert_affin_shape, gate_up_proj_weight, 
      down_proj_weight, down_activations, gate_up_activations_T, 
      token_position_to_id, block_to_expert) = res
     T,H = hidden_states.shape
@@ -165,9 +166,8 @@ def _blockwise_mm_bwd(
         sliced_tensor = hidden_states_grad[:-1,:]
         hidden_states_grad = sliced_tensor.reshape(1, 1, -1, H)
         
-        affinities_grad = jnp.reshape(affinities_grad, (-1, E))
-        affinities_grad = affinities_grad[:-1, :].reshape(1, 1, -1, E)
-
+        affinities_grad = jnp.reshape(affinities_grad, (-1, orig_expert_affin_shape[-1]))
+        affinities_grad = affinities_grad[:-1, :].reshape(1, 1, -1, orig_expert_affin_shape[-1])
     return (
         hidden_states_grad,
         affinities_grad,

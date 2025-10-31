@@ -1331,7 +1331,7 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
         block_position_indices_sm = shard_map(self.calculate_block_position_ids, mesh=mesh, 
                                               in_specs=(
                                                 PartitionSpec(("data", "fsdp"), "expert", None, None), 
-                                                None, None, None, None
+                                                None, None, 
                                                 ), 
                                               out_specs=(
                                                   PartitionSpec(("data", "fsdp"), "expert", None, None),
