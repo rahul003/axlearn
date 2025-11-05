@@ -3,13 +3,15 @@ import unittest
 from functools import partial
 import jax
 import math
+import axlearn
 from axlearn.common.test_utils import TestCase
+from axlearn.common.attention import TransformerLayer
 from utils_neuron import ExperimentConfig
 from axlearn.common.module import functional as F
 import numpy as np
-from axlearn.common.mixture_of_experts import TopKGatingGatherBlockwise
+from axlearn.common.mixture_of_experts import TopKGatingGatherBlockwise, TopKGatingGatherBlockwiseV2
 import jax.numpy as jnp
-
+from jax._src.mesh import thread_resources
 class LayerTestCase(TestCase):
     def _fwd_call(self, layer, state, inputs):
         return F(
@@ -102,6 +104,8 @@ class LayerTestCase(TestCase):
         def golden_bwd_call(golden_layer, golden_state, golden_inputs):
             def loss_fn(state):
                 output, aux = self._fwd_call(golden_layer, state, golden_inputs)
+                if isinstance(output, axlearn.common.attention.BaseTransformerLayer.Output):
+                    output = output.data
                 return cfg.loss_fn(output), output  # Return both loss and output
             (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(golden_state)
             return loss, grads, output
@@ -112,6 +116,8 @@ class LayerTestCase(TestCase):
         def test_bwd_call(test_layer, test_state, test_inputs):
             def loss_fn(state):
                 output, aux = self._fwd_call(test_layer, state, test_inputs)
+                if isinstance(output, axlearn.common.attention.BaseTransformerLayer.Output):
+                    output = output.data
                 return cfg.loss_fn(output), output
             (loss, output), grads = jax.value_and_grad(loss_fn, has_aux=True)(test_state)
             return loss, grads, output
@@ -120,10 +126,12 @@ class LayerTestCase(TestCase):
     def helper_bwd(self, cfg: ExperimentConfig):
         cfg.instantiate(unittest.TestCase.id(self))
         cfg.print_summary()
+        print(cfg.test.dtype, cfg.golden.dtype, )
         use_cached_goldens = int(os.getenv("USE_CACHED_GOLDENS", "0"))
         cache_goldens = int(os.getenv("CACHE_GOLDENS", "0"))
 
         if cfg.golden:
+            print(cfg.golden.dtype, cfg.golden.layer.dtype, cfg.golden.layer)
             golden_bwd_call = self.create_golden_bwd_fn(cfg)
             golden_loss, golden_grads, golden_output = self._load_or_compute_goldens(golden_bwd_call, cfg, use_cached_goldens, cache_goldens)
 
@@ -132,6 +140,8 @@ class LayerTestCase(TestCase):
             jax.config.update('jax_platform_name', cfg.test.device)
             with cfg.test.dump_for_spectometer():
                 test_loss, test_grads, test_output = test_bwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
+        print('test loss:', test_loss, test_loss.dtype)
+        print('golden loss:', golden_loss if cfg.golden else 'N/A', golden_loss.dtype)
         if cfg.golden:
             self.assertNestedAllClose(test_loss, golden_loss, atol=cfg.test.atol, rtol=cfg.test.rtol)
             self.assertNestedAllClose(test_grads, golden_grads, atol=cfg.test.atol, rtol=cfg.test.rtol)
@@ -193,22 +203,22 @@ class GatingTestCase(TestCase):
         self.assertNestedAllClose(jax.device_get(test_output), jax.device_get(golden_output),
                                   atol=cfg.test.atol, rtol=cfg.test.rtol)
 
-    def validate_block_to_expert(self, block_to_expert, cfg, num_blocks, num_blocks_per_expert):
+    def validate_block_to_expert(self, block_to_expert, cfg, num_blocks, num_blocks_per_expert, ep_size=1):
         # Validating block_to_expert tensor
         # (O, G, N)
         O, G, N = block_to_expert.shape
         assert N == num_blocks
         for o in range(O):
             for g in range(G):
-                num_blocks_for_expert = {}
+                num_blocks_for_expert_dict = {}
                 for n in range(N):
-                    expert_id = block_to_expert[o, g, n]
-                    if expert_id not in num_blocks_for_expert:
-                        num_blocks_for_expert[expert_id] = 0
-                    num_blocks_for_expert[expert_id] += 1
-                assert len(num_blocks_for_expert) == cfg.test.cfg.num_experts, f"Expected {cfg.test.cfg.num_experts} experts, but got {len(num_blocks_for_expert)}"
-                for expert_id, num_blocks in num_blocks_for_expert.items():
-                    assert num_blocks == num_blocks_per_expert, f"Expert {expert_id} has {num_blocks} blocks, expected {num_blocks_per_expert}"
+                    expert_id = int(block_to_expert[o, g, n])
+                    if expert_id not in num_blocks_for_expert_dict:
+                        num_blocks_for_expert_dict[expert_id] = 0
+                    num_blocks_for_expert_dict[expert_id] += 1
+                assert len(num_blocks_for_expert_dict) == cfg.test.cfg.num_experts/ep_size, f"Expected {cfg.test.cfg.num_experts} experts, but got {num_blocks_for_expert_dict[expert_id]}"
+                for expert_id, num_blocks_t in num_blocks_for_expert_dict.items():
+                    assert num_blocks_t == num_blocks_per_expert, f"Expert {expert_id} has {num_blocks_t} blocks, expected {num_blocks_per_expert}"
 
     def validate_token_position_to_id(self, O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id):
         # Validating token_position_to_id (O, G, N*B)
@@ -229,7 +239,7 @@ class GatingTestCase(TestCase):
                         elif token_id_in_seq < 0 or token_id_in_seq > S:
                             print(token_position_to_id[o, g, n, b], token_id_in_seq)
                         else:
-                            assert expert_affinities_masked[o, g, token_id_in_seq, expert_id] > 0
+                            assert expert_affinities_masked[o, g, token_id_in_seq, expert_id] > 0, (o, g, token_id_in_seq, expert_id, expert_affinities_masked[o, g, token_id_in_seq, expert_id])
                         # must be in range [0, S]
         assert all_in_range, f"token_position_to_id out of range: {token_position_to_id}, {in_range}"
 
@@ -238,10 +248,27 @@ class GatingTestCase(TestCase):
         # O, G, S, E
         assert np.all(np.count_nonzero(expert_affinities_masked, axis=3) <= cfg.test.cfg.top_k)
 
-    def helper_blockwise_gating(self, cfg):
+    def _validate_blockwise_v2(self, expert_affinities_masked, token_position_to_id, expert_index, block_to_expert, cfg):
+        _, _, S, num_experts = expert_affinities_masked.shape
+        expert_capacity = int(S * cfg.test.cfg.train_capacity_factor / num_experts)
+        if isinstance(cfg.test.cfg, TopKGatingGatherBlockwiseV2.Config):
+            block_size = expert_capacity
+        elif isinstance(cfg.test.cfg, TopKGatingGatherBlockwise.Config):
+            block_size = cfg.test.cfg.block_size
+        else:
+            block_size = expert_capacity
+        num_blocks = math.ceil(expert_capacity / block_size) * num_experts
+        # num_local_blocks = num_blocks_per_expert * E
+        O, G, N = block_to_expert.shape
+        assert N == num_blocks
+        with jax.default_device(jax.devices("cpu")[0]):
+            self.validate_block_to_expert(block_to_expert, cfg, num_blocks, 1)
+            self.validate_token_position_to_id(O, G, num_blocks, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
+            self.validate_expert_affinties(expert_affinities_masked, cfg)
+
+    def _run_tests(self, cfg):
         cfg.instantiate(unittest.TestCase.id(self))
         cfg.print_summary()
-        assert cfg.golden is None, "This test doesn't use golden "
         @partial(jax.jit, static_argnums=0)
         def test_fwd_call(test_layer, test_state, test_inputs):
             return self._fwd_call(test_layer, test_state, test_inputs)
@@ -250,41 +277,41 @@ class GatingTestCase(TestCase):
 
         test_output = jax.device_get(test_output)
         outputs = test_output[0]
-        token_position_to_id, expert_affinities_masked = outputs.combine_tensor
-        _,_, S, E = expert_affinities_masked.shape
-        expert_capacity = int(S * cfg.test.cfg.train_capacity_factor / E)
-        if isinstance(cfg.test.cfg, TopKGatingGatherBlockwise.Config):
-            block_size = cfg.test.cfg.block_size
+        if cfg.golden:
+            with cfg.golden.mesh:   
+                golden_output = test_fwd_call(cfg.golden.layer, cfg.golden.state, cfg.golden.inputs)
+            golden_output = jax.device_get(golden_output)
+            golden_outputs = golden_output[0]
         else:
-            block_size = expert_capacity
-        num_blocks = math.ceil(expert_capacity / block_size) * E
-        num_blocks_per_expert = num_blocks / E
-
+            golden_outputs = None
+        return outputs, golden_outputs
+        
+    def helper_blockwise_gating(self, cfg):
+        outputs, _ = self._run_tests(cfg)
+        token_position_to_id, expert_affinities_masked, expert_index = outputs.combine_tensor
+        self._validate_blockwise_v2(expert_affinities_masked, token_position_to_id, expert_index, outputs.dispatch_tensor, cfg)
+     
+    def helper_blockwise_gating_v2_vs_v1(self, cfg):
+        outputs, golden_outputs = self._run_tests(cfg)
+        token_position_to_id, expert_affinities_masked, expert_index = outputs.combine_tensor
+        orig_expert_affinities_masked = expert_affinities_masked
+        
+        g_token_position_to_id, g_expert_affinities_masked, g_expert_index = golden_outputs.combine_tensor
         block_to_expert = outputs.dispatch_tensor
-        O, G, N = block_to_expert.shape
-        self.validate_block_to_expert(block_to_expert, cfg, num_blocks, num_blocks_per_expert)
-        self.validate_token_position_to_id(O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
-        self.validate_expert_affinties(expert_affinities_masked, cfg)
-
-    def helper_blockwise_gating_v2(self, cfg):
-        cfg.instantiate(unittest.TestCase.id(self))
-        cfg.print_summary()
-        @partial(jax.jit, static_argnums=0)
-        def test_fwd_call(test_layer, test_state, test_inputs):
-            return self._fwd_call(test_layer, test_state, test_inputs)
-        with cfg.test.mesh:
-            test_output = test_fwd_call(cfg.test.layer, cfg.test.state, cfg.test.inputs)
-        with cfg.golden.mesh:
-            golden_output = test_fwd_call(cfg.golden.layer, cfg.golden.state, cfg.golden.inputs)
-        test_output = jax.device_get(test_output)
-        golden_output = jax.device_get(golden_output)
-        outputs = test_output[0]
-        golden_outputs = golden_output[0]
-
-        token_position_to_id, expert_affinities_masked = outputs.combine_tensor
-        g_token_position_to_id, g_expert_affinities_masked = golden_outputs.combine_tensor
-        block_to_expert = outputs.dispatch_tensor
-
+        g_block_to_expert = golden_outputs.dispatch_tensor
+        with jax.default_device(jax.devices("cpu")[0]):
+            expert_affinities_masked = jnp.transpose(expert_affinities_masked, (0, 2, 1, 3))
+            O, S, E, _ = expert_affinities_masked.shape
+            O, G, _ = block_to_expert.shape
+            expert_affinities_masked = expert_affinities_masked.reshape(O, S, -1)
+            g_expert_affinities_masked = jnp.transpose(g_expert_affinities_masked, (0, 2, 1, 3))
+            g_expert_affinities_masked = g_expert_affinities_masked.reshape(O, S, -1)
+            g_token_position_to_id = jnp.reshape(g_token_position_to_id, (O, G, -1))
+            g_block_to_expert = jnp.reshape(g_block_to_expert, (O, G, -1))
+        self.assertNestedAllClose(
+            expert_index,
+            g_expert_index,
+            atol=cfg.test.atol, rtol=cfg.test.rtol)
         self.assertNestedAllClose(
             expert_affinities_masked,
             g_expert_affinities_masked,
@@ -293,18 +320,5 @@ class GatingTestCase(TestCase):
             token_position_to_id,
             g_token_position_to_id,
             atol=cfg.test.atol, rtol=cfg.test.rtol)
-
-        _,_, S, E = expert_affinities_masked.shape
-        expert_capacity = int(S * cfg.test.cfg.train_capacity_factor / E)
-
-        if isinstance(cfg.test.cfg, TopKGatingGatherBlockwise.Config):
-            block_size = cfg.test.cfg.block_size
-        else:
-            block_size = expert_capacity
-        num_blocks = math.ceil(expert_capacity / block_size) * E
-        num_blocks_per_expert = num_blocks / E
-
-        O, G, N = block_to_expert.shape
-        self.validate_block_to_expert(block_to_expert, cfg, num_blocks, num_blocks_per_expert)
-        self.validate_token_position_to_id(O, G, N, block_size, S, block_to_expert, expert_affinities_masked, token_position_to_id)
-        self.validate_expert_affinties(expert_affinities_masked, cfg)
+        self._validate_blockwise_v2(orig_expert_affinities_masked, token_position_to_id, expert_index, block_to_expert, cfg)
+    

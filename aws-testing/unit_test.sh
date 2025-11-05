@@ -11,6 +11,8 @@ export TEST_SUITE=${2:-"presubmit"}
 export TEST_LOG_DIR=${3:-"test_artifacts/shell"}
 export GOLDENS_DIR=${4:-"/fsx/huilgolr/axlearn/test_goldens"}
 export JAX_COMPILATION_CACHE_DIR=${5:-"test_artifacts/shell_jax_cc"}
+rm -rf $JAX_COMPILATION_CACHE_DIR
+rm -rf $TEST_LOG_DIR
 
 # if defined
 if [ -n "$1" ]; then
@@ -23,9 +25,9 @@ export NEURON_DUMP_PATH=${TEST_ARTIFACTS_PATH}/neuron_dump
 mkdir -p "$TEST_ARTIFACTS_PATH"
 
 export USE_CACHED_GOLDENS=1
-export CACHE_GOLDENS=1
+export CACHE_GOLDENS=0
 export USE_SHARDMAP_FFN=1
-
+export NEURON_HLO_ANALYZER=1
 export XLA_FLAGS="--xla_cpu_use_thunk_runtime=false --xla_force_host_platform_device_count=64 --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives"
 
 export GIT_COMMIT=$(git rev-parse --short HEAD)
@@ -42,7 +44,7 @@ export NEURON_FSDP=0
 export NEURON_FSDP_NUM_LAYER_COALESCE=-1
 export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1 # changed from 0
 export NEURON_DISABLE_BOUNDARY_MARKER=1
-
+export NEURON_COLLECTIVE_PERMUTE_TO_ALL_GATHER=1
 # Neuron runtime flags
 export NEURON_RT_DBG_CC_DMA_PACKET_SIZE=4096 && export NEURON_RT_DBG_DMA_PACKETIZATION_SIZE=104857
 export NEURON_RT_ASYNC_EXEC_MAX_INFLIGHT_REQUESTS=0
@@ -61,7 +63,6 @@ export FI_EFA_USE_DEVICE_RDMA="1"
 export FI_PROVIDER="efa"
 export FI_EFA_FORK_SAFE=1
 export OFI_NCCL_MR_CACHE_DISABLE=1
-
 # Neuron compiler flags
 export NEURON_CC_FLAGS="--framework=XLA"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-max-instruction-limit=20000000"
@@ -82,8 +83,14 @@ if [ "$1" = "unit" ]; then
     pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/unit.xml aws-testing/moe_layer_unit_test.py
 elif [ "$1" = "integ" ]; then
     # breaking them up as we seem to leak memory across tests
-    if [ "$2" = "12b" ] || [ "$2" = "50b" ] || [ "$2" = "switch-xxl" ] || [ "$2" = "llama4-maverick" ] || [ "$2" = "qwen3-235b" ]; then
+    if [ "$2" = "50b" ]; then
         export TEST_SUITE_PARTS=1
+    elif [ "$2" = "12b" ]; then
+        export TEST_SUITE_PARTS=6
+    elif [ "$2" = "gpt-oss" ]; then
+        export TEST_SUITE_PARTS=3
+    elif [ "$2" = "150b" ]; then
+        export TEST_SUITE_PARTS=14
     elif [ "$2" = "deepseek-v3" ] || [ "$2" = "qwen3-30b" ] || [ "$2" = "switch-base" ]; then
         export TEST_SUITE_PARTS=15
     else
@@ -93,10 +100,12 @@ elif [ "$1" = "integ" ]; then
     status=0
     set +e
     for ((part=0;part<TEST_SUITE_PARTS;part++)); do
-        # --collect-only -q
-        # use above if you only want to see the tests that will be run
         set -x
-        TEST_SUITE_PART=$part pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ_$part.xml aws-testing/moe_layer_integ_test.py -k "TestLayerOnTrn"
+        if [ "$3" = "collect-only" ]; then
+            TEST_SUITE_PART=$part pytest --collect-only -q aws-testing/moe_layer_integ_test.py -k "TestLayerOnTrn"
+        else
+            TEST_SUITE_PART=$part pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/integ_$part.xml aws-testing/moe_layer_integ_test.py -k "TestLayerOnTrn"
+        fi
         status_part=$?
         status=$((status + status_part))
         set +x
@@ -104,19 +113,9 @@ elif [ "$1" = "integ" ]; then
     if [ $status -ne 0 ]; then
         exit 1
     fi
-elif [ "$1" = "150bdev" ]; then
-    export TEST_SUITE="150b"
-    pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_layer_integ.xml aws-testing/moe_layer_integ_test.py -k "TestDev150bInteg"
-    pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_gating_integ.xml aws-testing/gating_test.py -k "TestDev150bGatingInteg"
-    export JAX_PLATFORMS=cpu
-    pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_layer_unit.xml aws-testing/moe_layer_unit_test.py -k "TestDev150bUnit"
-    pytest -rsA --tb=short --junitxml=$TEST_LOG_DIR/$TEST_SUITE/150bdev_gating_unit.xml aws-testing/gating_test.py -k "TestGatingOnCpu or TestDev150bGatingUnit"
 elif [ "$1" = "dev" ]; then
-    pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDevSwitchBaseInteg"
-elif [ "$1" = "150b_blockwise_cpu" ]; then
-    pytest -rsA --tb=short aws-testing/moe_layer_unit_test.py -k 'TestDev150bUnit and test_fwd_blockwise_vs_einsum or TestDev150bUnit and test_fwdbwd_blockwise_vs_einsum'
-    pytest -rsA --tb=short aws-testing/moe_layer_unit_test.py -k 'TestDev150bUnit and test_fwd_blockwisev2_vs_einsum or TestDev150bUnit and test_fwdbwd_blockwisev2_vs_einsum'
-elif [ "$1" = "150b_blockwise_neuron" ]; then
-    pytest -rsA --tb=short aws-testing/moe_layer_integ_test.py -k 'TestDev150bInteg and test_fwd_blockwise_vs_einsum or TestDev150bInteg and test_fwdbwd_blockwise_vs_einsum'
-    pytest -rsA --tb=short aws-testing/moe_layer_integ_test.py -k 'TestDev150bInteg and test_fwd_blockwisev2_vs_einsum or TestDev150bInteg and test_fwdbwd_blockwisev2_vs_einsum'
+    pytest -rsA -v aws-testing/gating_test.py -k "TestSwitchBaseGatingUnit or TestDev150bGatingUnit"
+    # pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDev150bInteg and test_fwdbwd_blockwisev2"
+    # pytest -rsA -v aws-testing/moe_layer_integ_test.py -k "TestDevSwitchBaseInteg and test_fwd_blockwise_ep4_seq4_model4" # or TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq16"
+    # pytest -rsA -v aws-testing/transformer_layer_integ_test.py -k "TestDevSwitchBaseInteg and test_fwdbwd_transformer" # or TestDevSwitchBaseInteg and test_fwdbwd_blockwise_ep4_seq16"
 fi

@@ -21,7 +21,7 @@ GOLDENS_DIR="/fsx/huilgolr/axlearn/test_goldens"
 JAX_CC_DIR=""
 
 if [ "$SUITE_ARG" = "all" ]; then
-    for suite in "presubmit" "12b" "50b" "150b" "qwen3-30b" "switch-base" "switch-large" "mixtral-50b" "llama4-scout" "deepseek-v3" "qwen3-235b" "switch-xxl" "llama4-maverick"; do
+    for suite in "presubmit" "12b" "50b" "150b" "qwen3-30b" "switch-base" "switch-large" "mixtral-50b" "llama4-scout" "deepseek-v3" "qwen3-235b" "switch-xxl" "llama4-maverick" "gpt-oss"; do
         run_suite $suite
     done
 elif [ "$SUITE_ARG" = "quick_set" ]; then

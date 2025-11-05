@@ -123,8 +123,9 @@ class TestDevSwitchBaseInteg(LayerTestCase):
         self.golden_device = 'cpu'
         self.golden = TopKGating
     
-    def create_cfg(self, test, golden=None, layer="moe"):
+    def create_cfg(self, test, golden=None, layer="moe", mesh_spec=None):
         golden = self.golden if golden is None else golden
+        mesh_spec = {"expert": 64, "model": 1, "fsdp": 1} if mesh_spec is None else mesh_spec
         return create_test_config(
             layer=layer,
             test=test,
@@ -133,35 +134,24 @@ class TestDevSwitchBaseInteg(LayerTestCase):
             golden_device=self.golden_device,
             input_dim=1024,
             hidden_dim=4096,
-            n_experts=128,
-            n_groups=16,
+            n_experts=64,
+            n_groups=1,
             top_k=2,
             capacity_factor=2,
-            mesh_spec={"expert": 16, "model": 4, "fsdp": 1},
+            mesh_spec=mesh_spec,
             batch=4,
-            seq=8192,
+            seq=1024,
             dtype=jnp.bfloat16,
         )[1]
     
     def create_cfg_ep64(self, test, golden=None, layer="moe"):
-        golden = self.golden if golden is None else golden
-        return create_test_config(
-            layer=layer,
-            test=test,
-            golden=golden,
-            test_device=self.test_device,
-            golden_device=self.golden_device,
-            input_dim=1024,
-            hidden_dim=4096,
-            n_experts=128,
-            n_groups=64,
-            top_k=2,
-            capacity_factor=2,
-            mesh_spec={"expert": 64, "model": 1, "fsdp": 1},
-            batch=4,
-            seq=8192,
-            dtype=jnp.bfloat16,
-        )[1]
+        return self.create_cfg(test, golden=golden, layer=layer, mesh_spec={"expert": 64, "model": 1, "fsdp": 1, "seq":1})
+
+    def create_cfg_ep4_seq16(self, test, golden=None, layer="moe"):
+        return self.create_cfg(test, golden=golden, layer=layer, mesh_spec={"expert": 4, "model": 1, "fsdp": 1, "seq":16})
+    
+    def create_cfg_ep4_seq4_model4(self, test, golden=None, layer="moe"):
+        return self.create_cfg(test, golden=golden, layer=layer, mesh_spec={"expert": 4, "model": 4, "fsdp": 1, "seq": 4})
     
     @unittest.skip("Fails with unsupported collective. TODO")
     def test_fwdbwd_blockwise_ep16(self):
@@ -170,11 +160,25 @@ class TestDevSwitchBaseInteg(LayerTestCase):
     
     def test_fwdbwd_blockwise_ep64(self):
         jax.config.update('jax_platform_name', 'neuron')
-        self.helper_bwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwise))
-
-    def test_fwdbwd_blockwise_ep64_v2(self):
-        jax.config.update('jax_platform_name', 'neuron')
         self.helper_bwd(self.create_cfg_ep64(test=TopKGatingGatherBlockwiseV2))
+
+    def test_fwd_blockwise_ep4_seq16(self):
+        jax.config.update('jax_platform_name', 'neuron')
+        self.helper_fwd(self.create_cfg_ep4_seq16(test=TopKGatingGatherBlockwiseV2))
+
+    def test_fwdbwd_blockwise_ep4_seq4_model4(self):
+        jax.config.update('jax_platform_name', 'neuron')
+        self.helper_bwd(self.create_cfg_ep4_seq4_model4(test=TopKGatingGatherBlockwiseV2))
+    
+    # fwd itself OOBs
+    def test_fwd_blockwise_ep4_seq4_model4(self):
+        jax.config.update('jax_platform_name', 'neuron')
+        self.helper_fwd(self.create_cfg_ep4_seq4_model4(test=TopKGatingGatherBlockwiseV2))
+
+    @unittest.skip("Fwd itself fails right")
+    def test_fwdbwd_blockwise_ep4_seq16(self):
+        jax.config.update('jax_platform_name', 'neuron')
+        self.helper_bwd(self.create_cfg_ep4_seq16(test=TopKGatingGatherBlockwiseV2))
 
 if __name__ == "__main__":
     absltest.main()

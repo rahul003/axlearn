@@ -89,7 +89,12 @@ def scaled_hidden_dim(scale: float, *, round_up_to_multiples_of: int = 256) -> F
         round_up_to_multiples_of=round_up_to_multiples_of,
     )
 
-
+# TODO: change annotations to use Seq parallel properly
+"""
+Had run into below error with flash attention as is
+File "/fsx/huilgolr/axlearn/axlearn/common/flash_attention/layer.py", line 133, in _maybe_repeat_kv_heads
+ValueError: num_heads (12) must be greater than or equal to the number of devices 16 in the mesh axis ('seq', 'model').
+"""
 def flash_attention_config() -> FlashAttention.Config:
     """Builds a FlashAttention config with sharding config."""
     return FlashAttention.default_config().set(
@@ -232,6 +237,9 @@ def model_config(
     eos_token_id: Optional[int] = None,
     ffn_layer_types: Optional[Sequence[Literal["dense", "sparse"]]] = None,
     expert_cfg: TransformerFeedForwardMoE = TransformerFeedForwardMoE.default_config(),
+    batch_axis_names = None,
+    seq_axis_names = None,
+    fsdp_axis_names = None,
 ) -> causal_lm.Model.Config:
     """Returns an LM model config based on the given hyperparams.
 
@@ -292,13 +300,21 @@ def model_config(
     # Stack.
     # transformer_cfg = stack_cfg.set(num_layers=num_layers, layer=layer_cfg)
     # Shard some FFN and attention weights over multiple axes.
-    batch_axis_names = ("data", "expert", "fsdp")
+    
+    # used only for dense MLP when ep=1
+    if batch_axis_names is None:
+        batch_axis_names = ("data", "expert", "fsdp")
+    # seq and fsdp used for attn and dense MLP when ep=1
+    if seq_axis_names is None:
+        seq_axis_names = "seq"
+    if fsdp_axis_names is None:
+        fsdp_axis_names = ("expert", "fsdp", "seq")
     set_double_shard_weights_config(
         layer_cfg,
         batch_axis_names=batch_axis_names,
-        fsdp_axis_names=("expert", "fsdp", "seq"),
+        fsdp_axis_names=fsdp_axis_names,
         tp_axis_names="model",
-        seq_axis_names="seq",
+        seq_axis_names=seq_axis_names,
     )
     def config_dense(cfg: TransformerLayer.Config) -> TransformerLayer.Config:
         cfg = layer_cfg.clone()

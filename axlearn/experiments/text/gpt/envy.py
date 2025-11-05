@@ -108,26 +108,81 @@ MAX_SEQUENCE_LENGTH = {
 
 _BASE_MODEL_HIDDEN_DIM = 768
 
-MOE_OUTER_BATCH_AXIS_NAMES = ("data", "fsdp")
+TP_DEGREE=int(os.getenv("AXLEARN_TP_DEGREE", 4))
+SEQ_DEGREE=int(os.getenv("AXLEARN_SEQ_DEGREE", 1))
+EP_DEGREE=int(os.getenv("AXLEARN_EP_DEGREE", 1))
 
-MOE_DIM_TO_MESH_AXIS_MAP = {
-    "me": PartitionSpec(None, None),
-    "emh": PartitionSpec("expert", "fsdp", "model"),
-    "ehm": PartitionSpec("expert", "model", "fsdp"),
-    "ehM": PartitionSpec("expert", "model", None),
-    "ogsm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, "model"),
-    "ogsM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
-    "ogse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
-    "ogec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
-    # Dispatch and combine tensors.
-    "ogsec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, "expert", None),
-    "oegcm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
-    "oegcM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, None),
-    "ogecm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, "expert", None, "model"),
-    "ogecM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, "expert", None, None),
-    "oegch": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
-    "hoesm": PartitionSpec("model", MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
-}
+MOE_OUTER_BATCH_AXIS_NAMES = ("data", "fsdp")
+def get_effective_ep_degree():
+    if EP_DEGREE > 1:
+        if EP_DEGREE * TP_DEGREE * SEQ_DEGREE == 64:
+            return 64
+        elif EP_DEGREE * SEQ_DEGREE == 16:
+            return 16
+    return 1
+
+def get_moe_dim_to_mesh_axis_map(ep_degree_local, tp_degree, cp_degree):
+    if ep_degree_local > 1:
+        # fsdp = 1
+        FSDP_AXIS_NAMES = None
+        if ep_degree_local == 64:
+            EP_AXIS_NAMES = "expert"
+            TP_AXIS_NAMES = None
+            FSDP_AXIS_NAMES = "fsdp"
+        elif ep_degree_local * tp_degree * cp_degree == 64:
+            # doesn't allow tp>1
+            EP_AXIS_NAMES = ("expert", "model", "seq")
+            TP_AXIS_NAMES = None
+        elif ep_degree_local * cp_degree == 16:
+            # not used for EP=16 TP=4
+            # TODO
+            EP_AXIS_NAMES = ("expert", "seq")
+            TP_AXIS_NAMES = "model"
+        else:
+            raise NotImplementedError
+    else:
+        TP_AXIS_NAMES = "model"
+        EP_AXIS_NAMES = "expert"
+        FSDP_AXIS_NAMES = "fsdp"
+    
+    
+    # EP v2 within node map
+    MOE_DIM_TO_MESH_AXIS_MAP = {
+        "me": PartitionSpec(None, None),
+        "emnh": PartitionSpec(EP_AXIS_NAMES, FSDP_AXIS_NAMES, None, TP_AXIS_NAMES),
+        "eMnh": PartitionSpec(EP_AXIS_NAMES, None, None, TP_AXIS_NAMES),
+        "emh": PartitionSpec(EP_AXIS_NAMES, FSDP_AXIS_NAMES, TP_AXIS_NAMES),
+        "ehm": PartitionSpec(EP_AXIS_NAMES, TP_AXIS_NAMES, FSDP_AXIS_NAMES),
+        "ehM": PartitionSpec(EP_AXIS_NAMES, TP_AXIS_NAMES, None),
+
+        # "onse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, EP_AXIS_NAMES),
+        "ogsm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, TP_AXIS_NAMES),
+        "ogsM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
+        "ogse": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
+        "ogec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES, None),
+        "oghsM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, TP_AXIS_NAMES, None, None),
+        "oehxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, TP_AXIS_NAMES, None, None),
+        # Dispatch and combine tensors.
+        "ogsec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, EP_AXIS_NAMES, None),
+        "oegcm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None, TP_AXIS_NAMES),
+        "oegcM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None, None),
+        "ogecm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES, None, TP_AXIS_NAMES),
+        "ogecM": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES, None, None),
+        "oegch": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None, TP_AXIS_NAMES),
+        # "hoesm": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
+        # "oehx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, TP_AXIS_NAMES, None),
+        "oexx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None, None),
+        "oxxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, None),
+        "oxxe": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None, EP_AXIS_NAMES),
+        "oxe": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
+        "oex": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None),
+        "oxx": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, None, None),
+        # "hoex": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, EP_AXIS_NAMES, None),
+        "hoxx": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, None, None),
+        "hoxe": PartitionSpec(TP_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, None, EP_AXIS_NAMES),
+    }
+    return MOE_DIM_TO_MESH_AXIS_MAP
+
 
 def get_ffn_layer_types():
     ffn_type = os.getenv("AXLEARN_MOE_LAYER_FREQ", "1")
@@ -337,18 +392,38 @@ def _generate_trn2_custom_configs(
             )
             trn2_module_modifications.append(mcm)
 
+        # verify after consolidating with tp+fsdp jobs
+        if SEQ_DEGREE > 1:
+            input_norm_partition = ('expert', 'seq', 'model')
+            output_norm_partition = ('expert', 'seq', 'model')
+        else:
+            input_norm_partition = "model"
+            output_norm_partition = None
+
         trn2_partition_spec_modifications.append(
             PartitionSpecModifier.default_config().set(
                 partition_specs={
-                    # Sequence parallel shardings for norms.
+                    # Sequence parallel shardings for normalization layers
                     "model.decoder.transformer.layer.self_attention.norm": {
-                        "input_partition_spec": (("data", "fsdp"), "model", None),
-                        "output_partition_spec": (("data", "fsdp"), None, None),
+                        "input_partition_spec": (("data", "fsdp"), input_norm_partition, None),
+                        "output_partition_spec": (("data", "fsdp"), output_norm_partition, None),
                     },
                     "model.decoder.transformer.layer.feed_forward.norm": {
-                        "input_partition_spec": (("data", "fsdp"), "model", None),
+                        "input_partition_spec": (("data", "fsdp"), input_norm_partition, None),
+                        "output_partition_spec": (("data", "fsdp"), output_norm_partition, None),
+                    },
+                    "model.decoder.output_norm": {
+                        "input_partition_spec": (("data", "fsdp"), input_norm_partition, None),
                         "output_partition_spec": (("data", "fsdp"), None, None),
                     },
+                    "input.input_partitioner": {
+                        "path_rank_to_partition": {
+                            # Originally be partitioned using sequence degree that would introduce
+                            # all-to-alls
+                            (None, 1): PartitionSpec(("data", "expert", "fsdp")),
+                            (None, 2): PartitionSpec(("data", "expert", "fsdp"), None),
+                        }
+                    }
                 },
             )
         )
@@ -385,8 +460,6 @@ def _generate_trn2_custom_configs(
                 trn2_partition_spec_modifications[-1].partition_specs[f"model.decoder.transformer.layer.layer.{i}.feed_forward.linear2"] = {
                     "output_partition_spec": (("data", "fsdp"), None, None),
                 }
-    
-
     # trn2_lm_head_partition_spec = [
     #     PartitionSpecModifier.default_config().set(
     #         partition_specs={
@@ -422,9 +495,19 @@ def get_trainer_kwargs(
     remat_policy = get_remat_policy()
     ffn_layer_types = get_ffn_layer_types()
     fsdp_degree=int(os.getenv("AXLEARN_FSDP_DEGREE", -1))
-    tp_degree=int(os.getenv("AXLEARN_TP_DEGREE", 4))
-    ep_degree=int(os.getenv("AXLEARN_EP_DEGREE", 1))
-    neuron_mesh = mesh_shape_from_axes(fsdp=fsdp_degree, model=tp_degree, expert=ep_degree)
+    neuron_mesh = mesh_shape_from_axes(fsdp=fsdp_degree, model=TP_DEGREE, expert=EP_DEGREE, seq=SEQ_DEGREE)
+    # potentially change for different models
+    if EP_DEGREE > 1:
+        # to use default of ("expert", "fsdp", "seq")
+        attn_dense_fsdp_axis_names = None
+        dense_batch_axis_names = ("data", "fsdp")
+        attn_dense_seq_axis_names = ("seq", "expert")
+    else:
+        attn_dense_fsdp_axis_names = attn_dense_seq_axis_names = dense_batch_axis_names = None
+    MOE_OUTER_BATCH_AXIS_NAMES = ("data", "fsdp")
+    num_groups = 1 #get_effective_ep_degree()
+    train_batch_size = int(os.getenv("AXLEARN_TRAIN_BATCH_SIZE", 16))
+
     # check_env_vars()
     # pylint: disable=use-dict-literal
     if model_size == "test":
@@ -464,7 +547,7 @@ def get_trainer_kwargs(
                 num_kv_heads=12,
                 num_experts=NUM_EXPERTS[model_size],
                 train_capacity_factor=2.0,
-                num_groups=2,
+                num_groups=1,
                 ffn_structure="hybridnorm",
                 # MoE layer every 2 layers.
                 ffn_layer_types=ffn_layer_types,
@@ -472,7 +555,7 @@ def get_trainer_kwargs(
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
             max_sequence_length=max_sequence_length,
-            train_batch_size=tokens_per_batch // max_sequence_length,  # 8M tokens.
+            train_batch_size=train_batch_size,
             max_step=250_000,
             mesh_shape=mesh_shape_from_axes(fsdp=-1, expert=16),
             mesh_rules=(
@@ -533,7 +616,7 @@ def get_trainer_kwargs(
                 num_kv_heads=16,
                 num_experts=NUM_EXPERTS[model_size],
                 train_capacity_factor=2.0,
-                num_groups=2,
+                num_groups=num_groups,
                 ffn_structure="hybridnorm",
                 # MoE layer every 2 layers.
                 ffn_layer_types=get_ffn_layer_types(),
@@ -541,7 +624,7 @@ def get_trainer_kwargs(
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
             max_sequence_length=max_sequence_length,
-            train_batch_size=tokens_per_batch // max_sequence_length,  # 8M tokens.
+            train_batch_size=train_batch_size,
             max_step=250_000,  # Most of the evals were done at 100k steps in the paper.
             mesh_shape=mesh_shape_from_axes(fsdp=-1, expert=16),
             mesh_rules=(
@@ -605,7 +688,7 @@ def get_trainer_kwargs(
                 num_kv_heads=8,
                 num_experts=NUM_EXPERTS[model_size],
                 train_capacity_factor=2.0,
-                num_groups=2,
+                num_groups=num_groups,
                 ffn_structure="hybridnorm",
                 # MoE layer every 2 layers.
                 ffn_layer_types=[
@@ -616,7 +699,7 @@ def get_trainer_kwargs(
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
             max_sequence_length=max_sequence_length,
-            train_batch_size=tokens_per_batch // max_sequence_length,  # 8M tokens.
+            train_batch_size=train_batch_size,
             max_step=250_000,  # Most of the evals were done at 100k steps in the paper.
             # TODO(kelvin-zou): not verified with real job.
             mesh_shape=mesh_shape_from_axes(fsdp=-1, expert=16, model=8),
@@ -640,7 +723,7 @@ def get_trainer_kwargs(
         )
     elif "Mistral" in model_size:
         num_layers=int(os.getenv("AXLEARN_NUM_LAYERS", 4))
-        num_kv_heads = max(8, tp_degree)
+        num_kv_heads = max(8, TP_DEGREE)
         if int(os.getenv("AXLEARN_NUM_KV_HEADS", -1)) != -1:
             num_kv_heads = int(os.getenv("AXLEARN_NUM_KV_HEADS"))
         if model_size == "Mistral-toy":
@@ -677,14 +760,14 @@ def get_trainer_kwargs(
                 num_kv_heads=num_kv_heads,
                 num_experts=NUM_EXPERTS[model_size],
                 train_capacity_factor=int(os.getenv("AXLEARN_CAP_FACTOR", ffn_sparse_top_k)),
-                num_groups=1,
+                num_groups=num_groups,
                 ffn_layer_types=ffn_layer_types,
                 ffn_sparse_top_k=ffn_sparse_top_k,
                 outer_batch_size=get_outer_batch_from_mesh(MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, neuron_mesh),
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
             max_sequence_length=int(os.getenv("AXLEARN_MAX_SEQ_LEN", max_sequence_length)),
-            train_batch_size=int(os.getenv("AXLEARN_TRAIN_BATCH_SIZE", 16)),
+            train_batch_size=train_batch_size,
             max_step=250_000,
             mesh_shape=mesh_shape_from_axes(fsdp=-1, model=8),
             mesh_rules=(
@@ -737,6 +820,10 @@ def get_trainer_kwargs(
     model_kwargs.update(trainer_kwargs.get("model_kwargs", {}))
     model_kwargs.setdefault("vocab_size", vocab_size)
 
+    model_kwargs["attn_dense_fsdp_axis_names"] = attn_dense_fsdp_axis_names
+    model_kwargs["attn_dense_seq_axis_names"] = attn_dense_seq_axis_names
+    model_kwargs["dense_batch_axis_names"] = dense_batch_axis_names
+
     learner_kwargs: dict[str, Any] = merged_trainer_kwargs.pop("learner_kwargs")
     learner_kwargs.update(trainer_kwargs.get("learner_kwargs", {}))
 
@@ -775,6 +862,9 @@ def model_config(
     flash_attention: bool = False,
     outer_batch_size: int = None,
     mesh_shape: Union[MeshShape, HybridMeshShape],
+    attn_dense_fsdp_axis_names=None,
+    attn_dense_seq_axis_names=None,
+    dense_batch_axis_names=None,
     **kwargs,
 ) -> causal_lm.Model.Config:
     """Returns an LM model config based on the given hyperparams.
@@ -827,21 +917,25 @@ def model_config(
         outer_batch_size = get_outer_batch_from_mesh(
             MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, mesh_shape
         )
-
+    MOE_DIM_TO_MESH_AXIS_MAP = get_moe_dim_to_mesh_axis_map(EP_DEGREE, TP_DEGREE, SEQ_DEGREE)
     use_blockwise = int(os.getenv('AXLEARN_USE_BLOCKWISE', 1))
     if use_blockwise == 1:
         gating_type = TopKGatingGatherBlockwise
+        gating_cfg = gating_type.default_config()
     elif use_blockwise == 2:
         gating_type = TopKGatingGatherBlockwiseV2
+        gating_cfg = gating_type.default_config()
+        gating_cfg.dim_to_mesh_axis_map=MOE_DIM_TO_MESH_AXIS_MAP
     else:
         gating_type = TopKGatingGather
+        gating_cfg = gating_type.default_config()
     expert_config = TransformerFeedForwardMoE.default_config().set(
         outer_batch=outer_batch_size,
         num_experts=num_experts,
         input_dim=hidden_dim,
         num_groups=num_groups,
         dim_to_mesh_axis_map=MOE_DIM_TO_MESH_AXIS_MAP,
-        gating=gating_type.default_config(),
+        gating=gating_cfg,
     )
     expert_config.gating.top_k = ffn_sparse_top_k
     expert_config.gating.train_capacity_factor = train_capacity_factor
@@ -850,6 +944,7 @@ def model_config(
         pos_emb=None
     )
     # emb_cfg.token_emb.param_partition_spec = (("expert", "fsdp", "seq"), "model")
+
     cfg = common_model_config(
         num_layers=num_layers,
         hidden_dim=hidden_dim,
@@ -868,6 +963,9 @@ def model_config(
         layer_cfg=transformer_layer_cfg,
         ffn_layer_types=ffn_layer_types,
         expert_cfg=expert_config,
+        fsdp_axis_names=attn_dense_fsdp_axis_names, 
+        seq_axis_names=attn_dense_seq_axis_names,
+        batch_axis_names=dense_batch_axis_names,
         **kwargs,
     )
     # if flash_attention:
@@ -890,6 +988,8 @@ def trainer_configs(
     arch = "envy"
     config_map = {}
     vocab_size = VOCAB_SIZE
+    flash_attention = bool(int(os.getenv("AXLEARN_FLASH_ATTENTION", 1)))
+
     for model_size in MODEL_SIZES:
         seq_len = MAX_SEQUENCE_LENGTH[model_size]
         config_name = make_config_name(arch=arch, model_size=model_size)
@@ -897,7 +997,7 @@ def trainer_configs(
             model_size,
             vocab_size=vocab_size,
             # Use default flash attention.
-            flash_attention=True,
+            flash_attention=flash_attention,
             max_sequence_length=seq_len,
         )
 
