@@ -35,7 +35,7 @@ export RENAME_JOB=true
 export RENAME_JOB_PREFIX=rh
 
 if [ ${1:-1} = "1" ]; then
-    srun -l ./setup_node.sh ../may-artifacts/
+    srun -l ./setup_node.sh /fsx/akshiaws/jul-end-artifacts
 else
     echo "Skip installing"
 fi

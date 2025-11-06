@@ -88,7 +88,7 @@ import functools
 import math
 from enum import Enum, unique
 from typing import Any, Callable, NamedTuple, Optional, Protocol, Sequence, Union
-
+import os
 import chex
 import jax
 from absl import logging
@@ -1816,11 +1816,26 @@ class MultiheadAttention(BaseLayer):
         q_proj, k_proj, v_proj = self.i_proj(query, query_positions=query_positions, **kv_kwargs)
 
         mesh = thread_resources.env.physical_mesh 
-        if mesh.shape["seq"] > 1:
-            q_proj = with_sharding_constraint(q_proj, PartitionSpec(("data", "fsdp"), ("expert", "seq"), "model", None))
-            k_proj = with_sharding_constraint(k_proj, PartitionSpec(("data", "fsdp"), ("expert", "seq"), "model", None))
-            v_proj = with_sharding_constraint(v_proj, PartitionSpec(("data", "fsdp"), ("expert", "seq"), "model", None))
-
+        if mesh.shape["seq"] > 1 and os.getenv('EP_WITHIN_NODE', '1') == '1':
+            CP_AXIS = ("expert", "seq")
+        elif mesh.shape["seq"] > 1:
+            CP_AXIS = "seq"
+            # expert=4,seq=4, model=4
+            # CP=16
+        else:
+            CP_AXIS = None
+        print(f"[DEBUG] CP_AXIS = {CP_AXIS}")
+        print(f"[DEBUG] mesh.shape = {mesh.shape}")
+        print(f"[DEBUG] q_proj shape before sharding = {q_proj.shape}")
+        print(f"[DEBUG] k_proj shape before sharding = {k_proj.shape}")
+        print(f"[DEBUG] v_proj shape before sharding = {v_proj.shape}")
+        q_proj = with_sharding_constraint(q_proj, PartitionSpec(("data", "fsdp"), CP_AXIS, "model", None))
+        k_proj = with_sharding_constraint(k_proj, PartitionSpec(("data", "fsdp"), CP_AXIS, "model", None))
+        print(f"[DEBUG] k_proj shape after sharding = {k_proj.shape}")
+        v_proj = with_sharding_constraint(v_proj, PartitionSpec(("data", "fsdp"), CP_AXIS, "model", None))
+        
+        
+        
         if mode == ForwardMode.FORWARD:
             new_cached_states = dict()
             key_positions = jnp.arange(k_proj.shape[1])[None]
@@ -1873,8 +1888,10 @@ class MultiheadAttention(BaseLayer):
             attention_logit_biases += SegmentIdAttentionBias(segment_ids)
         # AG kv proj
         if mesh.shape["seq"] > 1:
+            print(f"[DEBUG] Before AG: k_proj shape = {k_proj.shape}, v_proj shape = {v_proj.shape}")
             k_proj = with_sharding_constraint(k_proj, PartitionSpec(("data", "fsdp"), None, "model", None))
             v_proj = with_sharding_constraint(v_proj, PartitionSpec(("data", "fsdp"), None, "model", None))
+            print(f"[DEBUG] After AG: k_proj shape = {k_proj.shape}, v_proj shape = {v_proj.shape}")
         context, probs = self._compute_attention(
             mode=mode,
             q_proj=q_proj,
@@ -1882,10 +1899,11 @@ class MultiheadAttention(BaseLayer):
             v_proj=v_proj,
             attention_logit_biases=attention_logit_biases,
         )
-        
+        print(f"[DEBUG] After attention: context shape = {context.shape}, probs shape = {probs.shape}")
+        print(f"[DEBUG] CP_AXIS == {CP_AXIS}")
         if mesh.shape["seq"] > 1:
-            context = with_sharding_constraint(context, PartitionSpec(("data", "fsdp"), ("expert", "seq"), "model", None))
-            probs = with_sharding_constraint(probs, PartitionSpec(("data", "fsdp"), "model", ("expert", "seq"), None))
+            context = with_sharding_constraint(context, PartitionSpec(("data", "fsdp"), CP_AXIS, "model", None))
+            probs = with_sharding_constraint(probs, PartitionSpec(("data", "fsdp"), "model", CP_AXIS, None))
 
         self.vlog(3, "atten.prob=%s", probs[0, 0, 0, :])
         self.vlog(3, "atten.context=%s", context.sum())
@@ -1893,7 +1911,7 @@ class MultiheadAttention(BaseLayer):
         # [batch, target_length, output_dim].
         o_proj = self.o_proj(context)
         if mesh.shape["seq"] > 1:
-            o_proj = with_sharding_constraint(o_proj, PartitionSpec(("data", "fsdp"), ("expert", "seq"), None))
+            o_proj = with_sharding_constraint(o_proj, PartitionSpec(("data", "fsdp"), CP_AXIS, None))
 
         outputs = self._remat_name(o_proj, "o_proj")
         self._add_tensor_stats("o_proj_outputs", outputs)
@@ -2185,21 +2203,28 @@ def compute_gqa_logits(q_proj: Tensor, k_proj: Tensor) -> Tensor:
     Returns:
         logits: [batch, num_heads, target_length, source_length].
     """
+    print(f"[DEBUG GQA_LOGITS] Input shapes: q_proj = {q_proj.shape}, k_proj = {k_proj.shape}")
     kv_heads = k_proj.shape[2]
     num_head_group = q_proj.shape[2] // kv_heads
     assert q_proj.shape[2] % kv_heads == 0
+    print(f"[DEBUG GQA_LOGITS] kv_heads = {kv_heads}, num_head_group = {num_head_group}")
 
     # [batch, target_length, kv_heads, num_head_group, per_head_dim]
     q_proj = jnp.reshape(q_proj, [*q_proj.shape[:2], kv_heads, num_head_group, *q_proj.shape[3:]])
+    print(f"[DEBUG GQA_LOGITS] Reshaped q_proj = {q_proj.shape}")
 
     # [batch, source_length, kv_heads, 1, per_head_dim]
     k_proj = jnp.expand_dims(k_proj, axis=3)
+    print(f"[DEBUG GQA_LOGITS] Expanded k_proj = {k_proj.shape}")
 
     # [batch, kv_heads, num_head_group, target_length, source_length]
     logits = jnp.einsum("btkgh,bsk1h->bkgts", q_proj, k_proj)
+    print(f"[DEBUG GQA_LOGITS] Einsum logits = {logits.shape}")
 
     # [batch, num_heads, target_length, source_length]
-    return jnp.reshape(logits, [*logits.shape[:1], -1, *logits.shape[3:]])
+    final_logits = jnp.reshape(logits, [*logits.shape[:1], -1, *logits.shape[3:]])
+    print(f"[DEBUG GQA_LOGITS] Final logits = {final_logits.shape}")
+    return final_logits
 
 
 def compute_gqa_context(probs: Tensor, v_proj: Tensor) -> Tensor:
@@ -2262,8 +2287,10 @@ class GroupedQueryAttention(MultiheadAttention):
         Returns:
             logits: [batch, num_heads, target_length, source_length].
         """
+        print(f"[DEBUG GQA] _compute_logits: q_proj shape = {q_proj.shape}, k_proj shape = {k_proj.shape}")
         kv_heads = k_proj.shape[-2]
         num_head_group = self.config.num_heads // kv_heads
+        print(f"[DEBUG GQA] kv_heads = {kv_heads}, num_head_group = {num_head_group}, config.num_heads = {self.config.num_heads}")
         if num_head_group == 1:
             return super()._compute_logits(q_proj=q_proj, k_proj=k_proj)
 
@@ -2801,7 +2828,15 @@ class TransformerAttentionLayer(BaseLayer):
             skip_input = target  # pre-norm: where normalization happens within the residual part.
             norm_target = self.norm(target)
             # b, s/tp, h
-            norm_target = with_sharding_constraint(norm_target, PartitionSpec(("data","fsdp"), ("expert", "seq"), None))
+            #mesh = thread_k_prresources.env.physical_mesh 
+            if os.getenv('EP_WITHIN_NODE', '1') == '1':
+                seq_partition = ("expert", "seq")
+            # elif mesh.shape["seq"] > 1:
+            #     seq_partition = "seq"
+            else:
+                # seq_partition = None
+                seq_partition = "seq"
+            norm_target = with_sharding_constraint(norm_target, PartitionSpec(("data","fsdp"), seq_partition, None))
             # b,s,h
             atten_state, atten_output = attention_thunk(norm_target)
             # b,s/cp, h

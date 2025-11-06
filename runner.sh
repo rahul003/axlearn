@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 
 set +e
+
+# Install newer Neuron packages if they exist
+if [ -f "/fsx/akshiaws/jul-end-artifacts/aws-neuronx-dkms_2.x.7225.0_amd64.deb" ]; then
+    echo "Installing newer Neuron packages..."
+    cd /fsx/akshiaws/jul-end-artifacts
+    sudo dpkg -i aws-neuronx-dkms_2.x.7225.0_amd64.deb aws-neuronx-runtime-lib-2.x.35690.0-6dd4e748b.deb aws-neuronx-collectives-2.x.37292.0-6cd64f341.deb 2>/dev/null || true
+fi
+
 # Reload Driver 
 sudo rmmod neuron; sudo modprobe neuron
 

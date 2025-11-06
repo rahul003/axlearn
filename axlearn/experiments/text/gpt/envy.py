@@ -83,7 +83,7 @@ MODEL_SIZES = ("test", "Switch-Base", "Switch-Large", "Switch-XXL", "Mistral-8x7
 
 NUM_EXPERTS = {
     "test": 8,
-    "Switch-Base": 128,
+    "Switch-Base": 64,
     "Switch-Large": 128,
     "Switch-XXL": 64,
     "Mistral-8x7B": 8,
@@ -97,9 +97,9 @@ VOCAB_SIZE = 32 * 1024
 
 MAX_SEQUENCE_LENGTH = {
     "test": 8192,
-    "Switch-Base": 2048,
-    "Switch-Large": 8192,
-    "Switch-XXL": 8192,
+    "Switch-Base": 8192,
+    "Switch-Large": 4096,
+    "Switch-XXL": 2048,
     "Mistral-toy": 256,
     "Mistral-8x7B": 2048,
     "Mistral-8x20B": 8192,
@@ -122,6 +122,7 @@ def get_effective_ep_degree():
     return 1
 
 def get_moe_dim_to_mesh_axis_map(ep_degree_local, tp_degree, cp_degree):
+    print(f"EP_WITHIN_NODE = {os.getenv('EP_WITHIN_NODE')}")
     if ep_degree_local > 1:
         # fsdp = 1
         FSDP_AXIS_NAMES = None
@@ -133,6 +134,10 @@ def get_moe_dim_to_mesh_axis_map(ep_degree_local, tp_degree, cp_degree):
             # doesn't allow tp>1
             EP_AXIS_NAMES = ("expert", "model", "seq")
             TP_AXIS_NAMES = None
+        elif os.getenv('EP_WITHIN_NODE', '1') == '0' and ep_degree_local * tp_degree * cp_degree > 64:
+            # doesn't allow tp>1
+            EP_AXIS_NAMES = ("expert", "seq")
+            TP_AXIS_NAMES = "model"
         elif ep_degree_local * cp_degree == 16:
             # not used for EP=16 TP=4
             # TODO
@@ -381,6 +386,7 @@ def _generate_trn2_custom_configs(
     ]
 
     ffn_layer_types = get_ffn_layer_types()
+    print(f"DEBUG: ffn_layer_types = {ffn_layer_types}, len = {len(ffn_layer_types)}")
     if len(ffn_layer_types) == 1:
         target_config="model.decoder.transformer.layer.self_attention.attention.input_linear.input_linear"
         if int(os.getenv("AXLEARN_USE_FUSED_QKV", "0")) == 0:
@@ -488,13 +494,16 @@ def get_trainer_kwargs(
     remat_policy = get_remat_policy()
     ffn_layer_types = get_ffn_layer_types()
     fsdp_degree=int(os.getenv("AXLEARN_FSDP_DEGREE", -1))
-    neuron_mesh = mesh_shape_from_axes(fsdp=fsdp_degree, model=TP_DEGREE, expert=EP_DEGREE, seq=SEQ_DEGREE)
+    neuron_mesh = mesh_shape_from_axes(data=-1,fsdp=fsdp_degree, model=TP_DEGREE, expert=EP_DEGREE, seq=SEQ_DEGREE)
     # potentially change for different models
     if EP_DEGREE > 1:
         # to use default of ("expert", "fsdp", "seq")
         attn_dense_fsdp_axis_names = None
         dense_batch_axis_names = ("data", "fsdp")
-        attn_dense_seq_axis_names = ("seq", "expert")
+        if os.getenv('EP_WITHIN_NODE', '1') == '0':
+            attn_dense_seq_axis_names = "seq"
+        else:
+            attn_dense_seq_axis_names = ("seq", "expert")
     else:
         attn_dense_fsdp_axis_names = attn_dense_seq_axis_names = dense_batch_axis_names = None
     MOE_OUTER_BATCH_AXIS_NAMES = ("data", "fsdp")
@@ -684,10 +693,7 @@ def get_trainer_kwargs(
                 num_groups=num_groups,
                 ffn_structure="hybridnorm",
                 # MoE layer every 2 layers.
-                ffn_layer_types=[
-                    "dense",
-                    "sparse",
-                ],
+                ffn_layer_types=get_ffn_layer_types(),
                 outer_batch_size=get_outer_batch_from_mesh(MESH_AXIS_NAMES, MOE_OUTER_BATCH_AXIS_NAMES, neuron_mesh),
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
