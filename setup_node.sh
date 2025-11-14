@@ -36,12 +36,12 @@ sudo apt-get install -y google-perftools
 # Binaries to use:
 ###
 
-ENV_DROP_DIR=${1:-../mar-artifacts}
+ENV_DROP_DIR=${1:-../jul-artifacts}
 
-RUNTIME=$ENV_DROP_DIR/aws-neuronx-runtime-lib-*.deb
-COLLECTIVES=$ENV_DROP_DIR/aws-neuronx-collectives-*.deb
+RUNTIME=$ENV_DROP_DIR/newArtifacts/aws-neuronx-runtime-lib-*.deb
+COLLECTIVES=$ENV_DROP_DIR/newArtifacts/aws-neuronx-collectives-*.deb
 TOOLS=$ENV_DROP_DIR/aws-neuronx-tools-*.deb
-DKMS=$ENV_DROP_DIR/aws-neuronx-dkms_*.deb
+DKMS=$ENV_DROP_DIR/newArtifacts/aws-neuronx-dkms_*.deb
 
 sudo dpkg -i $RUNTIME $COLLECTIVES $TOOLS #$DKMS
 

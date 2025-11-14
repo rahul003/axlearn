@@ -68,7 +68,11 @@ def TraceProfileNeuron(num_steps):
     try:
         enabled = os.getenv("NEURON_RT_INSPECT_DEVICE_PROFILE", "0" ) == "1" and num_steps == int(os.getenv("AXLEARN_PROFILE_TRACE_STEP_NUM", 2))
         if enabled:
+            logging.info("Profiling enabled and I am asserting directory path")
+            
             assert os.environ.get("NEURON_RT_INSPECT_OUTPUT_DIR") is not None
+            
+            os.makedirs(os.environ.get("NEURON_RT_INSPECT_OUTPUT_DIR"), exist_ok=True)
             with jax.profiler.trace(os.environ.get("NEURON_RT_INSPECT_OUTPUT_DIR")):
                 yield
         else:
@@ -395,7 +399,7 @@ class SpmdTrainer(Module):
 
     def _step_log(self, msg, *args, **kwargs):
         logging.info(
-            "%s process % 3d step % 8d] " + msg,
+            "%s process % 3d ,     step % 8d] " + msg,
             self.path(),
             jax.process_index(),
             -1 if self.step is None else self.step,

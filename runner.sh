@@ -9,6 +9,7 @@ nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
 if [ -z "$SLURM_JOB_NODELIST" ]; then
 	nodes="localhost"
 	SLURM_NODEID=0
+	# SLURM_PROCID=${SLURM_PROCID:-0}
 fi
 
 num_nodes=$(echo "$nodes" | wc -l)
@@ -25,7 +26,7 @@ export NEURON_PJRT_PROCESS_INDEX=$SLURM_NODEID
 hostname
 
 JOB_ID=${JOB_ID:=$SLURM_JOB_ID}
-ARTIFACTS_PATH="artifacts"
+ARTIFACTS_PATH="artifacts/sparse"
 TEST_ARTIFACTS_PATH="${ARTIFACTS_PATH}/${JOB_ID}"
 if [ "$1" != "profile" ]; then
 	mkdir -p "$TEST_ARTIFACTS_PATH"
@@ -35,7 +36,9 @@ HLO_DUMP_PATH=${TEST_ARTIFACTS_PATH}/hlo_dump
 PROFILE_DUMP_PATH=${TEST_ARTIFACTS_PATH}/profiles
 RT_PROFILE_DUMP_PATH=${TEST_ARTIFACTS_PATH}/rt_profiles
 
-# export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_snapshots"
+# export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_snapshots --xla_dump_to=logs/xla_dump"
+
+echo "$XLA_FLAGS"
 
 # PJRT Flags 
 if [ "$AXLEARN_REPEATED" = "1" ]; then
@@ -98,6 +101,7 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --no-internal-hlo-remat"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --enable-mixed-precision-accumulation"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} -O1"
 
+echo $AXLEARN_PROFILE_MODE
 
 if [ "$NEURON_ALL_REDUCE_UPCASTER" = 1 ]; then
 	if [ "$AXLEARN_MODEL_NAME" = "envy-Mistral-16x10B" ]; then
@@ -133,6 +137,7 @@ if [ "$AXLEARN_PROFILE_MODE" = "tracerun" ] || [ "$FOR_PROFILE" = "1" ]; then
 		export NEURON_RT_INSPECT_OUTPUT_DIR="${RT_PROFILE_DUMP_PATH}"
 		export NEURON_RT_INSPECT_DEVICE_PROFILE=1
 		export NEURON_RT_ASYNC_EXEC_MAX_INFLIGHT_REQUESTS=0
+		export AXLEARN_PROFILE_TRACE_STEP_NUM=0
 		# export NEURON_RT_ENABLE_DGE_NOTIFICATIONS=0
 		export NEURON_RT_PROFILE_BUF_NOTIFICATION_TYPE_TRACE_MB=256
 		export NEURON_RT_PROFILE_BUF_DMA_MB=192
@@ -231,15 +236,15 @@ profile() {
 	# export NEURON_RT_INSPECT_ON_FAIL=1
 	# export NEURON_RT_PROFILE_BUF_INFER_STATUS_MB=4
 	/opt/aws/neuron/bin/neuron-profile capture -r 64 --num-exec 3 \
-		--collectives-worker-count $((64* $SLURM_JOB_NUM_NODES)) \
-		--collectives-worker-start-id $((64 * $SLURM_PROCID)) \
+		--collectives-worker-count $((64 * ${SLURM_JOB_NUM_NODES})) \
+		--collectives-worker-start-id $((64 * ${SLURM_PROCID})) \
 		-i 0 \
 		-n $neff_path \
 		-s $profile_dir/profile.ntff
 	if [ $SLURM_PROCID -eq 0 ]; then
 		echo "Done profiling"
 		cp $profile_dir/profile_rank_0_exec_3.ntff $upload_dir
-		cp $log_dir/$job_id*.out $upload_dir
+		# cp $log_dir/$job_id*.out $upload_dir
 		cd $(dirname $neff_path)
 		cp file.neff $upload_dir
 		cp log-neuron-cc.txt $upload_dir
@@ -259,7 +264,7 @@ profile() {
 }
 
 if [ "$S3_PROFILE_BASE_PATH" = "" ]; then
-	export S3_PROFILE_BASE_PATH="s3://kaena-tempdata/huilgolr/fs-moe/profiles"
+	export S3_PROFILE_BASE_PATH="s3://kaena-tempdata/divyamsh/fs-moe/profiles"
 fi
 
 if [ "$AXLEARN_PROFILE_MODE" = "capture" ]; then
@@ -286,6 +291,7 @@ else
 
 	if [ "$AXLEARN_PROFILE_MODE" = "tracerun" ]; then
 		if [ $SLURM_PROCID -eq 0 ]; then
+			echo "Running upload profile"
 			bash upload_profile.sh $SLURM_JOB_ID ${PROFILE_JOB_NAME}_${SLURM_JOB_ID}
 		fi
 	fi

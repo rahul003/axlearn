@@ -2,7 +2,7 @@ set -ex
 job_dir=$(realpath artifacts/${1})
 log_dir=$(realpath logs/)
 profile_id=$2
-s3_profile_path=s3://kaena-tempdata/huilgolr/fs-moe/profiles/$2
+s3_profile_path=s3://kaena-tempdata/divyamsh/fs-moe/profiles/$2
 
 profile_dir=$(echo ${job_dir}/rt_profiles/*pid* | awk '{print $1}')
 upload_dir=$job_dir/to_upload
