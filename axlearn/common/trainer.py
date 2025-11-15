@@ -607,14 +607,21 @@ class SpmdTrainer(Module):
                     self._maybe_record_event(measurement.Event.START_DATA_LOADING)
                     try:
                         input_batch = next(input_iterator)
-                        if self.step <= 10 and jax.process_index() == 0:
-                            log_dir = os.path.join(cfg.dir, "input_logs")
-                            os.makedirs(log_dir, exist_ok=True)
-                            # Log the local shard shape first to understand what we have
-                            logging.info(f"Local input_ids shape: {input_batch['input_ids'].shape}")
-                            input_ids_host = jax.device_get(input_batch["input_ids"])
-                            with open(os.path.join(log_dir, f"step_{self.step:08d}_input_ids.txt"), "w") as f:
-                                f.write(str(input_ids_host.tolist()))
+                        # if self.step <= 10:
+                        #     log_dir = os.path.join(cfg.dir, "input_logs")
+                        #     os.makedirs(log_dir, exist_ok=True)
+                            
+                        #     # Each process writes to its own file
+                        #     process_id = jax.process_index()
+                        #     logging.info(f"Process {process_id} - Local input_ids shape: {input_batch['input_ids'].shape}")
+
+                        #     # Don't call jax.device_get at all - just use the data directly
+                        #     with open(os.path.join(log_dir, f"step_{self.step:08d}_process_{process_id}_input_ids.txt"), "w") as f:
+                        #         f.write(str(input_batch['input_ids'].tolist()))
+                        #     input_ids_host = jax.device_get(input_batch["input_ids"])
+                        #     # Unique filename per process
+                        #     # with open(os.path.join(log_dir, f"step_{self.step:08d}_process_{process_id}_input_ids.txt"), "w") as f:
+                        #     #     f.write(str(input_ids_host.tolist()))
 
                         self._maybe_record_event(measurement.Event.END_DATA_LOADING)
                         logging.log_first_n(

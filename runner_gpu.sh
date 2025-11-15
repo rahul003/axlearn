@@ -135,8 +135,13 @@ printenv  #Complete final env just before launch
 
 source env_source.sh
 
+# mkdir -p ${AXLEARN_PATH}/checkpoints
+# cp -r /shared/ishaniak/axlearn/initialization_checks/fuji_4layer/checkpoints/step_00000000 ${AXLEARN_PATH}/checkpoints/
+
 mkdir -p ${AXLEARN_PATH}/checkpoints
-cp -r /shared/ishaniak/axlearn/initialization_checks/fuji_4layer/checkpoints/step_00000000 ${AXLEARN_PATH}/checkpoints/
+if [ ! -d "${AXLEARN_PATH}/checkpoints/step_00000000" ]; then
+    cp -r /shared/ishaniak/axlearn/initialization_checks/fuji_4layer/checkpoints/step_00000000 ${AXLEARN_PATH}/checkpoints/
+fi
 
 python -u -m axlearn.common.launch_trainer_main \
     --module=text.gpt.c4_trainer --config=$MODEL_ARCH \
