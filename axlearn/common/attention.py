@@ -1824,14 +1824,8 @@ class MultiheadAttention(BaseLayer):
             # CP=16
         else:
             CP_AXIS = None
-        print(f"[DEBUG] CP_AXIS = {CP_AXIS}")
-        print(f"[DEBUG] mesh.shape = {mesh.shape}")
-        print(f"[DEBUG] q_proj shape before sharding = {q_proj.shape}")
-        print(f"[DEBUG] k_proj shape before sharding = {k_proj.shape}")
-        print(f"[DEBUG] v_proj shape before sharding = {v_proj.shape}")
         q_proj = with_sharding_constraint(q_proj, PartitionSpec(("data", "fsdp"), CP_AXIS, "model", None))
         k_proj = with_sharding_constraint(k_proj, PartitionSpec(("data", "fsdp"), CP_AXIS, "model", None))
-        print(f"[DEBUG] k_proj shape after sharding = {k_proj.shape}")
         v_proj = with_sharding_constraint(v_proj, PartitionSpec(("data", "fsdp"), CP_AXIS, "model", None))
         
         
@@ -1888,10 +1882,8 @@ class MultiheadAttention(BaseLayer):
             attention_logit_biases += SegmentIdAttentionBias(segment_ids)
         # AG kv proj
         if mesh.shape["seq"] > 1:
-            print(f"[DEBUG] Before AG: k_proj shape = {k_proj.shape}, v_proj shape = {v_proj.shape}")
             k_proj = with_sharding_constraint(k_proj, PartitionSpec(("data", "fsdp"), None, "model", None))
             v_proj = with_sharding_constraint(v_proj, PartitionSpec(("data", "fsdp"), None, "model", None))
-            print(f"[DEBUG] After AG: k_proj shape = {k_proj.shape}, v_proj shape = {v_proj.shape}")
         context, probs = self._compute_attention(
             mode=mode,
             q_proj=q_proj,
@@ -1899,8 +1891,6 @@ class MultiheadAttention(BaseLayer):
             v_proj=v_proj,
             attention_logit_biases=attention_logit_biases,
         )
-        print(f"[DEBUG] After attention: context shape = {context.shape}, probs shape = {probs.shape}")
-        print(f"[DEBUG] CP_AXIS == {CP_AXIS}")
         if mesh.shape["seq"] > 1:
             context = with_sharding_constraint(context, PartitionSpec(("data", "fsdp"), CP_AXIS, "model", None))
             probs = with_sharding_constraint(probs, PartitionSpec(("data", "fsdp"), "model", CP_AXIS, None))
@@ -2203,27 +2193,21 @@ def compute_gqa_logits(q_proj: Tensor, k_proj: Tensor) -> Tensor:
     Returns:
         logits: [batch, num_heads, target_length, source_length].
     """
-    print(f"[DEBUG GQA_LOGITS] Input shapes: q_proj = {q_proj.shape}, k_proj = {k_proj.shape}")
     kv_heads = k_proj.shape[2]
     num_head_group = q_proj.shape[2] // kv_heads
     assert q_proj.shape[2] % kv_heads == 0
-    print(f"[DEBUG GQA_LOGITS] kv_heads = {kv_heads}, num_head_group = {num_head_group}")
 
     # [batch, target_length, kv_heads, num_head_group, per_head_dim]
     q_proj = jnp.reshape(q_proj, [*q_proj.shape[:2], kv_heads, num_head_group, *q_proj.shape[3:]])
-    print(f"[DEBUG GQA_LOGITS] Reshaped q_proj = {q_proj.shape}")
 
     # [batch, source_length, kv_heads, 1, per_head_dim]
     k_proj = jnp.expand_dims(k_proj, axis=3)
-    print(f"[DEBUG GQA_LOGITS] Expanded k_proj = {k_proj.shape}")
 
     # [batch, kv_heads, num_head_group, target_length, source_length]
     logits = jnp.einsum("btkgh,bsk1h->bkgts", q_proj, k_proj)
-    print(f"[DEBUG GQA_LOGITS] Einsum logits = {logits.shape}")
 
     # [batch, num_heads, target_length, source_length]
     final_logits = jnp.reshape(logits, [*logits.shape[:1], -1, *logits.shape[3:]])
-    print(f"[DEBUG GQA_LOGITS] Final logits = {final_logits.shape}")
     return final_logits
 
 
@@ -2287,10 +2271,8 @@ class GroupedQueryAttention(MultiheadAttention):
         Returns:
             logits: [batch, num_heads, target_length, source_length].
         """
-        print(f"[DEBUG GQA] _compute_logits: q_proj shape = {q_proj.shape}, k_proj shape = {k_proj.shape}")
         kv_heads = k_proj.shape[-2]
         num_head_group = self.config.num_heads // kv_heads
-        print(f"[DEBUG GQA] kv_heads = {kv_heads}, num_head_group = {num_head_group}, config.num_heads = {self.config.num_heads}")
         if num_head_group == 1:
             return super()._compute_logits(q_proj=q_proj, k_proj=k_proj)
 
