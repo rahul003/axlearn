@@ -561,16 +561,6 @@ def split_prng_key(
         return jax.tree.map(verify_key_shape, prng_key)
 
     total_num_keys = np.prod(num_keys)
-    
-    # Handle the case where total_num_keys is 0
-    if total_num_keys == 0:
-        # Create an empty array with the correct shape
-        empty_shape = list(num_keys) + list(prng_key.shape)
-        keys = jnp.empty(empty_shape, dtype=prng_key.dtype)
-        for _ in num_keys:
-            keys = StackedKeyArray(keys=keys)
-        return keys
-    
     child_prng_keys = []
     for _ in range(total_num_keys):
         # Generate the child keys iteratively to be consistent with how a parent module
@@ -578,14 +568,14 @@ def split_prng_key(
         prng_key, child_key = jax.random.split(prng_key)
         child_prng_keys.append(child_key)
 
-    def stack_and_reshape(keys):
+    def stack_and_reshape(*keys):
         # Reshape keys from [num_layers, ...] to [num_stages, num_layers_per_stage, ...].
         keys = jnp.stack(keys, axis=0)
         keys = jax.tree.map(lambda x: x.reshape(list(num_keys) + list(x.shape[1:])), keys)
         return keys
 
     # pylint: disable-next=no-value-for-parameter
-    keys = stack_and_reshape(child_prng_keys)
+    keys = jax.tree.map(stack_and_reshape, *child_prng_keys)
 
     for _ in num_keys:
         keys = StackedKeyArray(keys=keys)

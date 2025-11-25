@@ -97,7 +97,7 @@ VOCAB_SIZE = 32 * 1024
 
 MAX_SEQUENCE_LENGTH = {
     "test": 8192,
-    "Switch-Base": 8192,
+    "Switch-Base": 2048,
     "Switch-Large": 2048,
     "Switch-XXL": 2048,
     "Mistral-toy": 256,
@@ -122,7 +122,6 @@ def get_effective_ep_degree():
     return 1
 
 def get_moe_dim_to_mesh_axis_map(ep_degree_local, tp_degree, cp_degree):
-    print(f"EP_WITHIN_NODE = {os.getenv('EP_WITHIN_NODE')}")
     if ep_degree_local > 1:
         # fsdp = 1
         FSDP_AXIS_NAMES = None
@@ -135,7 +134,6 @@ def get_moe_dim_to_mesh_axis_map(ep_degree_local, tp_degree, cp_degree):
             EP_AXIS_NAMES = ("expert", "model", "seq")
             TP_AXIS_NAMES = None
         elif os.getenv('EP_WITHIN_NODE', '1') == '0' and ep_degree_local * tp_degree * cp_degree > 64:
-            # doesn't allow tp>1
             EP_AXIS_NAMES = ("expert", "seq")
             TP_AXIS_NAMES = "model"
         elif ep_degree_local * cp_degree == 16:
@@ -386,7 +384,6 @@ def _generate_trn2_custom_configs(
     ]
 
     ffn_layer_types = get_ffn_layer_types()
-    print(f"DEBUG: ffn_layer_types = {ffn_layer_types}, len = {len(ffn_layer_types)}")
     if len(ffn_layer_types) == 1:
         target_config="model.decoder.transformer.layer.self_attention.attention.input_linear.input_linear"
         if int(os.getenv("AXLEARN_USE_FUSED_QKV", "0")) == 0:

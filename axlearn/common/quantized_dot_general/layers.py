@@ -302,9 +302,6 @@ class QuantizedDotGeneral(BaseLayer):
         )
 
     def einsum_maybe_quantized(self, subscripts, *, activation: Tensor, kernel: Tensor) -> Tensor:
-        print(f"[DEBUG EINSUM] subscripts = {subscripts}")
-        print(f"[DEBUG EINSUM] activation shape = {activation.shape}")
-        print(f"[DEBUG EINSUM] kernel shape = {kernel.shape}")
         """jnp.einsum which uses hardware accelerated quantization if applicable.
 
         See docstring for jax.numpy.einsum.
@@ -346,7 +343,6 @@ class QuantizedDotGeneral(BaseLayer):
                 lhs_is_activation=not is_swapped,
             ),
         )
-        print(f"[DEBUG EINSUM] output shape = {output.shape}")
         # Apply clipping on output.
         if (
             "activation_clipping" in self.children

@@ -1820,8 +1820,6 @@ class MultiheadAttention(BaseLayer):
             CP_AXIS = ("expert", "seq")
         elif mesh.shape["seq"] > 1:
             CP_AXIS = "seq"
-            # expert=4,seq=4, model=4
-            # CP=16
         else:
             CP_AXIS = None
         q_proj = with_sharding_constraint(q_proj, PartitionSpec(("data", "fsdp"), CP_AXIS, "model", None))
@@ -2810,13 +2808,9 @@ class TransformerAttentionLayer(BaseLayer):
             skip_input = target  # pre-norm: where normalization happens within the residual part.
             norm_target = self.norm(target)
             # b, s/tp, h
-            #mesh = thread_k_prresources.env.physical_mesh 
             if os.getenv('EP_WITHIN_NODE', '1') == '1':
                 seq_partition = ("expert", "seq")
-            # elif mesh.shape["seq"] > 1:
-            #     seq_partition = "seq"
             else:
-                # seq_partition = None
                 seq_partition = "seq"
             norm_target = with_sharding_constraint(norm_target, PartitionSpec(("data","fsdp"), seq_partition, None))
             # b,s,h
