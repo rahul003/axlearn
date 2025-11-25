@@ -7,10 +7,9 @@ export AXLEARN_TP_DEGREE=4
 export AXLEARN_EP_DEGREE=4
 export AXLEARN_SEQ_DEGREE=4
 export AXLEARN_TRAIN_BATCH_SIZE=4
+
 # use v2 index calc
 export AXLEARN_USE_BLOCKWISE=2
-# Force block size to be compatible with Neuron
-# - 0 (dense) - 1 (sparse) - 2 (alternating)
 export AXLEARN_MOE_LAYER_FREQ=2
 export AXLEARN_FSDP_DEGREE=1
 export EP_WITHIN_NODE=1
@@ -30,7 +29,7 @@ export VENV_NAME=akshiaws/jaxmoe
 # to simulate slurm job run
 export SLURM_PROCID=0
 # to output artifacts at this path ./artifacts/JOB_ID/
-export JOB_ID=base_alternating_8192_4_4layers
+export JOB_ID=exp
 rm -rf /fsx/akshiaws/artifacts/$JOB_ID/
 bash /fsx/akshiaws/axlearn/runner.sh
 2>&1 | tee log_$JOB_ID.out
