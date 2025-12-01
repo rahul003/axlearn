@@ -9,17 +9,10 @@ import jax_neuronx  # pylint: disable=unused-import
 import neuronxcc.nki.language as nl
 from jax import custom_vjp
 from jax._src.mesh import thread_resources
-# forward kernel
-from neuronxcc.nki._private_kernels.blockwise_mm import (
-        blockwise_mm_selective_cp as blockwise_mm_nki,
-        check_blockwise_mm_kernel_compatibility,
-    )
-# backward kernel
-from neuronxcc.nki._private_kernels.blockwise_mm_bwd import (
-    blockwise_mm_bwd_selective_cp as blockwise_mm_bwd_nki,
-    # check_blockwise_mm_bwd_kernel_compatibility,
-)
-#from neuronxcc.nki._pre_prod_kernels.experimental.blockwise_mm.blockwise_mm_bwd import blockwise_mm_bwd_baseline_shard_intermediate_dropping as blockwise_mm_bwd_nki
+
+from neuronxcc.nki._private_kernels.blockwise_mm import blockwise_mm_selective_cp as blockwise_mm_nki
+from neuronxcc.nki._private_kernels.blockwise_mm_bwd import blockwise_mm_bwd_selective_cp as blockwise_mm_bwd_nki
+
 from neuronxcc.nki.compiler.backends.neuron.dimensions import VNC
 import neuronxcc.nki as nki
 from dataclasses import dataclass
@@ -171,33 +164,6 @@ def _blockwise_mm_bwd(
             skip_dma=SkipMode(False, False),
             ktype=0 if block_to_expert.shape[-1] == down_proj_weight.shape[0] else 1,
         )
-        
-        # hidden_states_grad, affinities_grad, gate_up_proj_weight_grad, down_weight_grad = _blockwise_mm_bwd_nki_call[VNC(2)](
-        #     hidden_states,
-        #     hidden_states_grad,
-        #     expert_affinities_masked,
-        #     expert_affinities_masked_grad,
-        #     gate_up_proj_weight,
-        #     gate_up_proj_weight_grad,
-        #     gate_up_proj_act_checkpoint_T,
-        #     down_proj_weight,
-        #     down_proj_weight_grad,
-        #     down_proj_act_checkpoint,
-        #     token_position_to_id,
-        #     output_hidden_states_grad,
-        #     block_size=512,
-        #     skip_dma= SkipMode(False, False),
-        #     compute_dtype=nl.bfloat16,
-        #     is_tensor_update_accumulating=True,
-        #     BLOCK_TILE_SIZE = 512,
-        #     activation_type=ActFnType.SiLU,
-        #     clamp_limits= ClampLimits(),
-        #     bias=False,
-        #     gate_and_up_proj_bias=None,
-        #     gate_and_up_proj_bias_grad=None,
-        #     down_proj_bias=None,
-        #     down_proj_bias_grad=None
-        # )
         
         sliced_tensor = hidden_states_grad[:-1,:]
         hidden_states_grad = sliced_tensor.reshape(1, 1, -1, H)

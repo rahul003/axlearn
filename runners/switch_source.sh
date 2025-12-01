@@ -6,10 +6,11 @@ export AXLEARN_MODEL_NAME="envy-Switch-Base"
 export AXLEARN_TP_DEGREE=4
 export AXLEARN_EP_DEGREE=4
 export AXLEARN_SEQ_DEGREE=4
-export AXLEARN_TRAIN_BATCH_SIZE=4
-
+export AXLEARN_TRAIN_BATCH_SIZE=2
 # use v2 index calc
 export AXLEARN_USE_BLOCKWISE=2
+# Force block size to be compatible with Neuron
+# - 0 (dense) - 1 (sparse) - 2 (alternating)
 export AXLEARN_MOE_LAYER_FREQ=2
 export AXLEARN_FSDP_DEGREE=1
 export EP_WITHIN_NODE=1
