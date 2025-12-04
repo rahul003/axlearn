@@ -1161,24 +1161,25 @@ class SpmdTrainer(Module):
         return evaler_summaries
 
     def _pjit_train_step(self) -> jax.stages.Wrapped:
-        # return debug_callback(
-        return pjit(
-            self._train_step,
-            in_shardings=(
-                self._trainer_state_partition_specs,
-                self._train_step_input_partition_specs(),
-            ),
-            out_shardings=(
-                self._trainer_state_partition_specs,
-                dict(
-                    summaries=None,
-                    loss=None,
-                    aux=None,
+        return debug_callback(
+            # return 
+            pjit(
+                self._train_step,
+                in_shardings=(
+                    self._trainer_state_partition_specs,
+                    self._train_step_input_partition_specs(),
                 ),
-            ),
-            donate_argnums=(0,),  # donate the state
+                out_shardings=(
+                    self._trainer_state_partition_specs,
+                    dict(
+                        summaries=None,
+                        loss=None,
+                        aux=None,
+                    ),
+                ),
+                donate_argnums=(0,),  # donate the state
+            )
         )
-        # )
     
 
     def compile_train_step(
