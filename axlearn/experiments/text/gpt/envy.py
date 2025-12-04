@@ -495,7 +495,8 @@ def get_trainer_kwargs(
     remat_policy = get_remat_policy()
     ffn_layer_types = get_ffn_layer_types()
     fsdp_degree=int(os.getenv("AXLEARN_FSDP_DEGREE", -1))
-    neuron_mesh = mesh_shape_from_axes(fsdp=fsdp_degree, model=TP_DEGREE, expert=EP_DEGREE, seq=SEQ_DEGREE)
+    #neuron_mesh = mesh_shape_from_axes(fsdp=fsdp_degree, model=TP_DEGREE, expert=EP_DEGREE, seq=SEQ_DEGREE)
+    neuron_mesh = mesh_shape_from_axes(data=-1,fsdp=fsdp_degree, model=TP_DEGREE, expert=EP_DEGREE, seq=SEQ_DEGREE)
     # potentially change for different models
     if EP_DEGREE > 1:
         # to use default of ("expert", "fsdp", "seq")
