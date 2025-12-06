@@ -51,18 +51,18 @@ def can_use_blockwise_matmul_nki(
     block_size,
     glu_mlp,
 ):
-    if _backend() != "neuron":
-        return False
+    # if _backend() != "neuron":
+    #     return False
 
-    if not glu_mlp:
-        print("Blockwise NKI kernel incompatible with glu_mlp=False")
-        return False
+    # if not glu_mlp:
+    #     print("Blockwise NKI kernel incompatible with glu_mlp=False")
+    #     return False
 
-    if blockwise_mm_nki is None:
-        print("Failed to load Blockwise NKI kernel.")
-        return False
+    # if blockwise_mm_nki is None:
+    #     print("Failed to load Blockwise NKI kernel.")
+    #     return False
     
-    return True
+    return False
     
     # try:
     #     check_blockwise_mm_kernel_compatibility(
