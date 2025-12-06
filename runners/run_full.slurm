@@ -29,12 +29,12 @@ elif [ $mode = "repeated" ]; then
     echo "Using repeated"
     export AXLEARN_REPEATED=1
     export VENV_NAME=jaxmoe
-    # Set to use repeated, make sure to use /fsx/huilgolr/may-artifacts/repeated/libneuronxla-2.2.20250521+7e624b6.dev-py3-none-linux_x86_64
+    # Set to use repeated, make sure to use /fsx/huilgolr/jul-end-artifacts/repeated/libneuronxla-2.2.20250521+7e624b6.dev-py3-none-linux_x86_64
 fi
 
 if [ ${2:-1} = "1" ]; then
     echo "Installing"
-    srun -l ./setup_node.sh ../may-artifacts/
+    srun -l ./setup_node.sh /fsx/akshiaws/jul-end-artifacts
 else
     echo "Skip installing"
 fi

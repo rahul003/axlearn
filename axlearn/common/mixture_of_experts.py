@@ -180,12 +180,18 @@ def calculate_token_position_to_id(block_position_indices, tokens_indices,
         group_indices = jnp.arange(G)[None, :, None, None]
         group_indices = jnp.broadcast_to(group_indices, (O, G, num_tokens, E))
 
+        # Clamp block_position_indices to prevent out-of-bounds access
+        max_valid_index = num_blocks * block_size
+        block_position_indices = jnp.clip(block_position_indices, 0, max_valid_index)
+
         token_position_to_id = jnp.zeros((O, G, num_blocks * block_size + 1), dtype=jnp.int32)
         token_position_to_id = token_position_to_id.at[batch_indices, group_indices, block_position_indices].set(tokens_indices+1)
 
         token_position_to_id = token_position_to_id[:, :, 1:]
         token_position_to_id = token_position_to_id - 1
         token_position_to_id = jnp.where(token_position_to_id==-1, total_tokens, token_position_to_id)   
+        # Clamp final result to prevent out-of-bounds access
+        token_position_to_id = jnp.clip(token_position_to_id, 0, total_tokens)
         dest_output = dest_output.at[0].set(token_position_to_id)
         return dest_output
 
@@ -215,6 +221,8 @@ def blockwise_mm_per_group_native(hidden_states, expert_affinities_masked, gate_
     def body_fun(b, carry):
         output_jax = carry
         local_token_position_to_id = token_position_to_id[b, :]
+        # Clamp indices to prevent out-of-bounds access on Neuron hardware
+        local_token_position_to_id = jnp.clip(local_token_position_to_id, 0, hidden_states.shape[0] - 1)
         hidden_states_padded = hidden_states
         expert_affinities_padded = expert_affinities
         local_hidden_states = hidden_states_padded[local_token_position_to_id].astype(jnp.float32)
@@ -965,6 +973,9 @@ class TopKGatingGather(TopKGating):
             group_indices = group_indices.reshape(O, G, -1)
             
             token_permutation_idx = token_permutation_idx.reshape(O, G, -1)
+            # Clamp token_permutation_idx to prevent out-of-bounds scatter access
+            max_valid_index = expert_capacity * num_experts
+            token_permutation_idx = jnp.clip(token_permutation_idx, 0, max_valid_index)
 
             # Create scatter indices
             scatter_indices = jnp.stack(
@@ -1222,8 +1233,9 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
         group_indices = jnp.arange(G)[None, :, None, None]
         group_indices = jnp.broadcast_to(group_indices, (O, G, num_tokens, E))
 
-        # (O, G, S*top_k, E)
-        # block_position_indices
+        # Clamp block_position_indices to prevent out-of-bounds scatter access
+        max_valid_index = num_blocks * block_size
+        block_position_indices = jnp.clip(block_position_indices, 0, max_valid_index)
         
         # Create scatter indices
         scatter_indices = jnp.stack([batch_indices, group_indices, block_position_indices], axis=-1, dtype=jnp.int32)
@@ -1247,6 +1259,8 @@ class TopKGatingGatherBlockwise(TopKGatingGather):
         
         token_position_to_id = token_position_to_id - 1
         token_position_to_id = jnp.where(token_position_to_id==-1, num_tokens,token_position_to_id)
+        # Clamp final token_position_to_id to prevent out-of-bounds access
+        token_position_to_id = jnp.clip(token_position_to_id, 0, num_tokens)
         token_position_to_id = self._remat_name(token_position_to_id, "blockwisegating.token_position_to_id")
         return token_position_to_id
     
@@ -1473,6 +1487,12 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
             check_rep=False
         )
         token_position_to_id = token_position_to_id_sm(expert_capacity, block_position_indices, local_num_experts)
+        # Clamp token_position_to_id indices
+        token_position_to_id = jnp.clip(token_position_to_id, 0, S - 1)
+        
+        # Clamp block_to_expert indices
+        block_to_expert = jnp.clip(block_to_expert, 0, cfg.num_experts - 1)
+
         router_z_loss = _router_z_loss(logits)
         
         return self.Output(
