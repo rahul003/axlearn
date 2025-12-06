@@ -1161,25 +1161,25 @@ class SpmdTrainer(Module):
         return evaler_summaries
 
     def _pjit_train_step(self) -> jax.stages.Wrapped:
-        return debug_callback(
-            # return 
-            pjit(
-                self._train_step,
-                in_shardings=(
-                    self._trainer_state_partition_specs,
-                    self._train_step_input_partition_specs(),
+        # return debug_callback(
+        return pjit(
+            self._train_step,
+            in_shardings=(
+                self._trainer_state_partition_specs,
+                self._train_step_input_partition_specs(),
+            ),
+            out_shardings=(
+                self._trainer_state_partition_specs,
+                dict(
+                    summaries=None,
+                    loss=None,
+                    aux=None,
                 ),
-                out_shardings=(
-                    self._trainer_state_partition_specs,
-                    dict(
-                        summaries=None,
-                        loss=None,
-                        aux=None,
-                    ),
-                ),
-                donate_argnums=(0,),  # donate the state
-            )
+            ),
+            donate_argnums=(0,),  # donate the state
         )
+            # while_loop_tripcount = 1000000000,
+        # )
     
 
     def compile_train_step(
@@ -1277,6 +1277,9 @@ class SpmdTrainer(Module):
         )
         forward_outputs: ForwardOutputs = fwd_bwd_outputs.forward_outputs
         updated_model_params = fwd_bwd_outputs.backward_outputs.updated_params
+        
+        # jax.debug.print("token_position_to_id: {x}", x=forward_outputs.output_collection.module_outputs.get("token_position_to_id", "not_found"))
+        
         updated_state = TrainerState(
             prng_key=new_prng_key,
             model=updated_model_params,

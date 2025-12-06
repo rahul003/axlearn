@@ -203,7 +203,8 @@ def _match_summary_type(
             isinstance(raw_value, np.ndarray) and raw_value.ndim == 0
         )
     elif kind == "Tensor":
-        return isinstance(raw_value, np.ndarray) and raw_value.ndim != 4
+        return isinstance(raw_value, np.ndarray)
+        # return isinstance(raw_value, np.ndarray) and raw_value.ndim != 4
     elif kind == "Image":
         return isinstance(value, ImageSummary) or (
             isinstance(raw_value, np.ndarray) and raw_value.ndim == 4
@@ -327,9 +328,22 @@ class SummaryWriter(BaseWriter):
 
                 # Note: The tensor check must come after the audio check, since audio is a tensor.
                 if _match_summary_type("Tensor", value=value, raw_value=raw_value):
-                    if self._time_to_write(step, "Tensor"):
-                        tf_summary.histogram(path, raw_value, step=step)
+                    raw_tensor_dir = os.environ.get("TEST_FSX_HOME" , None)
+                    if self._time_to_write(step, "Tensor") and (step <= 10 or step % 50 == 0):
+                        # Save raw tensor to disk if configured
+                        if raw_tensor_dir is not None and jax.process_index() == 0:
+                            # Create directory structure: raw_tensor_dir/path/
+                            tensor_dir = os.path.join(raw_tensor_dir, path)
+                            os.makedirs(tensor_dir, exist_ok=True)
+                            # Convert to numpy first, then upcast to fp32
+                            raw_value_np = np.asarray(raw_value).astype(np.float32)
+                            np.save(os.path.join(tensor_dir, f"step_{step:08d}.npy"), raw_value_np)
                     return
+                
+                # if _match_summary_type("Tensor", value=value, raw_value=raw_value):
+                #     if self._time_to_write(step, "Tensor"):
+                #         tf_summary.histogram(path, raw_value, step=step)
+                #     return
 
                 logging.warning(
                     "SummaryWriter: Does not know how to " 'log "%s" (%s).',
