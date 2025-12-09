@@ -1645,7 +1645,6 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
             # (batch, seq_len, input_dim)
             x = self.norm(inputs)
             x = self._dispatch_and_combine(x)
-            x = jax.lax.stop_gradient(x)
             x = self.dropout2(x)
             x = self.stochastic_depth(x)
             if cfg.residual_weight != 1:
@@ -1653,7 +1652,6 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
             x += inputs
         elif cfg.structure == "postnorm":
             x = self._dispatch_and_combine(inputs)
-            x = jax.lax.stop_gradient(x)
             x = self.dropout(x)
             x = self.stochastic_depth(x)
             if cfg.residual_weight != 1:
@@ -1662,7 +1660,6 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
         elif cfg.structure == "hybridnorm":
             x = self.prenorm(inputs)
             x = self._dispatch_and_combine(x)
-            x = jax.lax.stop_gradient(x)
             x = self.postnorm(x)
             x = self.dropout2(x)
             x = self.stochastic_depth(x)
@@ -1671,7 +1668,6 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
             x += inputs
         elif cfg.structure == "nonorm":
             x = self._dispatch_and_combine(inputs)
-            x = jax.lax.stop_gradient(x)
             x = self.dropout2(x)
             x = self.stochastic_depth(x)
             # We still apply `residual_weight`, since there is usually a residual link outside of
@@ -1681,7 +1677,6 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
         elif cfg.structure == "v2":
             x = self.in_norm(inputs) if NormPosition.IN_NORM in cfg.norm else inputs
             x = self._dispatch_and_combine(x)
-            x = jax.lax.stop_gradient(x)
             x = self.res_norm(x) if NormPosition.RES_NORM in cfg.norm else x
             x = self.dropout2(x)
             x = self.stochastic_depth(x)
