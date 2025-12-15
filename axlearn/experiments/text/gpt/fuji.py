@@ -69,7 +69,7 @@ from axlearn.experiments.trainer_config_utils import TrainerConfigFn, V6eFlashCo
 # Import the FP8ConfigModifier below if using FP8 training. See config for A3 / A4 instances below
 # from axlearn.common.trainer_config_modifier import FP8ConfigModifier
 
-MODEL_SIZES = ("test", "1B", "3B", "7B", "8B", "70B")
+MODEL_SIZES = ("test", "1B", "3B", "7B", "8B", "70B", "405B")
 
 
 class Version(enum.Enum):
