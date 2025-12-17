@@ -10,14 +10,12 @@ import neuronxcc.nki.language as nl
 from jax import custom_vjp
 from jax._src.mesh import thread_resources
 
-from neuronxcc.nki._private_kernels.blockwise_mm import (
-        blockwise_mm_selective_cp as blockwise_mm_nki,
-        check_blockwise_mm_kernel_compatibility,
-    )
-from neuronxcc.nki._private_kernels.blockwise_mm_bwd import (
-    blockwise_mm_bwd_selective_cp as blockwise_mm_bwd_nki,
-    # check_blockwise_mm_bwd_kernel_compatibility,
-)
+from neuronxcc.nki._private_kernels.blockwise_mm import blockwise_mm_selective_cp as blockwise_mm_nki
+from neuronxcc.nki._private_kernels.blockwise_mm_bwd import blockwise_mm_bwd_selective_cp as blockwise_mm_bwd_nki
+
+from neuronx_distributed.kernels.find_nonzero_indices import find_nonzero_indices
+from neuronx_distributed.kernels.indexed_flatten import indexed_flatten
+
 from neuronxcc.nki.compiler.backends.neuron.dimensions import VNC
 import neuronxcc.nki as nki
 from dataclasses import dataclass
@@ -106,7 +104,54 @@ def _blockwise_mm_fwd(
         expert_affinities_masked = jnp.squeeze(expert_affinities_masked, axis=(0,1,))
         token_position_to_id = jnp.squeeze(token_position_to_id, axis=(0,1,))
         block_to_expert = jnp.squeeze(block_to_expert, axis=(0,1,))
-
+        
+    use_index_calc_kernel = True
+    if use_index_calc_kernel:
+        T,E = expert_affinities_masked.shape # T, local_experts
+        global_rank = jax.process_index()
+        E_local = E
+        max_chunk_size = 16384
+        num_blocks = E_local # one block per expert
+        # TODO : if E_local % tp_size != 0
+        indices, nonzero_counts = find_nonzero_indices[VNC(2)](
+            input_tensor=expert_affinities_masked.astype(jnp.float32),
+            row_start_id=jnp.array([global_rank * 2], dtype=jnp.int32), # row_start_id to the start of the expert on this EP rank.
+            n_rows = E_local, # to the number of experts on this EP rank.
+            chunk_size=min(T, max_chunk_size), 
+            index_dtype = jnp.int32,
+        )
+        
+        # TODO : gather non_zero counts : [E_kernel,] --> [E/EP,]        
+        
+        # Get number of blocks and cumulative number of blocks per expert.
+        blocks_per_expert = jnp.ones(E_local, dtype = jnp.int32) # (E_EP,) 
+        blocks_per_expert_expanded = jnp.expand_dims(blocks_per_expert, axis=1)  # (E_EP, 1)
+        
+        # TODO : Calculate padding blocks needed and add to last expert
+        
+        cum_blocks_per_expert = jnp.cumsum(blocks_per_expert_expanded)
+        cum_blocks_per_expert = cum_blocks_per_expert.at[1:].set(cum_blocks_per_expert[:-1])
+        cum_blocks_per_expert = cum_blocks_per_expert.at[0].set(0)
+    
+        f_len = min(128, T // 16)
+        row_offsets = cum_blocks_per_expert * (block_size // 128)
+        # TODO : if E_local % tp_size != 0
+        # [E_local, T] --> [num_blocks * block_size,]
+        token_position_to_id_padded = indexed_flatten[VNC(2)](
+                input_tensor = indices,
+                f_len = f_len,
+                output_len=num_blocks*block_size + T,
+                row_offsets= row_offsets.reshape(-1).astype(jnp.int32),
+                row_offsets_start = 0,
+            )
+        # TODO : # Aggregate information across TP ranks when TP>1
+        
+        token_position_to_id = token_position_to_id_padded[:num_blocks * block_size]
+        
+        # Get the block to expert mapping.
+        block_ids = jnp.arange(num_blocks, dtype = jnp.int32)
+        block_to_expert = jnp.sum(block_ids >= cum_blocks_per_expert[1:].reshape(-1, 1), axis=0).astype(jnp.int32)
+            
     # add +1 for padding
     with jax.named_scope("add padding"):
         padding_h = jnp.zeros((1, hidden_states.shape[1]), dtype=hidden_states.dtype)
