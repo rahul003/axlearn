@@ -2,7 +2,7 @@
 #export AXLEARN_JAX_BACKEND="cpu"
 
 # comment this out to run full model
-export AXLEARN_NUM_LAYERS=4
+export AXLEARN_NUM_LAYERS=2
 export AXLEARN_REMAT_LAYER=selective
 export AXLEARN_MODEL_NAME="envy-Switch-Base"
 export AXLEARN_TP_DEGREE=4
@@ -15,7 +15,7 @@ export AXLEARN_TRAIN_BATCH_SIZE=4
 export AXLEARN_USE_BLOCKWISE=2
 
 # 0: dense, 1: sparse, 2: alternating
-export AXLEARN_MOE_LAYER_FREQ=2
+export AXLEARN_MOE_LAYER_FREQ=1
 
 export EP_WITHIN_NODE=1
 # export AXLEARN_PROFILE_MODE="tracerun"
@@ -33,7 +33,7 @@ export VENV_NAME=akshiaws/jaxmoe
 # to simulate slurm job run
 export SLURM_PROCID=0
 # to output artifacts at this path ./artifacts/JOB_ID/
-export JOB_ID=dummy
+export JOB_ID=index
 
 rm -rf /fsx/akshiaws/artifacts/$JOB_ID/
 bash /fsx/akshiaws/axlearn/runner.sh
