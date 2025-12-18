@@ -6,14 +6,15 @@
 
 """ASR decoder layers."""
 
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Union, cast
 
 import chex
 import jax
 import jax.numpy as jnp
 import optax
 
-from axlearn.common import decoding, struct
+from axlearn.audio.aligner import ctc_aligner
+from axlearn.common import decoding, flax_struct
 from axlearn.common.attention import TransformerAttentionLayer
 from axlearn.common.base_layer import BaseLayer
 from axlearn.common.base_model import BaseModel
@@ -34,7 +35,7 @@ from axlearn.common.decoding import (
 from axlearn.common.layers import Embedding, Linear
 from axlearn.common.logit_modifiers import LogitsToLogitsFn
 from axlearn.common.loss import cross_entropy
-from axlearn.common.metrics import WeightedScalar
+from axlearn.common.metrics import WeightedSummary
 from axlearn.common.module import Module, child_context
 from axlearn.common.rnn import BaseRNNCell, LSTMCell
 from axlearn.common.transducer import Transducer, log_probs_from_blank_and_tokens
@@ -140,7 +141,7 @@ class CommonPrefixMerger(PrefixMerger):
         return jax.vmap(jax.vmap(_update_seq))(tokens, state)
 
 
-class DecodeOutputs(struct.PyTreeNode):
+class DecodeOutputs(flax_struct.PyTreeNode):
     """Output of decoding."""
 
     # Raw decode output sequences. May contain blank and/or repeated tokens.
@@ -237,7 +238,7 @@ class BaseASRDecoderModel(BaseModel):
 
     def _input_stats_summaries(
         self, input_batch: Nested[Tensor], *, target_paddings: Tensor, is_valid_example: Tensor
-    ) -> dict[str, Union[WeightedScalar, Tensor]]:
+    ) -> dict[str, Union[WeightedSummary, Tensor]]:
         """Computes input lengths stats.
 
         Args:
@@ -257,13 +258,13 @@ class BaseASRDecoderModel(BaseModel):
         total_num_examples = jnp.maximum(is_valid_example.sum(), 1.0)
         total_num_frames = jnp.maximum(jnp.size(input_batch["paddings"]), 1)
         input_stats = {
-            "input_stats/average_target_length": WeightedScalar(
+            "input_stats/average_target_length": WeightedSummary(
                 total_target_lengths / total_num_examples, total_num_examples
             ),
-            "input_stats/average_source_length": WeightedScalar(
+            "input_stats/average_source_length": WeightedSummary(
                 total_source_lengths / total_num_examples, total_num_examples
             ),
-            "input_stats/frame_packing_efficiency": WeightedScalar(
+            "input_stats/frame_packing_efficiency": WeightedSummary(
                 total_source_lengths / total_num_frames, total_num_frames
             ),
         }
@@ -323,7 +324,7 @@ class CTCDecoderModel(BaseASRDecoderModel):
         per_example_weight: Tensor,
         paddings: Tensor,
         target_paddings: Tensor,
-    ) -> dict[str, Union[WeightedScalar, Tensor]]:
+    ) -> dict[str, Union[WeightedSummary, Tensor]]:
         valid_frame_mask = (1.0 - paddings) * per_example_weight[:, None]
         valid_label_mask = (1.0 - target_paddings) * per_example_weight[:, None]
 
@@ -335,17 +336,17 @@ class CTCDecoderModel(BaseASRDecoderModel):
 
         ret_dict = {}
         # 1. loss/example_weight
-        ret_dict["loss/example_weight"] = WeightedScalar(jnp.mean(per_example_weight), batch_size)
+        ret_dict["loss/example_weight"] = WeightedSummary(jnp.mean(per_example_weight), batch_size)
         # 2. loss/ctc_loss
-        ret_dict["loss/ctc_loss"] = WeightedScalar(
+        ret_dict["loss/ctc_loss"] = WeightedSummary(
             total_ctc_loss / jnp.maximum(per_example_weight.sum(), 1),
             jnp.maximum(per_example_weight.sum(), 1),
         )
         # 3. loss/invalid_seq_percent, per_frame_ctc_loss, per_label_ctc_loss
         invalid_example_percent = 1.0 - jnp.sum(per_example_weight) / batch_size
         ret_dict["loss/invalid_seq_percent"] = invalid_example_percent
-        ret_dict["loss/per_frame_ctc_loss"] = WeightedScalar(per_frame_loss, num_valid_frames)
-        ret_dict["loss/per_label_ctc_loss"] = WeightedScalar(per_label_loss, num_valid_labels)
+        ret_dict["loss/per_frame_ctc_loss"] = WeightedSummary(per_frame_loss, num_valid_frames)
+        ret_dict["loss/per_label_ctc_loss"] = WeightedSummary(per_label_loss, num_valid_labels)
 
         return ret_dict
 
@@ -619,6 +620,32 @@ class CTCDecoderModel(BaseASRDecoderModel):
             scores=scores,
         )
 
+    def align(self, input_batch: Nested[Tensor]) -> Nested[Tensor]:
+        """Given an input_batch that contains both audio and labels, outputs text-audio alignment.
+        Args:
+            input_batch: See `CTCDecoderModel`'s forward interface. `input_batch` should contain:
+                * inputs: A Tensor of shape [batch_size, num_frames, dim].
+                * paddings: A 0/1 Tensor of shape [batch_size, num_frames].
+                * target_labels: A Tensor of shape [batch_size, label_length].
+                    target_labels < 0 means this is a padding position.
+        Returns:
+            A NestedTensor, converted from `ctc_aligner.AlignmentOutput` object
+        """
+        logits = self.predict(input_batch)
+        log_posterior = jax.nn.log_softmax(logits, axis=-1)
+        log_pos_paddings = cast(Tensor, input_batch["paddings"])
+        labels = cast(Tensor, input_batch["target_labels"])
+        label_paddings = jnp.where(labels >= 0, 0, 1)
+
+        alignment_output = ctc_aligner.ctc_forced_alignment(
+            log_pos=log_posterior,
+            log_pos_paddings=log_pos_paddings,
+            labels=labels,
+            label_paddings=label_paddings,
+            blank_id=self.config.blank_id,
+        )
+        return alignment_output.asdict()
+
 
 def _map_label_sequences(
     inputs: Tensor, *, remove_repeats: bool, blank_id: int = 0, pad_id: int = 0
@@ -869,11 +896,11 @@ class TransducerDecoderModel(BaseASRDecoderModel):
 
         self.add_summary(
             "loss/example_weight",
-            WeightedScalar(jnp.mean(per_example_weight), per_example_weight.shape[0]),
+            WeightedSummary(jnp.mean(per_example_weight), per_example_weight.shape[0]),
         )
         self.add_summary(
             "loss/rnnt_loss",
-            WeightedScalar(loss, jnp.maximum(1, per_example_weight.sum())),
+            WeightedSummary(loss, jnp.maximum(1, per_example_weight.sum())),
         )
         return loss, aux_outputs
 
@@ -986,7 +1013,7 @@ class TransducerDecoderModel(BaseASRDecoderModel):
 
         return tokens_to_scores
 
-    def beam_search_decode(
+    def beam_search_decode(  # pytype: disable=signature-mismatch
         self,
         input_batch: Nested[Tensor],
         num_decodes: int,
@@ -1171,9 +1198,9 @@ class LASDecoderModel(BaseASRDecoderModel):
         # Number of valid tokens per example.
         per_example_weight = jnp.sum(live_targets, axis=-1)
         num_targets = per_example_weight.sum()
-        self.add_summary("loss", WeightedScalar(loss, num_targets))
-        self.add_summary("perplexity", WeightedScalar(jnp.exp(loss), num_targets))
-        self.add_summary("token_accuracy", WeightedScalar(loss_dict["accuracy"], num_targets))
+        self.add_summary("loss", WeightedSummary(loss, num_targets))
+        self.add_summary("perplexity", WeightedSummary(jnp.exp(loss), num_targets))
+        self.add_summary("token_accuracy", WeightedSummary(loss_dict["accuracy"], num_targets))
         return loss, dict(per_example_loss=per_example_loss, per_example_weight=per_example_weight)
 
     def _compute_attention_logit_biases(
@@ -1198,7 +1225,7 @@ class LASDecoderModel(BaseASRDecoderModel):
         if "prefix" not in input_batch:
             raise ValueError("Input batch is expected to contain `prefix`.")
 
-    def beam_search_decode(
+    def beam_search_decode(  # pytype: disable=signature-mismatch
         self,
         input_batch: Nested[Tensor],
         num_decodes: int,

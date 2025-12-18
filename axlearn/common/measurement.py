@@ -2,105 +2,31 @@
 
 """A library to measure e2e metrics like goodput."""
 
-import enum
 import importlib
-from typing import Optional, TypeVar
+from typing import Optional
 
 from absl import flags, logging
 
-from axlearn.common.config import REQUIRED, Configurable, Required, config_class
+from axlearn.common.measurement_base import (
+    Event,
+    EventType,
+    Recorder,
+    _recorders,
+    define_flags,
+    register_recorder,
+)
 
-
-class Event(enum.Enum):
-    """Event to be recorded.
-
-    Attributes:
-        START_JOB: Start of job.
-        END_JOB: End of job.
-        START_STEP: Start of a training step. Should be recorded with `step` as a positional arg.
-        START_ACCELERATOR_INIT: Start of accelerator mesh initialization.
-        END_ACCELERATOR_INIT: End of accelerator mesh initialization.
-        START_TRAINING_PREPARATION: Start of training preparation.
-        END_TRAINING_PREPARATION: End of training preparation.
-        START_DATA_LOADING: Start of data loading.
-        END_DATA_LOADING: End of data loading.
-        START_CUSTOM_BADPUT_EVENT: Start of custom badput event.
-        END_CUSTOM_BADPUT_EVENT: End of custom badput event.
-    """
-
-    START_JOB = "START_JOB"
-    END_JOB = "END_JOB"
-    START_STEP = "START_STEP"
-    START_ACCELERATOR_INIT = "START_ACCELERATOR_INIT"
-    END_ACCELERATOR_INIT = "END_ACCELERATOR_INIT"
-    START_TRAINING_PREPARATION = "START_TRAINING_PREPARATION"
-    END_TRAINING_PREPARATION = "END_TRAINING_PREPARATION"
-    START_DATA_LOADING = "START_DATA_LOADING"
-    END_DATA_LOADING = "END_DATA_LOADING"
-    START_CUSTOM_BADPUT_EVENT = "START_CUSTOM_BADPUT_EVENT"
-    END_CUSTOM_BADPUT_EVENT = "END_CUSTOM_BADPUT_EVENT"
-
-
-class Recorder(Configurable):
-    """The base interface for collecting e2e metrics."""
-
-    @config_class
-    class Config(Configurable.Config):
-        """Configures Recorder.
-
-        Attributes:
-            name: Name of the recorder.
-        """
-
-        name: Required[str] = REQUIRED
-
-    @classmethod
-    def from_flags(cls, fv: Optional[flags.FlagValues]) -> "Recorder":
-        """Converts flags to a recorder."""
-        raise NotImplementedError(cls)
-
-    def record(self, event: Event, *args, **kwargs):
-        """Records an event with the given name."""
-        raise NotImplementedError(type(self))
-
-    def start_monitoring(self, **kwargs):
-        """Starts computing and uploading metrics at some configured interval in the background."""
-        raise NotImplementedError(type(self))
-
-
-_recorders: dict[str, type] = {}
-_T = TypeVar("_T")
-
-
-def register_recorder(name: str):
-    def fn(cls: _T) -> _T:
-        """Registers a recorder class for `get_recorder_config`."""
-        if name in _recorders:
-            raise ValueError(f"Recorder {name} is already registered.")
-        _recorders[name] = cls
-        return cls
-
-    return fn
-
-
-def define_flags(**kwargs):
-    """Common measurement flags."""
-
-    flags.DEFINE_string(
-        "recorder_type",
-        None,
-        "The recorder type. It can be a recorder name, e.g. `my_recorder`, or "
-        "a module paired with a recorder name, e.g. `my.module:my_recorder`.",
-        **kwargs,
-    )
-    flags.DEFINE_multi_string(
-        "recorder_spec",
-        [],
-        "Recorder spec provided as key=value. "
-        "Refer to each recorders's `from_flags` method docstring for details.",
-        **kwargs,
-    )
-
+__all__ = [
+    "Event",
+    "EventType",
+    "Recorder",
+    "define_flags",
+    "register_recorder",
+    "global_recorder",
+    "initialize",
+    "record_event",
+    "start_monitoring",
+]
 
 global_recorder: Optional[Recorder] = None
 
@@ -135,7 +61,13 @@ def initialize(fv: flags.FlagValues):
 
 
 def record_event(event: Event):
-    """Records a global event."""
+    """A global utility to record an event via the `global_recorder`.
+
+    Note:
+        Do not call this function from within a
+        `recorder.record_event()` context manager. Prefer using the
+        `recorder.record_event()` in call-sites over this utility.
+    """
     if global_recorder is None:
         logging.log_first_n(logging.INFO, "No recorder configured, ignoring events.", 1)
     else:
@@ -143,7 +75,13 @@ def record_event(event: Event):
 
 
 def start_monitoring():
-    """Begins monitoring events as per global monitor functionality."""
+    """A global utility to start monitoring metrics via the `global_recorder`.
+
+    Note:
+        Do not call this function from within a
+        `recorder.maybe_monitor_all()` context manager. Prefer using the
+        `recorder.maybe_monitor_all()` in call-sites over this utility.
+    """
     if global_recorder is None:
         logging.log_first_n(
             logging.INFO, "Since recorder is not set up, monitoring cannot be started.", 1

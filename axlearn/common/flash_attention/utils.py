@@ -1,12 +1,12 @@
 # Copyright © 2023 Apple Inc.
 
 """Implements FlashAttention kernel dispatch."""
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from absl import logging
 
 from axlearn.common.attention_bias import BaseAttentionBias
-from axlearn.common.flash_attention.common import BaseFlashAttention, ReferenceMHA
+from axlearn.common.flash_attention.common import ReferenceMHA
 from axlearn.common.flash_attention.gpu_attention import (
     CuDNNGPUFlashAttention,
     CuDNNGPUFlashAttentionWithExplicitBias,
@@ -14,15 +14,22 @@ from axlearn.common.flash_attention.gpu_attention import (
 )
 from axlearn.common.flash_attention.gpu_decoding import GPUDecoding
 from axlearn.common.flash_attention.gpu_paged_attention import GPUPagedAttention
-from axlearn.common.flash_attention.tpu_attention import LegacyTPUFlashAttention, TPUSplashAttention
+from axlearn.common.flash_attention.tpu_attention import (
+    LegacyTPUFlashAttention,
+    TPUSplashAttention,
+    TPUSplashAttentionWithAllGather,
+)
 from axlearn.common.flash_attention.tpu_decoding import TPUDecoding
 from axlearn.common.flash_attention.tpu_paged_attention import TPUPagedAttention
+from axlearn.common.flash_attention.types import FlashAttentionWithShardMapSpecs
+from axlearn.common.kv_cache.base_kv_cache import BaseKVCache
+from axlearn.common.kv_cache.paged_kv_cache import PagedKVCache
 from axlearn.common.utils import Tensor
 
 BACKENDS = dict(
     # Always try decoding kernel first, then regular attention kernels.
     # For TPU, prefer SplashAttention whenever possible, as it's faster than legacy.
-    tpu=[TPUDecoding, TPUSplashAttention, LegacyTPUFlashAttention],
+    tpu=[TPUDecoding, TPUSplashAttentionWithAllGather, TPUSplashAttention, LegacyTPUFlashAttention],
     gpu=[
         GPUDecoding,
         # For GPU, prefer cuDNN (without bias) whenever possible, as it's the fastest.
@@ -50,13 +57,15 @@ def flash_attention_implementation(
     key: Tensor,
     value: Tensor,
     bias: BaseAttentionBias,
+    logit_sink: Optional[Tensor] = None,
     softmax_scale: float = 1.0,
-    is_decoding: bool = False,
+    kv_cache_type: Optional[type[BaseKVCache]] = None,
     tpu_block_size: int = 512,
     gpu_block_size: int = 128,
     dropout_rate: Optional[float] = 0.0,
     page_tables: Optional[Tensor] = None,
-) -> Optional[BaseFlashAttention]:
+    backend_overrides: Optional[dict[str, Any]] = None,
+) -> Optional[FlashAttentionWithShardMapSpecs]:
     """Returns a jitted "flash" multihead-attention implementation for the given backend.
 
     The first matching kernel will be picked for each backend.
@@ -77,8 +86,9 @@ def flash_attention_implementation(
             for paged attention; a physical-page layout where each value page
             has exactly `page_size` tokens.
         bias: Attention bias to apply.
+        logit_sink: An optional Tensor of shape [num_heads].
         softmax_scale: A scalar value applied to the logits before softmax.
-        is_decoding: Whether it is in decoding.
+        kv_cache_type: KV cache type. If None, it is on a forward pass.
         tpu_block_size: The size of the computation-block unit for 'tpu' backend.
             A multiple of 128, and should be less than the target sequence length.
             Smaller values are more memory efficient but less compute efficient.
@@ -92,12 +102,14 @@ def flash_attention_implementation(
             check BasePagedAttention.__call__ for more details.
             Only needed for PagedAttention, and passing `None`
             when running standard flash attention.
+        backend_overrides: Backend and kernel specific config overrides.
 
     Returns:
-        A jitted function implementing multi-head attention for the given backend.
-        This jitted function may raise ValueError: If the given configuration doesn't logically
-        make sense, e.g. if the shapes of q/k/v do not satisfy the requirement of a standard
-        attention.
+        A FlashAttentionShardWithMapSpecs containing:
+            - fn: A callable flash attention function for use in shard_map
+            - additional_in_specs: Dict mapping argument names to PartitionSpecs for sharding
+            - additional_args: Dict mapping argument names to tensor values (e.g., mask infos)
+        Returns None if no suitable implementation is found (fallback to standard attention).
     """
     # TODO(senyut): refactor so that we take input_batch here.
     if dropout_rate is None:
@@ -111,16 +123,16 @@ def flash_attention_implementation(
         BACKENDS["neuron"] = [NeuronFlashAttention]
 
     attn_configs = BACKENDS.get(backend, [])
-    if page_tables is not None and is_decoding:
+    if kv_cache_type == PagedKVCache:
         attn_configs = PAGED_ATTN_BACKENDS.get(backend, [])
 
     common_cfg = dict(
-        is_decoding=is_decoding,
         dropout_rate=dropout_rate,
         interpret=_interpret(backend),
         softmax_scale=softmax_scale,
         tpu_block_size=tpu_block_size,
         gpu_block_size=gpu_block_size,
+        backend_overrides=backend_overrides,
     )
     input_batch = dict(
         query=query,
@@ -128,14 +140,15 @@ def flash_attention_implementation(
         value=value,
         page_tables=page_tables,
         bias=bias,
+        logit_sink=logit_sink,
     )
     for cfg in attn_configs:
         attn_fn = cfg.default_config().set(**common_cfg).instantiate()
-        is_supported = attn_fn.is_supported(
-            input_batch=input_batch,
-        )
+        is_supported = attn_fn.is_supported(input_batch=input_batch, kv_cache_type=kv_cache_type)
         if is_supported:
-            return attn_fn
+            logging.info("Using %s for flash attention.", attn_fn.name())
+            return attn_fn.build(input_batch=input_batch)
+
     # Fall back to standard attention if no backend kernels are supported for the given
     # configuration.
     logging.warning("Using standard attention as flash attention fallback.")

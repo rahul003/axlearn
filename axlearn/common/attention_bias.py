@@ -37,7 +37,7 @@ import jax
 from jax import numpy as jnp
 from jax.sharding import PartitionSpec
 
-from axlearn.common import struct
+from axlearn.common import flax_struct
 from axlearn.common.config import ClassConfigBase, ConfigOr, config_for_class, maybe_instantiate
 from axlearn.common.utils import Tensor, safe_not
 
@@ -51,13 +51,13 @@ OpT = typing.TypeVar("OpT", type(None), Tensor)
 B = TypeVar("B", bound="BaseAttentionBias")
 
 
-@functools.partial(struct.dataclass, eq=False)
-class BaseAttentionBias:
+@functools.partial(flax_struct.dataclass, eq=False)
+class BaseAttentionBias:  # pytype: disable=invalid-annotation
     """Base class representing attention logit biases."""
 
     # The dtype of the biases to return in `value()`.
     # If None, do not cast the dtype.
-    dtype: Optional[jnp.dtype] = struct.field(kw_only=True, default=None, pytree_node=False)
+    dtype: Optional[jnp.dtype] = flax_struct.field(kw_only=True, default=None, pytree_node=False)
 
     @final
     def eval_shape(self) -> tuple[int, int, int, int]:
@@ -74,12 +74,12 @@ class BaseAttentionBias:
         """
         if not self.has_value():
             raise ValueError("AttentionBias has no value.")
-        return jax.eval_shape(self.value).shape
+        return jax.eval_shape(type(self).value, self).shape
 
     @final
     def has_value(self) -> bool:
         """Return whether to the bias has a value."""
-        return jax.eval_shape(self.value) is not None
+        return jax.eval_shape(type(self).value, self) is not None
 
     @final
     def value(self) -> Optional[Tensor]:
@@ -117,8 +117,8 @@ class BaseAttentionBias:
 
     def astype(self, dtype: jnp.dtype) -> "BaseAttentionBias":
         """Return a new bias whose dtype is `dtype`."""
-        result = dataclasses.replace(self, dtype=dtype)
-        result = cast(BaseAttentionBias, result)
+        result = dataclasses.replace(self, dtype=dtype)  # pytype: disable=wrong-arg-types
+        result = cast(BaseAttentionBias, result)  # pytype: disable=invalid-annotation
         return result
 
     @classmethod
@@ -191,7 +191,7 @@ class BaseAttentionBias:
         raise NotImplementedError
 
 
-@struct.dataclass
+@flax_struct.dataclass
 class BiasAndResidual(BaseAttentionBias, Generic[B]):
     """A bias and residual where the bias has type `B` (or is None) and the residual
     has any type.
@@ -202,7 +202,7 @@ class BiasAndResidual(BaseAttentionBias, Generic[B]):
     """
 
     bias: Optional[B]
-    residual: BaseAttentionBias
+    residual: BaseAttentionBias  # pytype: disable=invalid-annotation
 
     def _value(self) -> Optional[Tensor]:
         biases = [self.bias] if self.bias is not None else []
@@ -213,7 +213,7 @@ class BiasAndResidual(BaseAttentionBias, Generic[B]):
         return iter((self.bias, self.residual))
 
 
-@struct.dataclass
+@flax_struct.dataclass
 class CompositeAttentionBias(BaseAttentionBias):
     """A lazily evaluated list of biases that are added together to get the final bias.
 
@@ -225,7 +225,7 @@ class CompositeAttentionBias(BaseAttentionBias):
     """
 
     # The biases to add to obtain the final bias.
-    biases: Sequence[BaseAttentionBias]
+    biases: Sequence[BaseAttentionBias]  # pytype: disable=invalid-annotation
 
     def _value(self) -> Optional[Tensor]:
         """Returns the sum of the biases.
@@ -246,10 +246,12 @@ class CompositeAttentionBias(BaseAttentionBias):
             result += bias.value()
         return result
 
-    def __add__(self, other: BaseAttentionBias) -> "CompositeAttentionBias":
+    def __add__(
+        self, other: BaseAttentionBias
+    ) -> "CompositeAttentionBias":  # pytype: disable=invalid-annotation
         return self.__class__([self, other])
 
-    def _nonzero(self) -> Sequence[BaseAttentionBias]:
+    def _nonzero(self) -> Sequence[BaseAttentionBias]:  # pytype: disable=invalid-annotation
         """Returns an sequence of biases in this collection except those detected as zero.
 
         Returned biases are not guaranteed to be nonzero, but are guaranteed to not return None.
@@ -289,8 +291,8 @@ class CompositeAttentionBias(BaseAttentionBias):
 
     def partition_spec(
         self, mha_dim_to_partition_spec: dict[str, PartitionSpec]
-    ) -> Union[BaseAttentionBias, PartitionSpec]:
-        return CompositeAttentionBias(
+    ) -> Union[BaseAttentionBias, PartitionSpec]:  # pytype: disable=invalid-annotation
+        return CompositeAttentionBias(  # pytype: disable=wrong-keyword-args
             [
                 b.partition_spec(mha_dim_to_partition_spec) if b is not None else PartitionSpec()
                 for b in self.biases
@@ -314,7 +316,9 @@ class CompositeAttentionBias(BaseAttentionBias):
         return CompositeAttentionBias(biases)
 
 
-def split(bias: BaseAttentionBias, *cls: Type[BaseAttentionBias]) -> Iterable[BaseAttentionBias]:
+def split(
+    bias: BaseAttentionBias, *cls: Type[BaseAttentionBias]
+) -> Iterable[BaseAttentionBias]:  # pytype: disable=invalid-annotation
     """Split `bias` into an iterable of biases of `len(cls) + 1` instances, where the ith instances
     has type cls[i] or ZeroAttentionBias.
 
@@ -340,7 +344,7 @@ def split(bias: BaseAttentionBias, *cls: Type[BaseAttentionBias]) -> Iterable[Ba
     yield bias
 
 
-@struct.dataclass
+@flax_struct.dataclass
 class TensorAttentionBias(BaseAttentionBias):
     """An attention bias represented as an explicit Tensor."""
 
@@ -349,11 +353,11 @@ class TensorAttentionBias(BaseAttentionBias):
     _internal_value: Tensor
 
     def __post_init__(self):
-        # Because TensorAttentionBias is a struct.dataclass and the automatically generated pytree
-        # flattening methods for all struct.dataclasses always flatten to a list of the dataclass
-        # fields. (I.e., not the result of calling value().)
-        # Therefore, we enforce a consistent shape so that the partition spec correctly lines
-        # up wit the dimensions of the stored Tensor.
+        # Because TensorAttentionBias is a flax_struct.dataclass and the automatically generated
+        # pytree flattening methods for all flax_struct.dataclasses always flatten to a list of the
+        # dataclass fields. (I.e., not the result of calling value().)  Therefore, we enforce a
+        # consistent shape so that the partition spec correctly lines up wit the dimensions of the
+        # stored Tensor.
         if getattr(self._internal_value, "ndim", 4) != 4:
             raise ValueError(f"Invalid shape {self._internal_value.shape}.")
 
@@ -362,7 +366,7 @@ class TensorAttentionBias(BaseAttentionBias):
 
     def partition_spec(
         self, mha_dim_to_partition_spec: dict[str, PartitionSpec]
-    ) -> Union[BaseAttentionBias, PartitionSpec]:
+    ) -> Union[BaseAttentionBias, PartitionSpec]:  # pytype: disable=invalid-annotation
         shape = self.eval_shape()
         spec = mha_dim_to_partition_spec["bnts"]
         return _spec_for_explicit_bias(spec=spec, shape=shape)
@@ -379,7 +383,7 @@ class TensorAttentionBias(BaseAttentionBias):
 
 def _spec_for_explicit_bias(
     spec: PartitionSpec, shape: tuple[int, ...]
-) -> Union[BaseAttentionBias, PartitionSpec]:
+) -> Union[BaseAttentionBias, PartitionSpec]:  # pytype: disable=invalid-annotation
     """Return a PartionSpec for an explicit bias tensor of the given shape baed on `spec`."""
     # Explicit attention bias: [batch_size, num_heads, target_len, source_len].
     if spec != PartitionSpec(None):
@@ -390,7 +394,7 @@ def _spec_for_explicit_bias(
     return spec
 
 
-@struct.dataclass
+@flax_struct.dataclass
 class BoolAttentionBias(BaseAttentionBias):
     """An attention bias represented as a boolean mask."""
 
@@ -424,7 +428,7 @@ class BoolAttentionBias(BaseAttentionBias):
         raise NotImplementedError
 
 
-@struct.dataclass
+@flax_struct.dataclass
 class SegmentIdAttentionBias(BoolAttentionBias):
     """An attention bias defined by segment ids."""
 
@@ -438,12 +442,19 @@ class SegmentIdAttentionBias(BoolAttentionBias):
 
     def partition_spec(
         self, mha_dim_to_partition_spec: dict[str, PartitionSpec]
-    ) -> Union[BaseAttentionBias, PartitionSpec]:
+    ) -> Union[BaseAttentionBias, PartitionSpec]:  # pytype: disable=invalid-annotation
         # Segment IDs: [batch_size, seq_len].
-        q_spec = mha_dim_to_partition_spec["btnh"]
-        if q_spec == PartitionSpec(None):
+        # We use the partition spec of KV (which are not sequence sharded) for segment ids. This is
+        # because Splash requires two seg ids, q_seg and kv_seg. Therefore, we pass a not seq
+        # sharded seg ids into the shard map, and manually shard it inside for q_seg and not
+        # shard it for kv_seg.
+        kv_spec = mha_dim_to_partition_spec["bsnh"]
+        if kv_spec == PartitionSpec(None):
             return PartitionSpec(None)
-        return PartitionSpec(q_spec[0], q_spec[1])
+
+        if kv_spec[1] is not None:
+            raise ValueError("The partition spec of `s` in `bsnh` should be None.")
+        return PartitionSpec(kv_spec[0], kv_spec[1])
 
 
 class MaskFn(Protocol):
@@ -485,12 +496,12 @@ class MaskFn(Protocol):
         """
 
 
-@struct.dataclass
+@flax_struct.dataclass
 class MaskFnAttentionBias(BoolAttentionBias):
     """An attention bias represented as an implicit boolean mask."""
 
     # The function defining the contents of the mask.
-    mask: MaskFn = struct.field(pytree_node=False)
+    mask: MaskFn = flax_struct.field(pytree_node=False)
 
     # The positions in the query sequence that the mask should be computed for.
     # I.e., `self.value()[batch, num_heads, i]` is the mask specifying what the query token at
@@ -503,9 +514,9 @@ class MaskFnAttentionBias(BoolAttentionBias):
     # is not necessarily contiguous. E.g., speculative decoding, non-contiguous prompts,
     # various papers that need it.
     # The index in the sequence of query vectors, [1|batch, target_len].
-    target_positions: Tensor = struct.field(kw_only=True)
+    target_positions: Tensor = flax_struct.field(kw_only=True)
     # The index in the sequence of key vectors, [1|batch, source_len].
-    source_positions: Tensor = struct.field(kw_only=True)
+    source_positions: Tensor = flax_struct.field(kw_only=True)
 
     @classmethod
     def default_config(cls, mask: MaskFn) -> ClassConfigBase["MaskFnAttentionBias"]:
@@ -528,7 +539,7 @@ class MaskFnAttentionBias(BoolAttentionBias):
 
         target_positions = jnp.expand_dims(target_positions, axis=2)  # [batch, target_length, 1]
         source_positions = jnp.expand_dims(source_positions, axis=1)  # [batch, 1, source_length]
-        return self.mask(target_positions, source_positions)  # pylint: disable=not-callable
+        return self.mask(target_positions, source_positions)
 
     @classmethod
     def from_sequence(
@@ -566,16 +577,23 @@ class MaskFnAttentionBias(BoolAttentionBias):
 
     def partition_spec(
         self, mha_dim_to_partition_spec: dict[str, PartitionSpec]
-    ) -> Union[BaseAttentionBias, PartitionSpec]:
-        batch = mha_dim_to_partition_spec["bnts"][0]
+    ) -> Union[BaseAttentionBias, PartitionSpec]:  # pytype: disable=invalid-annotation
+        if mha_dim_to_partition_spec["bnts"] == PartitionSpec(None):
+            batch = target = source = None
+        else:
+            batch, _, target, source = mha_dim_to_partition_spec["bnts"]
         return dataclasses.replace(
             self,
-            target_positions=PartitionSpec(None if self.target_positions.shape[0] == 1 else batch),
-            source_positions=PartitionSpec(None if self.source_positions.shape[0] == 1 else batch),
+            target_positions=PartitionSpec(
+                None if self.target_positions.shape[0] == 1 else batch, target
+            ),
+            source_positions=PartitionSpec(
+                None if self.source_positions.shape[0] == 1 else batch, source
+            ),
         )
 
 
-@struct.dataclass
+@flax_struct.dataclass
 class BoolTensorAttentionBias(BoolAttentionBias):
     """An attention bias represented as an explicit boolean mask."""
 
@@ -596,7 +614,7 @@ class BoolTensorAttentionBias(BoolAttentionBias):
 
     def partition_spec(
         self, mha_dim_to_partition_spec: dict[str, PartitionSpec]
-    ) -> Union[BaseAttentionBias, PartitionSpec]:
+    ) -> Union[BaseAttentionBias, PartitionSpec]:  # pytype: disable=invalid-annotation
         shape = self.eval_shape()
         spec = mha_dim_to_partition_spec["bnts"]
         return _spec_for_explicit_bias(spec=spec, shape=shape)
@@ -636,12 +654,12 @@ def causal_mask(query_position: Tensor, key_position: Tensor) -> Tensor:
     return query_position >= key_position
 
 
-@struct.dataclass
+@flax_struct.dataclass
 @final
 class CausalAttentionBias(MaskFnAttentionBias):  # pylint: disable=final-error
     """A causal attention mask."""
 
-    mask: Optional[MaskFn] = struct.field(pytree_node=False, default=causal_mask)
+    mask: Optional[MaskFn] = flax_struct.field(pytree_node=False, default=causal_mask)
 
     @classmethod
     def default_config(cls) -> ClassConfigBase[MaskFnAttentionBias]:
@@ -658,13 +676,13 @@ class CausalAttentionBias(MaskFnAttentionBias):  # pylint: disable=final-error
         return biases[0]
 
 
-@struct.dataclass
+@flax_struct.dataclass
 @final
 class SlidingWindowAttentionBias(MaskFnAttentionBias):  # pylint: disable=final-error
     """A sliding window attention mask."""
 
     # A left context size for sliding window attention. Total window size = sliding_window_size + 1
-    sliding_window_size: int = struct.field(kw_only=True, pytree_node=False)
+    sliding_window_size: int = flax_struct.field(kw_only=True, pytree_node=False)
 
     @classmethod
     # pylint: disable-next=arguments-renamed
@@ -677,7 +695,7 @@ class SlidingWindowAttentionBias(MaskFnAttentionBias):  # pylint: disable=final-
         )
 
 
-@struct.dataclass
+@flax_struct.dataclass
 @final
 class ZeroAttentionBias(BoolAttentionBias):
     """ "Attention bias that adds zero.
@@ -691,7 +709,7 @@ class ZeroAttentionBias(BoolAttentionBias):
 
     def partition_spec(
         self, mha_dim_to_partition_spec: dict[str, PartitionSpec]
-    ) -> Union[BaseAttentionBias, PartitionSpec]:
+    ) -> Union[BaseAttentionBias, PartitionSpec]:  # pytype: disable=invalid-annotation
         # Nothing to shard.
         return PartitionSpec()
 

@@ -60,17 +60,17 @@ Therefore, unlike with attrs/dataclass, the user does not need to define a defau
 config fields with mutable values, including config values.
 """
 
-# Note: config.py should not depend on jax, torch, or tf.
 import copy
 import dataclasses
 import enum
+import importlib
 import inspect
 import re
 import types
 from collections import defaultdict
 from collections.abc import Collection, Iterable
 from functools import cache
-from typing import Any, Callable, Generic, Optional, Sequence, TypeVar, Union
+from typing import Any, Callable, Generic, Optional, Protocol, Sequence, TypeVar, Union
 
 # attr provides similar features as Python dataclass. Unlike
 # dataclass, however, it provides a richer set of features to regulate
@@ -81,7 +81,9 @@ from typing import Any, Callable, Generic, Optional, Sequence, TypeVar, Union
 # Our config library relies on `__attrs_post_init__` and `on_setattr=_validate_and_transform_field`
 # to apply validation on field names and values.
 import attr
-import numpy as np
+
+# Note: config.py should not depend on jax, torch, or tf.
+from absl import logging
 
 
 def is_named_tuple(x: Any):
@@ -210,55 +212,6 @@ def validate_config_field_name(name: str) -> None:
         raise InvalidConfigNameError(f'Invalid config field name "{name}"')
 
 
-# Validate basic types.
-register_validator(
-    match_fn=lambda v: (
-        v is None
-        or isinstance(
-            v,
-            (
-                RequiredFieldValue,
-                type,
-                types.FunctionType,
-                types.BuiltinFunctionType,
-                types.MethodType,
-                types.BuiltinMethodType,
-                int,
-                float,
-                str,
-                enum.Enum,
-                np.dtype,
-            ),
-        )
-    ),
-    validate_fn=lambda _: None,
-)
-# Validate container types.
-register_validator(
-    match_fn=lambda v: isinstance(v, (list, tuple)),
-    validate_fn=lambda v: (validate_config_field_value(x) for x in v),
-)
-register_validator(
-    match_fn=lambda v: isinstance(v, dict),
-    validate_fn=lambda v: (validate_config_field_value(x) for _, x in v.items()),
-)
-# Validate dataclass instances. Note that dataclass classes are handled by the basic type validator.
-register_validator(
-    match_fn=lambda v: not isinstance(v, type) and dataclasses.is_dataclass(v),
-    validate_fn=lambda v: validate_config_field_value(dataclasses.asdict(v)),
-)
-# Validate attrs instances. Note that attrs classes are handled by the basic type validator.
-register_validator(
-    match_fn=is_attrs,
-    validate_fn=lambda v: validate_config_field_value(attr.asdict(v, recurse=False)),
-)
-# Validate HF instances. Note that HF classes are handled by the basic type validator.
-register_validator(
-    match_fn=lambda v: not isinstance(v, type) and hasattr(v, "from_pretrained"),
-    validate_fn=lambda v: validate_config_field_value(v.to_dict()),
-)
-
-
 def validate_config_field_value(value: Any) -> None:
     """Validates a config field value.
 
@@ -283,6 +236,77 @@ def validate_config_field_value(value: Any) -> None:
             f'Invalid config value type {type(value)} for value "{value}". '
             f"Consider registering a custom validator with `{register_validator.__name__}`."
         )
+
+
+# Validate basic types.
+register_validator(
+    match_fn=lambda v: (
+        v is None
+        or isinstance(
+            v,
+            (
+                RequiredFieldValue,
+                type,
+                types.FunctionType,
+                types.BuiltinFunctionType,
+                types.MethodType,
+                types.BuiltinMethodType,
+                int,
+                float,
+                str,
+                enum.Enum,
+            ),
+        )
+    ),
+    validate_fn=lambda _: None,
+)
+# Validate container types.
+register_validator(
+    match_fn=lambda v: isinstance(v, (list, tuple)),
+    # pylint: disable-next=used-before-assignment
+    validate_fn=lambda v: (validate_config_field_value(x) for x in v),
+)
+register_validator(
+    match_fn=lambda v: isinstance(v, dict),
+    validate_fn=lambda v: (validate_config_field_value(x) for _, x in v.items()),
+)
+# Validate dataclass instances. Note that dataclass classes are handled by the basic type validator.
+register_validator(
+    match_fn=lambda v: not isinstance(v, type) and dataclasses.is_dataclass(v),
+    validate_fn=lambda v: validate_config_field_value(dataclasses.asdict(v)),
+)
+# Validate attrs instances. Note that attrs classes are handled by the basic type validator.
+register_validator(
+    match_fn=is_attrs,
+    validate_fn=lambda v: validate_config_field_value(attr.asdict(v, recurse=False)),
+)
+# Validate HF instances. Note that HF classes are handled by the basic type validator.
+register_validator(
+    match_fn=lambda v: not isinstance(v, type) and hasattr(v, "from_pretrained"),
+    validate_fn=lambda v: validate_config_field_value(v.to_dict()),
+)
+
+
+def _maybe_register_optional_type(module: str, attribute: str):
+    """Attempts to register a valid type specified via `module` path and `attribute` name.
+
+    This is used to register optional types so that we can avoid a hard dependency on the module.
+    """
+    try:
+        module = importlib.import_module(module)
+        register_validator(
+            match_fn=lambda v: isinstance(v, getattr(module, attribute)),
+            validate_fn=lambda _: None,
+        )
+    except (ImportError, AttributeError):
+        pass
+
+
+# Register other validators for convenience and backwards compat.
+# We allow these to be optional to avoid a hard dependency.
+_maybe_register_optional_type("numpy", "dtype")
+# As of 0.6.1, PartitionSpec is no longer a tuple.
+_maybe_register_optional_type("jax.sharding", "PartitionSpec")
 
 
 def _validate_and_transform_field(instance, attribute, value):
@@ -487,12 +511,14 @@ class ConfigBase:
         def enter(key: str, val: Any, default_result: Optional[list]) -> Optional[list]:
             if dataclasses.is_dataclass(val) and not isinstance(val, type):
                 fields_default_dict = {}
+                cur_key_to_field_dict = {}
                 for field in dataclasses.fields(val):
                     # Concatenate field name to key as the full field key name.
                     # Eg: key="my_config.cats[0]", field.name="adopted"
                     #     cur_key="my_config.cats[0]['adopted']"
                     cur_key = f"{key}['{field.name}']"
                     fields_default_dict[cur_key] = field.default
+                    cur_key_to_field_dict[cur_key] = field
 
                 kvs_to_traverse = []
                 for cur_key, cur_val in default_result:
@@ -500,6 +526,12 @@ class ConfigBase:
                         raise KeyError(
                             f"Field name {cur_key} is not found for dataclass type value."
                         )
+                    # Get the field to check metadata
+                    field = cur_key_to_field_dict[cur_key]
+                    # Skip fields marked with skip_serialization=True in metadata
+                    if field and field.metadata.get("skip_serialization", False):
+                        continue
+
                     default_val = fields_default_dict[cur_key]
                     if cur_val is default_val and default_val in omit_default_values:
                         continue
@@ -731,6 +763,25 @@ class InstantiableConfig(Generic[T], ConfigBase):
 
 
 ConfigOr = Union[T, InstantiableConfig[T]]
+
+
+class TrainerConfigFn(Protocol):
+    """A TrainerConfigFn takes a data_dir as argument and returns a Config for instantiating a
+    Trainer, e.g. SpmdTrainer.
+    """
+
+    def __call__(self, data_dir: Optional[str] = None) -> InstantiableConfig: ...
+
+
+def with_overrides(trainer_config_fn: TrainerConfigFn, **kwargs) -> TrainerConfigFn:
+    """Patches the trainer config produced by the trainer_config_fn."""
+
+    def wrapped_fn():
+        trainer_cfg = trainer_config_fn()
+        trainer_cfg.set(**kwargs)
+        return trainer_cfg
+
+    return wrapped_fn
 
 
 def maybe_instantiate(x: ConfigOr[T]) -> T:
@@ -1014,3 +1065,52 @@ class ConfigModifier(Configurable):
     def __call__(self, cfg: InstantiableConfig[T]) -> InstantiableConfig[T]:
         """A function that modifies the input config, should be defined by subclasses."""
         return cfg
+
+
+def _load_trainer_configs(
+    config_module: str, *, optional: bool = False
+) -> dict[str, TrainerConfigFn]:
+    try:
+        module = importlib.import_module(config_module)
+        return module.named_trainer_configs()
+    except (ImportError, AttributeError):
+        if not optional:
+            raise
+        logging.warning(
+            "Missing dependencies for %s but it's marked optional -- skipping.", config_module
+        )
+    return {}
+
+
+def get_named_trainer_config(config_name: str, *, config_module: str) -> TrainerConfigFn:
+    """Looks up TrainerConfigFn by config name.
+
+    Args:
+        config_name: Candidate config name.
+        config_module: Config module name.
+
+    Returns:
+        A TrainerConfigFn corresponding to the config name.
+
+    Raises:
+        KeyError: Error containing the message to show to the user.
+    """
+    config_map = _load_trainer_configs(config_module)
+    if callable(config_map):
+        return config_map(config_name)
+
+    try:
+        return config_map[config_name]
+    except KeyError as e:
+        similar = similar_names(config_name, set(config_map.keys()))
+        if similar:
+            message = f"Unrecognized config {config_name}; did you mean [{', '.join(similar)}]"
+        else:
+            message = (
+                f"Unrecognized config {config_name} under {config_module}; "
+                f"Please make sure that the following conditions are met:\n"
+                f"    1. {config_module} can be imported; "
+                f"    2. {config_module} defines `named_trainer_configs()`; "
+                f"    3. `named_trainer_configs()` returns a dict with '{config_name}' as a key."
+            )
+        raise KeyError(message) from e

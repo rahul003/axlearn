@@ -24,6 +24,7 @@ from axlearn.common.attention import (
     TransformerLayer,
 )
 from axlearn.common.base_layer import RematSpec
+from axlearn.common.config import TrainerConfigFn
 from axlearn.common.embedding import TransformerTextEmbeddings
 from axlearn.common.layers import RMSNorm
 from axlearn.experiments.text.gpt.common import (
@@ -41,7 +42,6 @@ from axlearn.experiments.text.gpt.common import (
     mup_simple_adam_update_transformation,
     scaled_hidden_dim,
 )
-from axlearn.experiments.trainer_config_utils import TrainerConfigFn
 
 MODEL_SIZES = ("test", "85M", "3B")
 
@@ -163,11 +163,15 @@ def get_trainer_kwargs(
     )
 
     # Update the model_kwargs
-    model_kwargs: dict[str, Any] = merged_trainer_kwargs.pop("model_kwargs")
+    model_kwargs: dict[str, Any] = merged_trainer_kwargs.pop(
+        "model_kwargs"
+    )  # pytype: disable=annotation-type-mismatch
     model_kwargs.update(trainer_kwargs.get("model_kwargs", {}))
     model_kwargs.setdefault("vocab_size", vocab_size)
 
-    learner_kwargs: dict[str, Any] = merged_trainer_kwargs.pop("learner_kwargs")
+    learner_kwargs: dict[str, Any] = merged_trainer_kwargs.pop(
+        "learner_kwargs"
+    )  # pytype: disable=annotation-type-mismatch
     learner_kwargs.update(trainer_kwargs.get("learner_kwargs", {}))
 
     merged_trainer_kwargs["model_cfg"] = model_config(

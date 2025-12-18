@@ -125,7 +125,7 @@ class CloudBuildBundlerTest(TestCase):
         with (
             mock.patch("time.sleep"),
             mock.patch(
-                f"{bundler.__name__}.get_cloud_build_status", side_effect=side_effect
+                "axlearn.cloud.gcp.cloud_build.get_cloud_build_status", side_effect=side_effect
             ) as mock_status,
         ):
             yield mock_status
@@ -142,7 +142,7 @@ class CloudBuildBundlerTest(TestCase):
         # Should be a no-op if is_async=False.
         cfg = self._get_test_cloud_build_bundler()
 
-        with self._mock_status(None) as mock_status:
+        with self._mock_status(None) as mock_status:  # pytype: disable=wrong-arg-types
             b = cfg.set(is_async=False).instantiate()
             b.wait_until_finished("test-name")
             self.assertFalse(mock_status.called)
@@ -151,23 +151,31 @@ class CloudBuildBundlerTest(TestCase):
         # Tests happy path: transitions from no status -> pending -> success.
         cfg = self._get_test_cloud_build_bundler()
 
-        with self._mock_status(
+        with self._mock_status(  # pytype: disable=wrong-arg-types
             None, CloudBuildStatus.PENDING, CloudBuildStatus.SUCCESS
         ) as mock_status:
             b = cfg.set(is_async=True).instantiate()
             b.wait_until_finished("test-name")
             self.assertEqual(3, mock_status.call_count)
 
+        with self._mock_status(  # pytype: disable=wrong-arg-types
+            None, CloudBuildStatus.PENDING, CloudBuildStatus.SUCCESS
+        ) as mock_status:
+            b = cfg.set(is_async=True).instantiate()
+            b.wait_until_finished("test-repo/test-target:test-name")
+            self.assertEqual(3, mock_status.call_count)
+
     def test_wait_until_finished_raises_runtime_error_with_cloud_build_status_failure(self):
         # Tests that we raise a runtime error if CloudBuildStatus.FAILURE status is returned.
         cfg = self._get_test_cloud_build_bundler()
 
-        with self._mock_status(
+        with self._mock_status(  # pytype: disable=wrong-arg-types
             None, CloudBuildStatus.PENDING, CloudBuildStatus.FAILURE
         ) as mock_status:
             b = cfg.set(is_async=True).instantiate()
             with self.assertRaisesRegex(
-                RuntimeError, "CloudBuild for test-name failed: CloudBuildStatus.FAILURE"
+                RuntimeError,
+                "CloudBuild for test-repo/test-image:test-name failed: CloudBuildStatus.FAILURE",
             ):
                 b.wait_until_finished("test-name")
                 self.assertEqual(3, mock_status.call_count)
@@ -176,7 +184,27 @@ class CloudBuildBundlerTest(TestCase):
         # Tests that the query is retried if retrieving status fails with a RuntimeError.
         cfg = self._get_test_cloud_build_bundler()
 
-        with self._mock_status(RuntimeError("fake error"), CloudBuildStatus.SUCCESS) as mock_status:
+        with self._mock_status(
+            RuntimeError("fake error"), CloudBuildStatus.SUCCESS
+        ) as mock_status:  # pytype: disable=wrong-arg-types
             b = cfg.set(is_async=True).instantiate()
             b.wait_until_finished("test-name")
             self.assertEqual(2, mock_status.call_count)
+
+    def test_wait_until_finished_triggers_timeout(self):
+        # Tests that we raise a timeout error if wait_until_finished takes more than 1 hr.
+        cfg = self._get_test_cloud_build_bundler()
+
+        with mock.patch("time.perf_counter") as mock_perf_counter:
+            mock_perf_counter.side_effect = [0, 10, 500, 3601]
+
+            with self._mock_status(  # pytype: disable=wrong-arg-types
+                None, CloudBuildStatus.PENDING, CloudBuildStatus.PENDING
+            ) as mock_status:
+                b = cfg.set(is_async=True).instantiate()
+                with self.assertRaisesRegex(
+                    TimeoutError,
+                    "Timed out waiting for CloudBuild to finish for more than 3600 seconds.",
+                ):
+                    b.wait_until_finished("test-name")
+                self.assertEqual(2, mock_status.call_count)

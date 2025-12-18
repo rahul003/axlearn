@@ -6,33 +6,141 @@
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License").
 
-"""Base class of modules.
+"""Foundation module system for AXLearn.
 
-Design choices:
-* All module hyper-parameters are encapsulated by the module's config.
-* Every module has a name, default dtype, and an optional param_init config.
-* Every module has a parent except the root module.
-* A module's config is frozen upon __init__. This prevents the config from being modified by
-  accident.
-* Module.config returns a copy of the module's config. This allows the caller to make changes
-  without affecting the original config.
+Why do we need Module?
+======================
 
-Module.__init__() wraps public methods of subclasses of Module to propagate child context
-automatically. Specifically, suppose we have class MyModule with a method `do_foo`:
+1. JAX is functional - it has no built-in concept of stateful objects like layers or models.  Module
+   provides the base class for all objects. The functional() method converts a Module instance into
+   a pure JAX function.
+
+2. Deep learning needs hierarchies - networks are composed of layers within layers.  Module provides
+   _add_child() to form parent-child trees. For example:
+   - A trainer contains a model, optimizer, and data loader
+   - A model contains layers, which contain sub-layers
+
+3. Hierarchical calls need shared context - when a model calls its layers, they all need access to
+   the same PRNG keys, training mode, etc.  Module automatically wraps public methods to propagate
+   InvocationContext, which carries:
+   - PRNG keys (automatically split for each child)
+   - Training/evaluation mode
+   - State (parameters for neural layers)
+   - Output collection (summaries, metrics)
+   This avoids manually threading these through every method call.
+
+
+What is a Module?
+=================
+
+A Module is a configurable, composable unit of computation that:
+- Has a nested Config class holding its hyperparameters
+- Maintains a frozen instance of this Config, preventing accidental changes
+- Has a name and parent (parent=None for root modules)
+- Can have child modules, forming a tree structure
+- Automatically wrap public methods to take and propagate the parameter InvocationContext.
+- Collects and propagates outputs (summaries, metrics, state updates)
+
+
+An Example Module
+=================
 
 ```
 class MyModule(Module):
-    def do_foo(self, ...):
-        ...
+    @config_class
+    class Config(Module.Config):
+        dropout_rate: float = 0.1
+        child: Module.Config = ...
+
+    def __init__(self, cfg: Config, *, parent: Optional[Module]):
+        super().__init__(cfg, parent=parent)
+        # Calls cfg.child.instantiate(parent=self) to instantiate the child module.
+        self._add_child("child", cfg.child)
+
+    def _compute_scale(self, x: Tensor) -> float:
+        # Private methods are NOT wrapped - no automatic context access.
+        # Called directly during computation without context overhead.
+        return jnp.sqrt(x.shape[-1])
+
+    @nowrap
+    def dropout_rate(self) -> float:
+        # Public methods marked with @nowrap are NOT wrapped, so it
+        # cannot access context (self.prng_key, self.is_training will fail).
+        return self.config.dropout_rate
+
+    def forward(self, x: Tensor) -> Tensor:
+        # Public methods WITHOUT @nowrap ARE automatically wrapped.
+        # This method receives InvocationContext and can access:
+
+        # 1. Call private method (no context needed)
+        scale = self._compute_scale(x)
+
+        # 2. Call @nowrap-ed public method (no context)
+        dropout_rate = self.dropout_rate()
+
+        # 3. Access context properties (from InvocationContext)
+        key = self.prng_key  # Automatically split PRNG key for this module
+        is_training = self.is_training  # Training mode flag
+
+        # 4. Call child module's wrapped method - context automatically propagates!
+        # Child receives its own context with split PRNG key, same training mode, etc.
+        x = self.child(x)
+
+        # Apply dropout using context
+        if is_training:
+            keep_mask = jax.random.bernoulli(key, 1 - dropout_rate, x.shape)
+            x = x * keep_mask / (1 - dropout_rate)
+
+        return x * scale
 ```
 
-`MyModule.__init__` will identify `MyModule.do_foo` as one of the methods to wrap through
-`Module._methods_to_wrap_for_auto_child_context` (which can be overridden by subclasses, e.g.,
-in RedirectToSharedModule). It will then wrap the method via `_wrap_method_with_auto_child_context`
-and install the wrapped function as `self.do_foo`.
+Module automatically wraps `forward()` via `_wrap_method_with_auto_child_context` during
+`__init__`. This allows parent modules to call `self.my_child.forward(x)` without manually
+creating or passing InvocationContext - it propagates automatically through the module tree.
 
-This allows MyModule's parents to invoke `do_foo` as `self.my_child.do_foo(...)` without having
-to create the child context explicitly.
+
+Use a Module
+=============
+
+```
+# 1. Create a config for the module and child module.
+cfg = MyModule.default_config().set(
+    name="my_module",
+    dropout_rate=0.2,
+    child=SomeLayerModule.default_config(),
+)
+
+# 2. Instantiate the module from the config.
+module = cfg.instantiate(parent=None)
+
+# 3. Create state
+# 3.1 For BaseLayer subclasses, we can call initialize_parameters_recursively():
+state = module.initialize_parameters_recursively(
+    prng_key=jax.random.PRNGKey(123),
+    prebuilt=None  # Can provide pre-initialized parameters if needed
+)
+# 3.2 For non-BaseLayer modules (e.g., data loaders, optimizers), state is often
+#     module-specific or can be an empty dict {}.
+state = {"child": {...}}
+
+# 4. Call forward using functional() for pure functional execution
+from axlearn.common.module import functional
+
+outputs, output_collection = functional(
+    module,
+    state=state,
+    method="forward",
+    inputs=dict(x=jnp.ones([batch_size, hidden_dim])),
+    prng_key=jax.random.PRNGKey(42), # part of context
+    is_training=True, # part of context
+)
+# outputs contains the return value from forward()
+# output_collection contains summaries, state updates, etc.
+
+# 4.1 We don't need functional() for calling non-wrapped methods.
+print(module.dropout_rate())
+```
+
 """
 
 import contextlib
@@ -54,7 +162,7 @@ import numpy as np
 from absl import logging
 from typing_extensions import Protocol
 
-from axlearn.common import struct, traceback_util
+from axlearn.common import flax_struct, traceback_util
 from axlearn.common.config import REQUIRED, Configurable, Required, RequiredFieldValue, config_class
 from axlearn.common.summary import Summary
 from axlearn.common.traceback_util import annotate_stack, no_stack_summary
@@ -68,6 +176,8 @@ from axlearn.common.utils import (
 )
 
 _CallableT = TypeVar("_CallableT", bound=Callable)
+
+HF_MODULE_KEY = "hf_module"
 
 
 def nowrap(fun: _CallableT) -> _CallableT:
@@ -220,13 +330,13 @@ T = TypeVar("T")
 @typing.runtime_checkable  # Needed for isinstance checks to work.
 class Summable(Protocol):
     # Objects of the same type which adhere to this protocol may be added.
-    def __add__(self, other: T) -> T:
-        ...
+    def __add__(self, other: T) -> T: ...
 
 
 # TODO(markblee): Link to docs on invocation contexts.
-@functools.partial(struct.dataclass, frozen=False)
-class InvocationContext:  # pylint: disable=too-many-instance-attributes
+@functools.partial(flax_struct.dataclass, frozen=False)
+# pylint: disable-next=too-many-instance-attributes
+class InvocationContext:  # pytype: disable=invalid-annotation
     """The invocation context for `Module.__call__()`.
 
     Attributes:
@@ -240,13 +350,13 @@ class InvocationContext:  # pylint: disable=too-many-instance-attributes
         output_collection: See `OutputCollection`.
     """
 
-    name: str = struct.field(pytree_node=False)
-    parent: Optional["InvocationContext"] = struct.field(pytree_node=True)
-    module: Optional["Module"] = struct.field(pytree_node=False)
-    state: NestedTensor = struct.field(pytree_node=True)
-    is_training: bool = struct.field(pytree_node=False)
-    prng_key: Optional[Tensor] = struct.field(pytree_node=True)
-    output_collection: OutputCollection = struct.field(pytree_node=True)
+    name: str = flax_struct.field(pytree_node=False)
+    parent: Optional["InvocationContext"] = flax_struct.field(pytree_node=True)
+    module: Optional["Module"] = flax_struct.field(pytree_node=False)
+    state: NestedTensor = flax_struct.field(pytree_node=True)
+    is_training: bool = flax_struct.field(pytree_node=False)
+    prng_key: Optional[Tensor] = flax_struct.field(pytree_node=True)
+    output_collection: OutputCollection = flax_struct.field(pytree_node=True)
 
     def path(self):
         if self.parent is None:
@@ -278,7 +388,7 @@ class InvocationContext:  # pylint: disable=too-many-instance-attributes
         if "parent" in override_kwargs:
             raise ValueError("Overriding parent is not allowed")
         kwargs = {}  # type: dict[str, Any]
-        for field in dataclasses.fields(self):
+        for field in dataclasses.fields(self):  # pytype: disable=wrong-arg-types
             k = field.name
             if k in override_kwargs:
                 kwargs[k] = override_kwargs[k]
@@ -404,14 +514,14 @@ class InvocationContext:  # pylint: disable=too-many-instance-attributes
 class ContextStack(threading.local):
     """See `install_context_stack` on how to ensure thread-safety of the global stack."""
 
-    stack: list[InvocationContext]
+    stack: list[InvocationContext]  # pytype: disable=invalid-annotation
     thread_id: int
 
 
 _global_context_stack = ContextStack(stack=[], thread_id=threading.get_ident())
 
 
-def clone_context_stack() -> list[InvocationContext]:
+def clone_context_stack() -> list[InvocationContext]:  # pytype: disable=invalid-annotation
     """Returns a copy of the current InvocationContext stack.
 
     This is often used together with `install_context_stack` to ensure that different threads
@@ -420,7 +530,7 @@ def clone_context_stack() -> list[InvocationContext]:
     return list(_global_context_stack.stack)
 
 
-def install_context_stack(stack: list[InvocationContext]):
+def install_context_stack(stack: list[InvocationContext]):  # pytype: disable=invalid-annotation
     """Installs the given context stack.
 
     `install_context_stack` should be called in every child thread to ensure that each thread
@@ -447,14 +557,16 @@ def install_context_stack(stack: list[InvocationContext]):
     _global_context_stack.stack = stack
 
 
-def current_context() -> Optional[InvocationContext]:
+def current_context() -> Optional[InvocationContext]:  # pytype: disable=invalid-annotation
     if not _global_context_stack.stack:
         return None
     return _global_context_stack.stack[-1]
 
 
 @contextlib.contextmanager
-def set_current_context(context: InvocationContext, *, require_parent: bool = True):
+def set_current_context(
+    context: InvocationContext, *, require_parent: bool = True
+):  # pytype: disable=invalid-annotation
     if _global_context_stack.stack:
         cur_context = _global_context_stack.stack[-1]
         if context.parent is not cur_context and require_parent:
@@ -885,7 +997,9 @@ class Module(Configurable, metaclass=_PostInitMeta):
         # pylint: disable=protected-access
         context = self.get_invocation_context()
 
-        def context_shares_module(ctx: InvocationContext) -> bool:
+        def context_shares_module(
+            ctx: InvocationContext,
+        ) -> bool:  # pytype: disable=invalid-annotation
             if isinstance(shared_module_or_name, str):
                 return shared_module_or_name in ctx.module._paths_to_shared_modules
             elif isinstance(shared_module_or_name, Module):
@@ -924,7 +1038,7 @@ class Module(Configurable, metaclass=_PostInitMeta):
             module=target_module, state=target_state, name=shared_module_or_name
         )
 
-    def get_invocation_context(self) -> InvocationContext:
+    def get_invocation_context(self) -> InvocationContext:  # pytype: disable=invalid-annotation
         context = current_context()
         if not context:
             raise RuntimeError(
@@ -991,17 +1105,21 @@ class Module(Configurable, metaclass=_PostInitMeta):
         return self.forward(*args, **kwargs)
 
 
-@functools.partial(struct.dataclass, frozen=False)
-class _Functional:
+@functools.partial(flax_struct.dataclass, frozen=False)
+class _Functional:  # pytype: disable=invalid-annotation
     """A pure functional call to `method_fn`."""
 
     # The function to call.
-    method_fn: Callable = struct.field(pytree_node=False)
+    method_fn: Callable = flax_struct.field(pytree_node=False)
     # The context to call method_fn in.
     # This will be copied to prevent method_fn from mutating the original.
-    context: InvocationContext = struct.field(pytree_node=True)
+    context: InvocationContext = flax_struct.field(
+        pytree_node=True
+    )  # pytype: disable=invalid-annotation
     # Whether to require that context.parent is current_context().
-    require_parent: bool = struct.field(pytree_node=False)
+    require_parent: bool = flax_struct.field(pytree_node=False)
+    # Whether to copy the argument pytrees to prevent method_fn from mutating the original.
+    copy_args_tree: bool = flax_struct.field(pytree_node=False, default=True)
 
     def __call__(self, *args, **kwargs) -> tuple[Any, OutputCollection]:
         """Invokes method_fn in a pure functional fashion.
@@ -1024,16 +1142,17 @@ class _Functional:
         call = getattr(self.method_fn, "__qualname__", None) or getattr(self.method_fn, "__name__")
         logging.vlog(1, "functional: %s.%s (*%s, **%s)", call, self.method_fn, args, kwargs)
 
-        # Copy to prevent method_fn from mutating the original.
         # Some badly behaved tests call F() with an InvocationContext.state that contains
         # circular references.
         # This results in a cryptic error that doesn't make the root cause obvious.
         # So we raise a clearer error explicitly.
         raise_for_cycles(dict(context=self.context, args=args, kwargs=kwargs))
-        context, args, kwargs = jax.tree.map(lambda x: x, (self.context, args, kwargs))
+        context = self.context
+        if self.copy_args_tree:
+            context, args, kwargs = jax.tree.map(lambda x: x, (self.context, args, kwargs))
 
         with set_current_context(context, require_parent=self.require_parent):
-            # pylint: disable-next=not-an-iterable,not-a-mapping,not-callable
+            # pylint: disable-next=not-an-iterable,not-a-mapping
             method_outputs = self.method_fn(*args, **kwargs)
         return method_outputs, context.output_collection
 
@@ -1047,6 +1166,7 @@ def functional(
     method: str = "forward",
     is_training: bool,
     drop_output_collections: Sequence[str] = ("module_outputs",),
+    copy_args_tree: bool = True,
 ) -> tuple[Any, OutputCollection]:
     """Invokes <module>.<method> in a pure functional fashion.
 
@@ -1065,6 +1185,8 @@ def functional(
         is_training: Whether the invocation should run in the training mode.
         drop_output_collections: The output collection types to drop.
             Defaults to dropping all module outputs.
+        copy_args_tree: Whether to copy the `inputs` pytree to prevent method_fn from mutating the
+            original. Defaults to True.
 
     Returns:
         (method_outputs, output_collection), where
@@ -1092,7 +1214,9 @@ def functional(
         args = inputs
     method_fn = getattr(module, method)
 
-    fn = _Functional(context=context, method_fn=method_fn, require_parent=True)
+    fn = _Functional(
+        context=context, method_fn=method_fn, require_parent=True, copy_args_tree=copy_args_tree
+    )
     method_outputs, output_collection = fn(*args, **kwargs)
 
     for output_collection_type in drop_output_collections:

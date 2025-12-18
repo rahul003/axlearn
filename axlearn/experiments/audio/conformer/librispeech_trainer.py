@@ -43,7 +43,12 @@ from axlearn.audio.spectrum_augmenter import MaskSampler, SpectrumAugmenter
 from axlearn.audio.subsamplers import ConvSubSampler
 from axlearn.common import learner
 from axlearn.common.checkpointer import every_n_steps_policy as save_every_n_steps
-from axlearn.common.config import InstantiableConfig, config_for_class, config_for_function
+from axlearn.common.config import (
+    InstantiableConfig,
+    TrainerConfigFn,
+    config_for_class,
+    config_for_function,
+)
 from axlearn.common.convolution import Conv2DWith1DPadding
 from axlearn.common.decoding import PrefixMerger
 from axlearn.common.evaler import SpmdEvaler
@@ -60,7 +65,6 @@ from axlearn.experiments.audio.conformer.common import (
     rnn_transducer_config,
     stack_config,
 )
-from axlearn.experiments.trainer_config_utils import TrainerConfigFn
 
 
 def source_config(
@@ -160,8 +164,7 @@ def _vocab_config(
 
 
 class _InputFn(Protocol):
-    def __call__(self, *, is_training: bool, split: str) -> Input.Config:
-        ...
+    def __call__(self, *, is_training: bool, split: str) -> Input.Config: ...
 
 
 def evaler_config_dict(

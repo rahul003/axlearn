@@ -12,7 +12,10 @@ from jax import numpy as jnp
 from axlearn.common import utils
 from axlearn.common.config import ConfigOr, maybe_instantiate
 from axlearn.common.metrics import MetricAccumulator
-from axlearn.common.update_transformation import ForwardFn, ForwardOutputs
+from axlearn.common.update_transformation import (  # pytype: disable=pyi-error
+    ForwardFn,
+    ForwardOutputs,
+)
 from axlearn.common.utils import Nested, Tensor
 
 
@@ -33,7 +36,7 @@ def _compute_minibatch_size(input_batch: Nested[Tensor], *, steps: int) -> int:
     if steps <= 0:
         raise ValueError("Accumulation steps need to be a positive integer.")
 
-    input_batch_sizes = jax.tree_leaves(jax.tree.map(lambda x: x.shape[0], input_batch))
+    input_batch_sizes = jax.tree_util.tree_leaves(jax.tree.map(lambda x: x.shape[0], input_batch))
 
     if len(input_batch_sizes) == 0:
         raise ValueError("Input batch is empty.")

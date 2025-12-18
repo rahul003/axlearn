@@ -1,6 +1,6 @@
 # Copyright © 2024 Apple Inc.
 
-""" Pallas kernels for Mamba2
+"""Pallas kernels for Mamba2
 
 High-level idea: this kernel implements a two-level chunking algorithm to
 balance memory consumption and running speed. Intuitively, we store chunk-level
@@ -273,6 +273,8 @@ def _ssd_forward(
     return o, (q, k, v, cum_log_alpha, gamma_expanded, chunk_states, final_state)
 
 
+# TODO: Try to reduce positional arguments
+# pylint: disable-next=too-many-positional-arguments
 def _ssd_backward_kernel(
     q_ref: Tensor,
     k_ref: Tensor,

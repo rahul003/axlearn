@@ -6,6 +6,7 @@ import io
 import logging
 import math
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 from urllib.parse import urlparse
@@ -31,7 +32,7 @@ from axlearn.cloud.gcp.system_characteristics import (
     GCE_MACHINE_TYPE_TO_MEMORY_CHARACTERISTICS,
     USER_FACING_NAME_TO_SYSTEM_CHARACTERISTICS,
 )
-from axlearn.cloud.gcp.tpu import get_default_env, infer_tpu_workers
+from axlearn.cloud.gcp.tpu import get_default_env, infer_tpu_cores, infer_tpu_workers
 from axlearn.cloud.gcp.utils import validate_jobset_name
 from axlearn.common.compiler_options import infer_tpu_type
 from axlearn.common.config import REQUIRED, Required, config_class
@@ -161,10 +162,12 @@ class BaseReplicatedJob(FlagConfigurable):
                 Each host's output will be placed in `"{output_dir}/output/$HOSTNAME/"`.
                 This directory is used by the sidecar container to sync outputs to GCS using gsutil.
                 Ensure that `output_dir` is a valid GCS path (e.g., `gs://your-bucket/path`).
+            image_id: An optional field to specify the image used for starting the container
         """
 
         name: Required[str] = REQUIRED
         output_dir: Optional[str] = None
+        image_id: Optional[str] = None
 
     @classmethod
     def define_flags(cls, fv):
@@ -177,6 +180,9 @@ class BaseReplicatedJob(FlagConfigurable):
             None,
             "If specified, the directory to store outputs (such as logs).",
             **common_kwargs,
+        )
+        flags.DEFINE_string(
+            "image_id", None, "Image used for starting the container.", **common_kwargs
         )
 
     def __init__(self, cfg: Config, *, bundler: Bundler):
@@ -294,7 +300,9 @@ class SingleReplicatedJob(BaseReplicatedJob):
         cfg.service_account = cfg.service_account or gcp_settings(
             "k8s_service_account", default="default", fv=fv
         )
-        cfg.accelerator.set(instance_type=fv.instance_type, num_replicas=fv.num_replicas)
+        cfg.accelerator.set(
+            instance_type=fv.instance_type, num_replicas=fv.num_replicas, topology=fv.topology
+        )
         # pylint: disable=missing-kwoa
         # pytype: disable=missing-parameter
         if fv.gcsfuse_mount_spec:
@@ -304,16 +312,41 @@ class SingleReplicatedJob(BaseReplicatedJob):
                 HostMount(**parse_kv_flags(item.split(","), delimiter="="))
                 for item in fv.host_mount_spec
             ]
+        if fv.topology:
+            cls.verify_custom_topology_availability(cfg.accelerator)
         # pytype: enable=missing-parameter
         return cfg
 
+    @classmethod
+    def verify_custom_topology_availability(cls, accelerator: AcceleratorConfig):
+        tpu_type = infer_tpu_type(accelerator.instance_type)
+        cores = infer_tpu_cores(tpu_type)
+        topology = accelerator.topology
+        if not tpu_type.startswith("v5p") or cores < 128:
+            raise ValueError("custom topology is only available for v5p-128 and above.")
+        if not re.fullmatch(r"\d+x\d+x\d+", topology):
+            raise ValueError("custom topology only supports 3d topology for v5p.")
+        dims = [int(dim.strip()) for dim in topology.split("x")]
+        if any(dim == 1 for dim in dims):
+            # Note that v5p-8's topology is 2*2*1, but v5p-8 doesn't support custom
+            # topology so it will fail checks above. So we don't specially handle it
+            # in this branch.
+            raise ValueError("There should be no 1 in each topology dimension.")
+        # There are two cores per chip in v5p
+        cores_in_topology = math.prod(dims) * 2
+        if cores != cores_in_topology:
+            raise ValueError(
+                f"custom topology {topology} doesn't match the number of cores in "
+                f"instance_type {accelerator.instance_type}."
+            )
 
-class TPUReplicatedJob(SingleReplicatedJob):
-    """Builds a replicated jobspec for TPU, to be used with JobSet API."""
+
+class TPUJobBuilder(SingleReplicatedJob):
+    """Common base class for TPU Specs"""
 
     @config_class
     class Config(SingleReplicatedJob.Config):
-        """Configures TPUReplicatedJob.
+        """Configures TPUJobBuilder.
 
         Attributes:
             reservation: If specified, the TPU reservation name. This is not necessarily specific to
@@ -380,7 +413,7 @@ class TPUReplicatedJob(SingleReplicatedJob):
 
     @classmethod
     def from_flags(cls, fv: flags.FlagValues, **kwargs) -> Config:
-        cfg: TPUReplicatedJob.Config = super().from_flags(fv, **kwargs)
+        cfg: TPUJobBuilder.Config = super().from_flags(fv, **kwargs)
         default_env = get_default_env(
             tpu_type=infer_tpu_type(fv.instance_type),
             num_tpu_slices=fv.num_replicas,
@@ -404,7 +437,7 @@ class TPUReplicatedJob(SingleReplicatedJob):
 
     def __init__(self, cfg: Config, *, bundler: Bundler):
         super().__init__(cfg, bundler=bundler)
-        cfg: TPUReplicatedJob.Config = self.config
+        cfg: TPUJobBuilder.Config = self.config
         if cfg.output_dir is None:
             raise ValueError("cfg.output_dir is required.")
         self._tpu_type = infer_tpu_type(cfg.accelerator.instance_type)
@@ -433,7 +466,7 @@ class TPUReplicatedJob(SingleReplicatedJob):
         Returns:
             A nested dict corresponding to a k8s Container config.
         """
-        cfg: TPUReplicatedJob.Config = self.config
+        cfg: TPUJobBuilder.Config = self.config
         system = USER_FACING_NAME_TO_SYSTEM_CHARACTERISTICS[self._tpu_type]
         volume_mounts = [self._output_volume_mount]
 
@@ -451,6 +484,7 @@ class TPUReplicatedJob(SingleReplicatedJob):
         if cfg.enable_tpu_ici_resiliency is not None:
             env_vars["ENABLE_ICI_RESILIENCY"] = str(cfg.enable_tpu_ici_resiliency).lower()
 
+        # This label will be used by TPU provisioner to select machine type.
         resources = {"limits": {"google.com/tpu": system.chips_per_vm}}
         # Set request memory by host machine type.
         machine_memory_gi = GCE_MACHINE_TYPE_TO_MEMORY_CHARACTERISTICS.get(
@@ -468,10 +502,33 @@ class TPUReplicatedJob(SingleReplicatedJob):
         k8s_env_vars.append(
             {"name": "NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}}
         )
+        # pylint: disable=line-too-long
+        k8s_env_vars.append(
+            {
+                "name": "NUM_REPLICAS",
+                "valueFrom": {
+                    "fieldRef": {
+                        "fieldPath": "metadata.annotations['jobset.sigs.k8s.io/replicatedjob-replicas']"
+                    }
+                },
+            }
+        )
+        # pylint: enable=line-too-long
+
+        k8s_env_vars.append(
+            {
+                "name": "REPLICA_ID",
+                "valueFrom": {
+                    "fieldRef": {
+                        "fieldPath": "metadata.annotations['jobset.sigs.k8s.io/job-index']"
+                    }
+                },
+            }
+        )
 
         return dict(
             name=cfg.name,
-            image=self._bundler.id(cfg.name),
+            image=cfg.image_id or self._bundler.id(cfg.name),
             # https://cloud.google.com/kubernetes-engine/docs/how-to/tpus#tpu-chips-node-pool
             # https://cloud.google.com/kubernetes-engine/docs/how-to/tpu-multislice#run_workload
             ports=[
@@ -503,7 +560,7 @@ class TPUReplicatedJob(SingleReplicatedJob):
         Returns:
             A nested dict corresponding to a k8s Container config.
         """
-        cfg: TPUReplicatedJob.Config = self.config
+        cfg: TPUJobBuilder.Config = self.config
         output_volume_mount = output_volume_mount or self._output_volume_mount
         dst = f"{cfg.output_dir}/output/$HOSTNAME/"
         interval_s = 60
@@ -530,6 +587,56 @@ class TPUReplicatedJob(SingleReplicatedJob):
             "emptyDir": {"medium": "Memory", "sizeLimit": shared_memory},
         }
 
+    def set_up_gcsfuse(self, cfg: "TPUJobBuilder.Config", volumes: list, annotations: dict) -> None:
+        """Sets up GCSFuse volumes and annotations.
+
+        Args:
+            cfg: The TPUJobBuilder configuration.
+            volumes: The list of volumes to append GCSFuse volumes to.
+            annotations: The dictionary of annotations to update with GCSFuse settings.
+        """
+        # Increases the shared memory volumes when enabled gcsfuse. This is useful when grain
+        # prefetch is enabled.
+        volumes.append(self._build_shared_memory_volumes(cfg.gcsfuse_mount.shared_memory))
+        # Mount a GCS bucket as a volume.
+        annotations.update(
+            {
+                "gke-gcsfuse/volumes": "true",
+                "gke-gcsfuse/cpu-request": cfg.gcsfuse_mount.cpu,
+                "gke-gcsfuse/memory-request": cfg.gcsfuse_mount.memory,
+                "gke-gcsfuse/ephemeral-storage-request": cfg.gcsfuse_mount.ephemeral_gb,
+                # GCSFuse will set limits=request if we only set requests:
+                # https://github.com/GoogleCloudPlatform/gcs-fuse-csi-driver/blob/main/pkg/webhook/config.go#L110
+                "gke-gcsfuse/cpu-limit": "0",
+                "gke-gcsfuse/memory-limit": "0",
+                "gke-gcsfuse/ephemeral-storage-limit": "0",
+            }
+        )
+        # Parse GCSFuseMount path into bucket, prefix.
+        parsed = urlparse(cfg.gcsfuse_mount.gcs_path)
+        # https://cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/cloud-storage-fuse-csi-driver#consume-ephemeral-volume-pod
+        # Caveat: --implicit-dirs might have negative impacts on i/o performance. See
+        # https://github.com/googlecloudplatform/gcsfuse/blob/master/docs/semantics.md .
+        # See https://cloud.google.com/storage/docs/cloud-storage-fuse/config-file for more
+        # details about mountOptions.
+        # The mountOptions are following https://github.com/AI-Hypercomputer/maxtext/pull/1070.
+        volumes.append(
+            dict(
+                name=cfg.gcsfuse_mount.name,
+                csi=dict(
+                    driver="gcsfuse.csi.storage.gke.io",
+                    readOnly=cfg.gcsfuse_mount.read_only,
+                    volumeAttributes=dict(
+                        bucketName=parsed.netloc,
+                        # pylint: disable=line-too-long
+                        mountOptions=f"only-dir={parsed.path.lstrip('/')},implicit-dirs,metadata-cache:ttl-secs:-1,metadata-cache:stat-cache-max-size-mb:-1,metadata-cache:type-cache-max-size-mb:-1,kernel-list-cache-ttl-secs=-1,gcs-connection:http-client-timeout:{cfg.gcsfuse_mount.http_client_timeout}",
+                        gcsfuseMetadataPrefetchOnMount="false",  # Improves first-time read.
+                        disableMetrics="false",  # Enables GCSFuse metrics by default.
+                    ),
+                ),
+            )
+        )
+
     def _build_pod(self) -> Nested[Any]:
         """Builds a config for a single Pod, which is a set of containers.
 
@@ -538,53 +645,13 @@ class TPUReplicatedJob(SingleReplicatedJob):
         Returns:
             A nested dict corresponding to a k8s Pod template, including the pod metadata and spec.
         """
-        cfg: TPUReplicatedJob.Config = self.config
+        cfg: TPUJobBuilder.Config = self.config
         system = USER_FACING_NAME_TO_SYSTEM_CHARACTERISTICS[self._tpu_type]
         annotations, labels, selector, volumes, tolerations = {}, {}, {}, [], []
 
         volumes.append(dict(name="shared-output", emptyDir={}))
         if cfg.gcsfuse_mount:
-            # Increases the shared memory volumes when enabled gcsfuse. This is useful when grain
-            # prefetch is enabled.
-            volumes.append(self._build_shared_memory_volumes(cfg.gcsfuse_mount.shared_memory))
-            # Mount a GCS bucket as a volume.
-            annotations.update(
-                {
-                    "gke-gcsfuse/volumes": "true",
-                    "gke-gcsfuse/cpu-request": cfg.gcsfuse_mount.cpu,
-                    "gke-gcsfuse/memory-request": cfg.gcsfuse_mount.memory,
-                    "gke-gcsfuse/ephemeral-storage-request": cfg.gcsfuse_mount.ephemeral_gb,
-                    # GCSFuse will set limits=request if we only set requests:
-                    # https://github.com/GoogleCloudPlatform/gcs-fuse-csi-driver/blob/main/pkg/webhook/config.go#L110
-                    "gke-gcsfuse/cpu-limit": "0",
-                    "gke-gcsfuse/memory-limit": "0",
-                    "gke-gcsfuse/ephemeral-storage-limit": "0",
-                }
-            )
-            # Parse GCSFuseMount path into bucket, prefix.
-            parsed = urlparse(cfg.gcsfuse_mount.gcs_path)
-            # https://cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/cloud-storage-fuse-csi-driver#consume-ephemeral-volume-pod
-            # Caveat: --implicit-dirs might have negative impacts on i/o performance. See
-            # https://github.com/googlecloudplatform/gcsfuse/blob/master/docs/semantics.md .
-            # See https://cloud.google.com/storage/docs/cloud-storage-fuse/config-file for more
-            # details about mountOptions.
-            # The mountOptions are following https://github.com/AI-Hypercomputer/maxtext/pull/1070.
-            volumes.append(
-                dict(
-                    name=cfg.gcsfuse_mount.name,
-                    csi=dict(
-                        driver="gcsfuse.csi.storage.gke.io",
-                        readOnly=cfg.gcsfuse_mount.read_only,
-                        volumeAttributes=dict(
-                            bucketName=parsed.netloc,
-                            # pylint: disable=line-too-long
-                            mountOptions=f"only-dir={parsed.path.lstrip('/')},implicit-dirs,metadata-cache:ttl-secs:-1,metadata-cache:stat-cache-max-size-mb:-1,metadata-cache:type-cache-max-size-mb:-1,kernel-list-cache-ttl-secs=-1,gcs-connection:http-client-timeout:{cfg.gcsfuse_mount.http_client_timeout}",
-                            gcsfuseMetadataPrefetchOnMount="true",  # Improves first-time read.
-                            disableMetrics="false",  # Enables GCSFuse metrics by default.
-                        ),
-                    ),
-                )
-            )
+            self.set_up_gcsfuse(cfg, volumes, annotations)
         if cfg.host_mounts:
             for mount in cfg.host_mounts:
                 volumes.append(
@@ -657,9 +724,12 @@ class TPUReplicatedJob(SingleReplicatedJob):
 
             labels.update({"job-priority": str(spec.metadata.priority)})
             labels.update({"user-id": spec.metadata.user_id})
+            labels.update({"project-id": spec.metadata.project_id})
 
             # For job-priority to be populated to node labels when tpu-provisioner is used.
             selector.update({"job-priority": str(spec.metadata.priority)})
+
+        labels.update({"num-replicas": str(cfg.accelerator.num_replicas)})
 
         annotations.update(
             {
@@ -697,7 +767,7 @@ class TPUReplicatedJob(SingleReplicatedJob):
             hostAliases=[metadata_host_alias],
             nodeSelector={
                 "cloud.google.com/gke-tpu-accelerator": system.gke_accelerator,
-                "cloud.google.com/gke-tpu-topology": system.topology,
+                "cloud.google.com/gke-tpu-topology": cfg.accelerator.topology or system.topology,
                 **selector,
             },
             tolerations=tolerations,
@@ -726,6 +796,12 @@ class TPUReplicatedJob(SingleReplicatedJob):
             metadata=dict(annotations=annotations, labels=labels),
             spec=spec,
         )
+
+
+class TPUReplicatedJob(TPUJobBuilder):
+    """Builds a replicated job spec for a generic TPU job to be used with the JobSet API"""
+
+    Config = TPUJobBuilder.Config
 
     def __call__(self) -> Sequence[Nested[Any]]:
         """See `BaseReplicatedJob` docstring for details."""

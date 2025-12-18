@@ -32,7 +32,7 @@ from axlearn.common.attention import (
     StackedTransformerLayer,
 )
 from axlearn.common.base_layer import RematSpec
-from axlearn.common.config import config_for_function
+from axlearn.common.config import TrainerConfigFn, config_for_function
 from axlearn.common.decoder import LmHead
 from axlearn.common.embedding import TransformerTextEmbeddings
 from axlearn.common.flash_attention.layer import FlashBlockSizeModifier
@@ -65,13 +65,9 @@ from axlearn.experiments.text.gpt.common import (
 )
 from axlearn.experiments.text.gpt.common import model_config as common_model_config
 from axlearn.experiments.text.gpt.common import scaled_hidden_dim
-from axlearn.experiments.trainer_config_utils import TrainerConfigFn, V6eFlashConfigModifier
+from axlearn.experiments.trainer_config_utils import V6eFlashConfigModifier
 
-import re
-import os
-from absl import logging
-
-MODEL_SIZES = ("test", "1B", "3B", "7B", "8B", "70B")
+MODEL_SIZES = ("test", "1B", "3B", "7B", "8B", "70B", "405B")
 
 
 class Version(enum.Enum):
@@ -129,6 +125,7 @@ TOTAL_TOKENS = {
         "7B": 15 * (1024**4),  # 15T tokens
         "8B": 15 * (1024**4),  # 15T tokens
         "70B": 15 * (1024**4),  # 15T tokens
+        "405B": 15 * (1024**4),  # 15T tokens
     },
     Version.V3_TIKTOKEN: {
         "test": 15 * (1024**4),  # 15T tokens
@@ -136,8 +133,50 @@ TOTAL_TOKENS = {
         "3B": 15 * (1024**4),  # 15T tokens
         "8B": 15 * (1024**4),  # 15T tokens
         "70B": 15 * (1024**4),  # 15T tokens
+        "405B": 15 * (1024**4),  # 15T tokens
     },
 }
+
+
+def offload_dots_saveable_policy(*_, **__):
+    """A rematerialization policy function used in RematSpec to offload dot_general_p
+    operations from device to pinned host memory.
+
+    Args:
+        *_: Ignored positional arguments.
+        **__: Ignored keyword arguments.
+
+    Returns:
+        A policy function that offloads dot_general_p from device to pinned host
+    memory.
+    """
+    return config_for_function(extended_checkpoint_policies.offload_dots_saveable).set(
+        offload_src="device", offload_dst="pinned_host"
+    )
+
+
+def offload_attention_proj_policy(*_, **__):
+    """A rematerialization policy function used in RematSpec to offload attention
+    projection intermediates during model execution.
+
+    Args:
+        *_: Ignored positional arguments.
+        **__: Ignored keyword arguments.
+
+    Returns:
+        A checkpoint policy function that offloads native attention projection intermediates
+        from device to pinned host memory, enabling memory-efficient training with checkpoint
+        support.
+    """
+    return config_for_function(
+        extended_checkpoint_policies.save_and_offload_only_these_names_regex
+    ).set(
+        names_which_can_be_saved=None,
+        names_which_can_be_offloaded=RematRegexSavePatterns.NATIVE_ATTENTION.value,
+        offload_src="device",
+        offload_dst="pinned_host",
+    )
+
 
 # Llama3 uses 16m tokens after 2.87T tokens.
 # https://arxiv.org/pdf/2407.21783
@@ -325,18 +364,7 @@ def get_trainer_kwargs(
     rope_theta = ROPE_THETA[version]
 
     trn2_config = _generate_trn2_custom_configs(model_size, version=version)
-    offload_dots_saveable_policy = config_for_function(
-        extended_checkpoint_policies.offload_dots_saveable
-    ).set(offload_src="device", offload_dst="pinned_host")
-    # To make it work better with v3 8k sequence length.
-    offload_attention_proj_policy = config_for_function(
-        extended_checkpoint_policies.save_and_offload_only_these_names_regex
-    ).set(
-        names_which_can_be_saved=None,
-        names_which_can_be_offloaded=RematRegexSavePatterns.NATIVE_ATTENTION.value,
-        offload_src="device",
-        offload_dst="pinned_host",
-    )
+
     # dict() is more readable here.
     # pylint: disable=use-dict-literal
     check_env_vars()
@@ -885,6 +913,52 @@ def get_trainer_kwargs(
                             *(GradientAccumulationModifier.default_config().set(
                                 grad_acc_steps=int(GRAD_ACCUM),
                             ) for GRAD_ACCUM in [os.getenv("GRAD_ACCUM")] if GRAD_ACCUM),
+                        ],
+                    ),
+                ),
+            ),
+        )
+    elif model_size == "405B":
+        trainer_kwargs = dict(
+            model_kwargs=dict(
+                num_layers=126,
+                hidden_dim=16384,
+                ffn_dim=53248,
+                num_heads=128,
+                # No GQA support in V1 models, so num_kv_heads is the same as num_heads.
+                num_kv_heads=None if version == Version.V1 else 8,
+                rope_theta=rope_theta,
+                shared_lm_head=False,
+                flash_attention=flash_attention,
+            ),
+            learner_kwargs=dict(peak_lr=1.5e-4, weight_decay=0.1),
+            max_sequence_length=max_sequence_length,
+            train_batch_size=train_batch_size,
+            max_step=max_step,
+            mesh_shape=mesh_shape_from_axes(fsdp=-1),
+            mesh_rules=(
+                (
+                    "tpu-v5p-.*",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(fsdp=-1)
+                            ),
+                            RematSpecModifier.default_config().set(
+                                remat_policies={
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=False,
+                                        policy=config_for_function(
+                                            save_and_offload_only_these_names_regex
+                                        ).set(
+                                            names_which_can_be_saved=None,
+                                            names_which_can_be_offloaded=None,
+                                            offload_src="device",
+                                            offload_dst="pinned_host",
+                                        ),
+                                    ),
+                                }
+                            ),
                         ],
                     ),
                 ),
