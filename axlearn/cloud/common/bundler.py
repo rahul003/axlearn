@@ -62,6 +62,7 @@ from axlearn.cloud.common.utils import (
     copy_blobs,
     get_pyproject_version,
     parse_kv_flags,
+    to_bool,
 )
 from axlearn.common.config import REQUIRED, Configurable, Required, config_class
 from axlearn.common.file_system import copy, exists, makedirs
@@ -300,10 +301,16 @@ class BaseDockerBundler(Bundler):
         cache_from: Optional[Sequence[str]] = None
         # Skip the build + push step (e.g., using a pre-built image).
         skip_bundle: bool = False
+        # Sidecar names to build images for.
+        sidecars: list[str] = []
 
     def __init__(self, cfg: Config):
         super().__init__(cfg)
         cfg = self.config
+
+        if cfg.skip_bundle:
+            # No need to check other fields if skip bundle
+            return
 
         if not cfg.image:
             raise ValueError(
@@ -332,6 +339,7 @@ class BaseDockerBundler(Bundler):
         - platform: The image target platform.
         - allow_dirty: Whether to ignore dirty git status.
         - cache_from: A comma-separated list of cache sources.
+        - sidecars: A comma-separated list of sidecar names.
         - skip_bundle: Whether to skip the build + push. This option is intended to be used when an
             image has already been pre-built offline, in which case we may still want to leverage
             the install commands implemented by the bundler.
@@ -341,9 +349,19 @@ class BaseDockerBundler(Bundler):
         cfg: BaseDockerBundler.Config = super().from_spec(spec, fv=fv)
         kwargs = parse_kv_flags(spec, delimiter="=")
         cache_from = canonicalize_to_list(kwargs.pop("cache_from", None))
+        sidecars = canonicalize_to_list(kwargs.pop("sidecars", None))
+        skip_bundle = to_bool(kwargs.pop("skip_bundle", False))
+        allow_dirty = to_bool(kwargs.pop("allow_dirty", False))
         # Non-config specs are treated as build args.
         build_args = {k: kwargs.pop(k) for k in list(kwargs.keys()) if k not in cfg}
-        return cfg.set(build_args=build_args, cache_from=cache_from, **kwargs)
+        return cfg.set(
+            build_args=build_args,
+            cache_from=cache_from,
+            sidecars=sidecars,
+            skip_bundle=skip_bundle,
+            allow_dirty=allow_dirty,
+            **kwargs,
+        )
 
     # pylint: disable-next=arguments-renamed
     def id(self, tag: str) -> str:
@@ -472,6 +490,16 @@ class DockerBundler(BaseDockerBundler):
         labels: dict[str, str],
     ) -> str:
         cfg: DockerBundler.Config = self.config
+
+        _, tag = image.rsplit(":", maxsplit=1)
+        for sidecar in cfg.sidecars:
+            sidecar_bundler = cfg.set(
+                image=sidecar,
+                target=sidecar,
+                sidecars=[],
+            ).instantiate()
+            sidecar_bundler.bundle(tag=tag)
+
         return docker_push(
             docker_build(
                 dockerfile=dockerfile,
@@ -616,12 +644,12 @@ class BaseTarBundler(Bundler):
         )
         pip_install_cmd = (
             f"if [[ -f {config.CONFIG_DIR}/requirements.txt ]]; then "
-            f"python3 -m pip install -r {config.CONFIG_DIR}/requirements.txt; "
-            "else python3 -m pip install .; fi"
+            f"python3 -m uv pip install -r {config.CONFIG_DIR}/requirements.txt; "
+            "else python3 -m uv pip install .; fi"
         )
         return (
             f"{copy_cmd} && tar -xzf axlearn.tar.gz && "
-            f"python3 -m pip install --upgrade pip && {pip_install_cmd}"
+            f"python3 -m uv pip install --upgrade pip && {pip_install_cmd}"
         )
 
 

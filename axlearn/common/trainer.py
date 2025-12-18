@@ -45,7 +45,7 @@ from axlearn.common.optimizer_base import NestedOptParam, OptParam
 from axlearn.common.param_init import DefaultInitializer
 from axlearn.common.state_builder import Builder as TrainerStateBuilder
 from axlearn.common.summary_writer import BaseWriter, SummaryWriter
-from axlearn.common.update_transformation import ForwardOutputs
+from axlearn.common.update_transformation import ForwardOutputs  # pytype: disable=pyi-error
 from axlearn.common.utils import (
     HybridMeshShape,
     MeshShape,
@@ -58,6 +58,7 @@ from axlearn.common.utils import (
     canonicalize_per_param_dtype,
     count_model_params,
     flatten_items,
+    host_to_global_specs,
     match_regex_rules,
     thread_stack_traces,
 )
@@ -121,7 +122,7 @@ class SpmdTrainer(Module):
         mesh_axis_names: Required[Sequence[str]] = REQUIRED
         # Subset of mesh axis names over which the leaves of the input batch are sharded.
         # TODO(markblee): Deprecate this field in favor of `input.input_partitioner`.
-        batch_axis_names: Union[str, Sequence[str]] = "data"
+        batch_axis_names: Optional[Union[str, Sequence[str]]] = "data"
 
         # An optional list of (regex, MeshShape) pairs to override the default mesh configuration.
         #
@@ -216,6 +217,10 @@ class SpmdTrainer(Module):
         # Defaults to None which is interpreted as True.
         cache_compiled_train_step: Optional[bool] = None
 
+        # Log the loss value every n steps. Defaults to None which is interpreted as every
+        # 100 steps.
+        log_every_n_steps: Optional[int] = None
+
     def __init__(
         self,
         cfg: Config,
@@ -296,11 +301,12 @@ class SpmdTrainer(Module):
         # Create all children within the mesh context so that utils.input_partition_spec() works
         # properly.
         with self.mesh():
+            if cfg.batch_axis_names is not None:
+                cfg.input = maybe_set_config(
+                    cfg.input, partition_spec=PartitionSpec(cfg.batch_axis_names)
+                )
             self.input: Input = self._add_child(
-                "input",
-                maybe_set_config(
-                    cfg.input, partition_spec=PartitionSpec(cfg.batch_axis_names), is_training=True
-                ),
+                "input", maybe_set_config(cfg.input, is_training=True)
             )
             # Start from the beginning of the input dataset by default.
             self._input_iter = iter(self.input.dataset())
@@ -340,9 +346,10 @@ class SpmdTrainer(Module):
                 evaler_cfg.summary_writer.dir = evaler_cfg.summary_writer.dir or os.path.join(
                     cfg.dir, "summaries", evaler_name
                 )
-                maybe_set_config(
-                    evaler_cfg.input, partition_spec=PartitionSpec(cfg.batch_axis_names)
-                )
+                if cfg.batch_axis_names is not None:
+                    maybe_set_config(
+                        evaler_cfg.input, partition_spec=PartitionSpec(cfg.batch_axis_names)
+                    )
                 self._evalers[evaler_name] = self._add_child(
                     evaler_name,
                     evaler_cfg,
@@ -368,13 +375,18 @@ class SpmdTrainer(Module):
         return self._trainer_state_partition_specs
 
     def _train_step_input_partition_specs(self):
+        # Note that subclasses may override this method to set a partition spec for pjit which is
+        # different from that of the input partition spec.
         return self.input.partition_spec
 
     def model_params_for_eval(self):
         state = self.trainer_state
-        if self.config.learner.ema.decay is not None:
+        # Note: It's important to use self._config, not self.config, here because this method
+        # can get called multiple times per training step (especially if there are many evalers)
+        # and self.config does an expensive deep copy.
+        if self._config.learner.ema.decay is not None:
             logging.log_first_n(logging.INFO, "Using model parameter EMA for eval", 10)
-            return state.learner["ema"].ema
+            return state.learner["ema"].ema  # pytype: disable=attribute-error
         return state.model
 
     def _step_log(self, msg, *args, **kwargs):
@@ -526,6 +538,13 @@ class SpmdTrainer(Module):
         if self._recorder is not None:
             self._recorder.record(event, *args, **kwargs)
 
+    def _maybe_monitor_all(self):
+        return (
+            self._recorder.maybe_monitor_all()
+            if self._recorder is not None
+            else contextlib.nullcontext()
+        )
+
     # pylint: disable-next=too-many-statements,too-many-branches
     def run(
         self, prng_key: Tensor, *, return_evaler_summaries: Optional[Union[bool, set[str]]] = None
@@ -548,7 +567,7 @@ class SpmdTrainer(Module):
             force run at the last training step. The dict will have evaler names as keys and
             metrics summary dict as values (None for evalers not included in force run).
             The metrics summary dict has string keys for the name of the metrics and can have
-            different types of values such as WeightedScalar, Tensor, or string, depending on
+            different types of values such as WeightedSummary, Tensor, or string, depending on
             the specific `metric_calculator` config of the evaler.
         """
         with (
@@ -561,6 +580,7 @@ class SpmdTrainer(Module):
             self.mesh(),
             jax.log_compiles(self.vlog_is_on(1)),
             self._context_manager(),
+            self._maybe_monitor_all(),
         ):
             cfg = self.config
             # Check if need to force run evals at the last training step.
@@ -595,7 +615,7 @@ class SpmdTrainer(Module):
                         input_batch = next(input_iterator)
                         self._maybe_record_event(measurement.Event.END_DATA_LOADING)
                         logging.log_first_n(
-                            logging.INFO, "input_batch=%s", 3, utils.shapes(input_batch)
+                            logging.INFO, "host_input_batch=%s", 3, utils.shapes(input_batch)
                         )
 
                         # Stop or start tracing if necessary.
@@ -605,7 +625,7 @@ class SpmdTrainer(Module):
                         self.vlog(3, "Start step %s", self.step)
                         self._maybe_record_event(measurement.Event.START_STEP, self._step)
                         output = self._run_step(
-                            utils.host_to_global_device_array(
+                            utils.host_to_global_array(
                                 input_batch,
                                 partition=self._train_step_input_partition_specs(),
                             ),
@@ -674,10 +694,10 @@ class SpmdTrainer(Module):
             logging.info("Creating state from init_state_builder after initialization.")
             self._init_with_prebuilt_state(prng_key, prebuilt_state=None)
             built_state = self._restore_from_builder()
-            self._step = built_state.step
+            self._step = built_state.step  # pytype: disable=attribute-error
             self._trainer_state = jax.tree.map(
                 lambda state, spec: jax.device_put(state, spec.sharding),
-                built_state.trainer_state,
+                built_state.trainer_state,  # pytype: disable=attribute-error
                 self._trainer_state_specs,
             )
 
@@ -1046,6 +1066,7 @@ class SpmdTrainer(Module):
         options = infer_xla_performance_flags(
             mesh_shape=cfg.mesh_shape, mesh_axis_names=cfg.mesh_axis_names, device_kind=device_kind
         )
+        logging.log_first_n(logging.INFO, "Compiler options: %s", 1, options)
         if not with_xsc:
             self._maybe_record_event(
                 measurement.Event.START_CUSTOM_BADPUT_EVENT,
@@ -1095,6 +1116,7 @@ class SpmdTrainer(Module):
             A dict containing 'loss' and 'aux' outputs. If force_run_evals is a set,
             force run the evalers in the set and return 'evaler_summaries' output.
         """
+        logging.log_first_n(logging.INFO, "global_input_batch=%s", 3, utils.shapes(input_batch))
         with jax.profiler.StepTraceAnnotation("train", step_num=self.step):
             run_with_xsc = self._xsc_check_policy and self._xsc_check_policy(self.step)
             compiled_train_step_fn = self._get_compiled_train_step_fn(
@@ -1103,7 +1125,8 @@ class SpmdTrainer(Module):
             # Run the compiled function.
             self._trainer_state, outputs = compiled_train_step_fn(self.trainer_state, input_batch)
 
-        if self.step % 100 == 0 or 0 <= self.step <= 5:
+        n = self._config.log_every_n_steps or 100
+        if self.step % n == 0 or 0 <= self.step <= 5:
             self._step_log(
                 "loss=%s aux=%s",
                 outputs["loss"],
@@ -1200,9 +1223,14 @@ class SpmdTrainer(Module):
                     self.trainer_state_specs,
                 )
             if input_batch is None:
-                # Infer input batch shapes from input element spec.
-                # N.B. in a multi-process setting these will be host-local (per process).
-                input_batch = self.input.element_spec()
+                # Infer global input batch shapes from input element spec.
+                host_batch = self.input.element_spec()
+                if "input_dispatcher" in self.input.children:
+                    host_batch = self.input.input_dispatcher.logical_to_physical_shapes(host_batch)
+                input_batch = host_to_global_specs(
+                    host_batch, partition=self._train_step_input_partition_specs()
+                )
+
             # Rely on the instance handle to ensure that we hit the compilation cache if possible.
             jit_train_step = self._jit_train_step or self._pjit_train_step()
             # Note(Jan 2022):
@@ -1217,15 +1245,18 @@ class SpmdTrainer(Module):
         state: TrainerState,
         input_batch: dict[str, Any],
     ) -> tuple[TrainerState, NestedTensor]:
+        def train_cast(in_tree):
+            per_param_train_dtype = self._per_param_train_dtype(in_tree)
+            return utils.cast_floats_per_param(in_tree, per_param_train_dtype)
+
+        # Cast before dispatching to speed up matmul and decrease memory imprint.
+        input_batch = train_cast(input_batch)
+
         # Shard and (possibly) dispatch the input batch.
         input_batch = self.input.dispatch_global_batch(input_batch)
         new_prng_key, param_noise_key, forward_key, learner_key = jax.random.split(
             state.prng_key, 4
         )
-
-        def train_cast(in_tree):
-            per_param_train_dtype = self._per_param_train_dtype(in_tree)
-            return utils.cast_floats_per_param(in_tree, per_param_train_dtype)
 
         # A nested tree of booleans.
         should_compute_gradients = self.learner.should_update_with_optimizers(state.model)
@@ -1244,7 +1275,9 @@ class SpmdTrainer(Module):
                 prng_key=inputs["forward_key"],
                 output_collection=model_output_collection,
             ):
-                loss, aux = self.model(input_batch=train_cast(inputs["input_batch"]))
+                # Copy tree to avoid tracer leaks when input_batch is changed by the model.
+                input_batch_copy = jax.tree.map(lambda x: x, inputs["input_batch"])
+                loss, aux = self.model(input_batch=input_batch_copy)
             return ForwardOutputs(loss=loss, aux=aux, output_collection=model_output_collection)
 
         # `grads` are computed for `model_parameters_grad`.

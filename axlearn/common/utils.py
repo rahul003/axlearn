@@ -46,6 +46,7 @@ import numpy as np
 from absl import logging
 from jax import numpy as jnp
 from jax._src.ad_checkpoint import name_p
+from jax._src.array import local_to_global_shape
 from jax._src.lax import lax as lax_internal
 from jax._src.mesh import thread_resources
 from jax._src.tree_util import KeyEntry, KeyPath
@@ -154,8 +155,7 @@ register_validator(
 
 
 class RematPolicy(Protocol):
-    def __call__(self, prim: Primitive, *args: Any, **params: Any) -> Union[RematType, bool]:
-        ...
+    def __call__(self, prim: Primitive, *args: Any, **params: Any) -> Union[RematType, bool]: ...
 
 
 def save_and_offload_only_these_names_regex(
@@ -800,27 +800,32 @@ class DataPartitionType(Enum):
     FULL = "full"
     # Data are fully replicated across all devices.
     REPLICATED = "replicated"
+    # Data are partitioned across batch axes and sequence axes.
+    BATCH = "batch"
 
 
 def data_partition_type_to_spec(
-    partition: Union[DataPartitionType, PartitionSpec],
-) -> PartitionSpec:
+    partition: Union[DataPartitionType, Nested[PartitionSpec]],
+) -> Nested[PartitionSpec]:
     """Returns a PartitionSpec for the given partition type."""
     if partition == DataPartitionType.FULL:
         return input_partition_spec()
     elif partition == DataPartitionType.REPLICATED:
         return PartitionSpec(None)
+    elif partition == DataPartitionType.BATCH:
+        return PartitionSpec(("data", "fsdp"), "seq")
     elif isinstance(partition, PartitionSpec):
         return partition
+    elif isinstance(partition, dict):
+        return {k: data_partition_type_to_spec(v) for k, v in partition.items()}
     else:
         raise NotImplementedError(f"Unsupported partition: {partition}")
 
 
-# TODO(markblee): Rename to `host_to_global_array` for consistency with `global_to_host_array`.
-def host_to_global_device_array(
+def host_to_global_array(
     host_arrays: Nested[Union[np.ndarray, Tensor]],
     *,
-    partition: Union[PartitionSpec, DataPartitionType] = DataPartitionType.FULL,
+    partition: Union[Nested[PartitionSpec], DataPartitionType] = DataPartitionType.FULL,
 ) -> Nested[Tensor]:
     """Converts the given host device arrays to global device arrays.
 
@@ -853,12 +858,12 @@ def host_to_global_device_array(
     )
     process_count = jax.process_count()
 
-    def make_gda(x: np.ndarray, partition_spec: PartitionSpec):
+    def make_array(x: np.ndarray, partition_spec: PartitionSpec):
         if partition == DataPartitionType.FULL:
             global_shape = (x.shape[0] * process_count, *x.shape[1:])
         elif partition == DataPartitionType.REPLICATED:
             global_shape = (x.shape[0], *x.shape[1:])
-        elif isinstance(partition, PartitionSpec):
+        elif isinstance(partition, (PartitionSpec, dict)):
             global_shape = None  # Allow jax to infer.
         else:
             raise NotImplementedError(f"Unsupported partition: {partition}")
@@ -868,7 +873,44 @@ def host_to_global_device_array(
             global_shape=global_shape,
         )
 
-    return jax.tree.map(make_gda, host_arrays, partition_specs)
+    return jax.tree.map(make_array, host_arrays, partition_specs)
+
+
+def host_to_global_specs(
+    host_arrays: Nested[jax.ShapeDtypeStruct], *, partition: PartitionSpec
+) -> Nested[jax.ShapeDtypeStruct]:
+    """Converts the given host-local specs to global array specs.
+
+    The API has the same semantics as `host_to_global_array`, which takes Tensors instead of specs.
+    Please refer to `host_to_global_array` docstring for details.
+    """
+    mesh = thread_resources.env.physical_mesh
+    partition_specs = complete_partition_spec_tree(
+        jax.tree_util.tree_structure(host_arrays),
+        data_partition_type_to_spec(partition),
+    )
+
+    def make_array_spec(x: jax.ShapeDtypeStruct, partition_spec: PartitionSpec):
+        # `local_to_global_shape` is also used by `jax.make_array_from_process_local_data`.
+        # It uses the process indices from devices in the mesh, which allows it to be compatible
+        # with the fake devices used in AOT.
+        sharding = jax.sharding.NamedSharding(mesh, partition_spec)
+        global_shape = local_to_global_shape(sharding, local_shape=x.shape)
+        # We use the sharding from `partition`, as host-local arrays do not have sharding.
+        return jax.ShapeDtypeStruct(shape=global_shape, dtype=x.dtype, sharding=sharding)
+
+    return jax.tree.map(make_array_spec, host_arrays, partition_specs)
+
+
+def host_to_global_device_array(*args, **kwargs) -> Nested[Tensor]:
+    """A deprecated alias for `host_to_global_array`.
+
+    Please use `host_to_global_array` instead.
+    """
+    logging.log_first_n(
+        logging.WARN, "host_to_global_device_array is renamed to host_to_global_array.", 1
+    )
+    return host_to_global_array(*args, **kwargs)
 
 
 # TODO(markblee): Remove partition arg.
@@ -1740,7 +1782,9 @@ def create_device_mesh(
         max(getattr(el, device_attr) for el in devices.flatten()) + 1 if is_multi_granule_env else 1
     )
     num_devices = len(devices)
-    assert num_devices % num_granules == 0, "Number of devices should divide number of granules."
+    assert (
+        num_devices % num_granules == 0
+    ), "Number of devices must be divisible by number of granules."
     num_devices_per_granule = num_devices // num_granules
 
     # Fallback to a standard mesh if on GPU or neuron with incompatible multi-granule mesh.
@@ -1765,11 +1809,13 @@ def create_device_mesh(
                 break
             elif dim != 1:
                 raise ValueError(
-                    f"First non-singleton mesh axis {axis} with value {dim} does not divide "
+                    f"First non-singleton mesh axis {axis} with value {dim} must be divisible by "
                     f"the number of slices/granules {num_granules}."
                 )
         else:
-            raise ValueError(f"At least one axis of {mesh_shape=} must divide {num_granules=}.")
+            raise ValueError(
+                f"At least one axis of {mesh_shape=} must be divisible by {num_granules=}."
+            )
 
         if num_granules > 1:
             logging.info("Building multi-slice/granule device mesh over axis %s.", axis)
@@ -1861,9 +1907,6 @@ def thread_stack_traces() -> Sequence[Sequence[str]]:
 def pytree_children(node: Any) -> Sequence[tuple[KeyEntry, Any]]:
     """Generate the (key, value) pairs for the immediate children of a pytree `node`.
 
-    The returned children match those returned by
-    `jax.tree_util.default_registry.flatten_one_level()`.
-
     Reference: jax._src.tree_util.generate_key_paths()
 
     Example:
@@ -1871,14 +1914,6 @@ def pytree_children(node: Any) -> Sequence[tuple[KeyEntry, Any]]:
         assert pytree_children(dict(a=[1,2])) == [(DictKey('a'), [1,2])]
         ```
     """
-    # pylint: disable-next=protected-access
-    registry_with_keypaths = jax._src.tree_util._registry_with_keypaths
-
-    key_handler = registry_with_keypaths.get(type(node))
-    if key_handler:
-        key_children, _ = key_handler.flatten_with_keys(node)
-        return key_children
-
     flat = jax.tree_util.default_registry.flatten_one_level(node)
     if flat is None:
         return []
@@ -1886,6 +1921,11 @@ def pytree_children(node: Any) -> Sequence[tuple[KeyEntry, Any]]:
     if isinstance(node, tuple) and hasattr(node, "_fields") and flat[1] == type(node):
         # Handle namedtuple as a special case, based on heuristic.
         return [(jax.tree_util.GetAttrKey(s), getattr(node, s)) for s in node._fields]
+
+    key_children, _ = jax.tree_util.default_registry.flatten_one_level_with_keys(node)
+    if key_children:
+        return key_children
+
     return [(jax.tree_util.FlattenedIndexKey(i), c) for i, c in enumerate(flat[0])]
 
 
@@ -1993,7 +2033,7 @@ def validate_contains_paths(x: Nested[Tensor], paths: Sequence[str]):
         except KeyError as e:
             raise ValueError(
                 f"Input is expected to contain '{path}'; "
-                f"instead, it contains: '{jax.tree_structure(x)}'."
+                f"instead, it contains: '{jax.tree_util.tree_structure(x)}'."
             ) from e
 
 

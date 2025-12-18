@@ -11,9 +11,9 @@ from absl import flags, logging
 
 from axlearn.common import file_system as fs
 from axlearn.common import measurement
+from axlearn.common.config import TrainerConfigFn, get_named_trainer_config
 from axlearn.common.trainer import SpmdTrainer, select_mesh_config
 from axlearn.common.utils import MeshShape, get_data_dir, infer_mesh_shape
-from axlearn.experiments import TrainerConfigFn, get_named_trainer_config
 
 # Trainer-specific flags.
 flags.DEFINE_string(
@@ -53,6 +53,19 @@ flags.DEFINE_integer(
     "Timeout for the trainer watchdog in seconds. "
     "If the trainer.step does not increment within this interval, "
     "the watchdog will log the stack traces of all threads.",
+)
+flags.DEFINE_integer(
+    "trainer_crash_on_hang_timeout_seconds",
+    7200,
+    "Timeout for crashing the trainer on hang in seconds. "
+    "If the trainer hangs for longer than this interval, "
+    "the trainer will crash to prevent indefinite hanging.",
+)
+flags.DEFINE_integer(
+    "trainer_log_every_n_steps",
+    None,
+    "Logging frequency for the loss value during training. "
+    "If None, defaults to every 100 steps.",
 )
 flags.DEFINE_enum(
     "device_monitor",
@@ -109,6 +122,12 @@ def get_trainer_config(
     trainer_config.start_trace_steps = [int(el) for el in flag_values.trace_at_steps]
     if trainer_config.watchdog_timeout_seconds is None:
         trainer_config.watchdog_timeout_seconds = flag_values.trainer_watchdog_timeout_seconds
+    if trainer_config.crash_on_hang_timeout_seconds is None:
+        trainer_config.crash_on_hang_timeout_seconds = (
+            flag_values.trainer_crash_on_hang_timeout_seconds
+        )
+    if trainer_config.log_every_n_steps is None:
+        trainer_config.log_every_n_steps = flag_values.trainer_log_every_n_steps
     for eval_cfg in trainer_config.evalers.values():
         eval_cfg.trace_at_iters = [int(el) for el in flag_values.eval_trace_at_iters]
     if flag_values.device_monitor == "tpu":
@@ -139,7 +158,7 @@ def run_trainer(trainer_config: SpmdTrainer.Config) -> Any:
 
         config_file = os.path.join(trainer_config.dir, "launch_trainer_flags")
         with fs.open(config_file, "w") as f:
-            json.dump(
+            json.dump(  # pytype: disable=wrong-arg-types
                 {
                     **FLAGS.flag_values_dict(),
                     "data_dir": get_data_dir(),

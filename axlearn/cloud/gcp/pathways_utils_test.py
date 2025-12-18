@@ -8,12 +8,15 @@ from absl.testing import parameterized
 
 from axlearn.cloud.common.bundler import Bundler
 from axlearn.cloud.common.utils import define_flags, from_flags
-from axlearn.cloud.gcp import bundler, jobset_utils, pathways_utils
+from axlearn.cloud.gcp import bundler, jobset_utils, lws_utils, pathways_utils
 from axlearn.cloud.gcp.bundler import CloudBuildBundler
 from axlearn.cloud.gcp.pathways_utils import (
+    _COLOCATED_PYTHON_SIDECAR_NAME,
+    _PATHWAYS_COLOCATED_SERVER_IMAGE,
     _PATHWAYS_HEAD_NODE_POOL_SELECTOR_KEY,
     _PATHWAYS_HEAD_NODE_POOL_SELECTOR_VALUE,
     _PATHWAYS_PROXY_CONTAINER_NAME,
+    _PATHWAYS_RESOURCE_MANAGER_CONTAINER_NAME,
     _PATHWAYS_SERVER_IMAGE,
     get_megascale_options,
     get_xla_options,
@@ -21,6 +24,25 @@ from axlearn.cloud.gcp.pathways_utils import (
 from axlearn.cloud.gcp.test_utils import mock_gcp_settings
 from axlearn.common.compiler_options import default_xla_options, xla_flags_from_options
 from axlearn.common.test_utils import TestCase
+
+
+class HelperFunctionTest(TestCase):
+    def test_round_up_to_power_of_2(self):
+        with self.assertRaises(AssertionError):
+            pathways_utils.round_up_to_power_of_2(-1)
+        with self.assertRaises(AssertionError):
+            pathways_utils.round_up_to_power_of_2(0)
+        with self.assertRaises(AssertionError):
+            pathways_utils.round_up_to_power_of_2(2.2)
+        self.assertEqual(pathways_utils.round_up_to_power_of_2(2), 2)
+        self.assertEqual(pathways_utils.round_up_to_power_of_2(7), 8)
+        self.assertEqual(pathways_utils.round_up_to_power_of_2(8), 8)
+        self.assertEqual(pathways_utils.round_up_to_power_of_2(9), 16)
+        self.assertEqual(pathways_utils.round_up_to_power_of_2(10), 16)
+        # ct5p-hightpu-4t host memory
+        self.assertEqual(pathways_utils.round_up_to_power_of_2(448 // 4), 128)
+        # ct6e-standard-4t host memory
+        self.assertEqual(pathways_utils.round_up_to_power_of_2(720 // 4), 256)
 
 
 class SplitXLAMXLAFlagsTest(TestCase):
@@ -39,7 +61,7 @@ class PathwaysReplicatedJobTest(TestCase):
     """Tests PathwaysReplicatedJob."""
 
     @contextlib.contextmanager
-    def _job_config(self, bundler_cls: type[Bundler], **kwargs):
+    def _job_config(self, bundler_cls: type[Bundler], instance_type: str = "tpu-v5p-16", **kwargs):
         with mock_gcp_settings([jobset_utils.__name__, bundler.__name__]):
             fv = flags.FlagValues()
             cfg = pathways_utils.PathwaysReplicatedJob.default_config().set(
@@ -48,20 +70,24 @@ class PathwaysReplicatedJobTest(TestCase):
             define_flags(cfg, fv)
 
             fv.set_default("name", "fake-name")
-            fv.set_default("instance_type", "tpu-v5p-16")
+            fv.set_default("instance_type", instance_type)
             for key, value in kwargs.items():
                 if value is not None:
                     setattr(fv, key, value)
             fv.mark_as_parsed()
             cfg = from_flags(cfg, fv)
             bundler_cfg = bundler_cls.from_spec([], fv=fv).set(image="test-image")
-            print("debug: cfg: ", type(cfg))
             yield cfg, bundler_cfg
 
-    def test_build_pathways_head_pod(self):
+    @parameterized.product(
+        instance_type=["tpu-v5p-16", "tpu-v5p-256"],
+        sidecars=[[], [_COLOCATED_PYTHON_SIDECAR_NAME]],
+    )
+    def test_build_pathways_head_pod(self, instance_type, sidecars):
         with (
             self._job_config(
                 CloudBuildBundler,
+                instance_type,
             ) as (cfg, bundler_cfg),
         ):
             cfg.inner.set(
@@ -69,7 +95,7 @@ class PathwaysReplicatedJobTest(TestCase):
                 name="test",
                 command="test_command",
                 output_dir="FAKE",
-            ).instantiate(bundler=bundler_cfg.instantiate())
+            ).instantiate(bundler=bundler_cfg.set(sidecars=sidecars).instantiate())
 
             builder = cfg.instantiate(bundler=bundler_cfg.instantiate())
             # pylint: disable-next=protected-access
@@ -77,20 +103,63 @@ class PathwaysReplicatedJobTest(TestCase):
             pod_spec = pod["spec"]
 
             self.assertEqual(len(pod_spec["containers"]), 1)
-            self.assertEqual(len(pod_spec["initContainers"]), 2)
+            # pathways-proxy, pathways-rm and output-uploader
+            self.assertEqual(len(pod_spec["initContainers"]), 3)
             node_selector = pod_spec["nodeSelector"]
             self.assertEqual(
                 _PATHWAYS_HEAD_NODE_POOL_SELECTOR_VALUE,
                 node_selector.get(_PATHWAYS_HEAD_NODE_POOL_SELECTOR_KEY),
             )
 
+            head_container = pod_spec["containers"][0]
+            env_vars = set()
+            for env_pair in head_container["env"]:
+                env_vars.add(env_pair["name"])
+                # pylint: disable=line-too-long
+                if env_pair["name"] == "NUM_REPLICAS":
+                    self.assertEqual(
+                        env_pair["valueFrom"],
+                        {
+                            "fieldRef": {
+                                "fieldPath": "metadata.annotations['jobset.sigs.k8s.io/replicatedjob-replicas']"
+                            }
+                        },
+                    )
+                if env_pair["name"] == "REPLICA_ID":
+                    self.assertEqual(
+                        env_pair["valueFrom"],
+                        {
+                            "fieldRef": {
+                                "fieldPath": "metadata.annotations['jobset.sigs.k8s.io/job-index']"
+                            }
+                        },
+                    )
+                if env_pair["name"] == "IFRT_PROXY_LARGE_TRANSFER_THRESHOLD":
+                    self.assertEqual(env_pair["value"], "1")
+                if env_pair["name"] == "IFRT_PROXY_LARGE_TRANSFER_OPTIMIZATION_DIRECTORY":
+                    self.assertEqual(env_pair["value"], "/tmp/ifrt_proxy")
+
+            self.assertTrue(
+                {
+                    "NUM_REPLICAS",
+                    "REPLICA_ID",
+                    "IFRT_PROXY_LARGE_TRANSFER_THRESHOLD",
+                    "IFRT_PROXY_LARGE_TRANSFER_OPTIMIZATION_DIRECTORY",
+                }.issubset(env_vars)
+            )
+
             # Check pathways-proxy container args for XLA flags.
             proxy_container = None
+            rm_container = None
             for container in pod_spec["initContainers"]:
                 if container["name"] == _PATHWAYS_PROXY_CONTAINER_NAME:
                     proxy_container = container
-                    break
+                    if _COLOCATED_PYTHON_SIDECAR_NAME in sidecars:
+                        self.assertIn("--sidecar_name=external", container["args"])
+                if container["name"] == _PATHWAYS_RESOURCE_MANAGER_CONTAINER_NAME:
+                    rm_container = container
             self.assertIsNotNone(proxy_container, "Pathways proxy container not found.")
+            self.assertIsNotNone(rm_container, "Pathways rm container not found.")
 
             # pylint: disable-next=protected-access
             xla_arg_flags = xla_flags_from_options(builder._xla_options).split()
@@ -98,7 +167,18 @@ class PathwaysReplicatedJobTest(TestCase):
             for flag in xla_arg_flags:
                 self.assertIn(flag, proxy_container["args"])
 
-    def test_build_pathways_worker_pod(self):
+            # Check that instance_type and expected_instances are set
+            if instance_type == "tpu-v5p-16":
+                self.assertIn("--instance_count=1", rm_container["args"])
+                self.assertIn("--instance_type=tpuv5:2x2x2", rm_container["args"])
+            if instance_type == "tpu-v5p-256":
+                self.assertIn("--instance_count=1", rm_container["args"])
+                self.assertIn("--instance_type=tpuv5:4x4x8_untwisted", rm_container["args"])
+
+    @parameterized.product(
+        sidecars=[[], [_COLOCATED_PYTHON_SIDECAR_NAME]],
+    )
+    def test_build_pathways_worker_pod(self, sidecars):
         with (
             self._job_config(
                 CloudBuildBundler,
@@ -110,7 +190,7 @@ class PathwaysReplicatedJobTest(TestCase):
                 command="test_command",
                 output_dir="FAKE",
                 service_account="test-service-account",
-            ).instantiate(bundler=bundler_cfg.instantiate())
+            ).instantiate(bundler=bundler_cfg.set(sidecars=sidecars).instantiate())
 
             builder = cfg.instantiate(bundler=bundler_cfg.instantiate())
             # pylint: disable-next=protected-access
@@ -119,15 +199,25 @@ class PathwaysReplicatedJobTest(TestCase):
 
             host_alias = pod_spec["hostAliases"]
             self.assertEqual(1, len(host_alias))
-            self.assertEqual(pod_spec.get("hostNetwork"), True)
             self.assertEqual(pod_spec.get("dnsPolicy"), "ClusterFirstWithHostNet")
             worker_container = pod_spec.get("containers")[0]
-            self.assertEqual(worker_container["image"], _PATHWAYS_SERVER_IMAGE)
+            server_image = (
+                _PATHWAYS_COLOCATED_SERVER_IMAGE
+                if _COLOCATED_PYTHON_SIDECAR_NAME in sidecars
+                else _PATHWAYS_SERVER_IMAGE
+            )
+            self.assertEqual(worker_container["image"], server_image)
             annotations = pod["metadata"]["annotations"]
             self.assertEqual(
                 "test-service-account@test-project.iam.gserviceaccount.com",
                 annotations.get("tpu-provisioner.cloud.google.com/node-service-account", None),
             )
+            self.assertIn("--tpu_pinned_host_allocation_recycle=true", worker_container["args"])
+            # 128GiB
+            self.assertIn("--tpu_premapped_buffer_size=137438953472", worker_container["args"])
+
+            expected_num_init_containers = 2 if _COLOCATED_PYTHON_SIDECAR_NAME in sidecars else 1
+            self.assertEqual(expected_num_init_containers, len(pod_spec.get("initContainers", [])))
 
             # Check worker container args for Megascale (MXLA) flags.
             # pylint: disable-next=protected-access
@@ -177,8 +267,7 @@ class PathwaysReplicatedJobTest(TestCase):
         """Tests processing of pathways_xla_flags, including overrides and new flags."""
         flag_to_override_key = "xla_tpu_enable_latency_hiding_scheduler"
         override_value_str = "false"
-        # This flag's default value for v5p is "true" (string). Change it to False (bool).
-        expected_override_value_parsed = False
+        expected_override_value_parsed = "false"
 
         new_xla_flag_key = "xla_a_brand_new_one"
         new_xla_flag_value_str = "12345"
@@ -231,6 +320,69 @@ class PathwaysReplicatedJobTest(TestCase):
             # Check new Megascale flag.
             self.assertIn(new_mxla_flag_key, actual_mxla_options)
             self.assertEqual(actual_mxla_options[new_mxla_flag_key], expected_new_mxla_value_parsed)
+
+    def test_validate_head_name(self):
+        with self._job_config(CloudBuildBundler) as (cfg, bundler_cfg):
+            cfg.inner.set(
+                project="test-project",
+                name="a" * 49,
+                command="test_command",
+                output_dir="FAKE",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, r"pwhd-1-1-abcde exceeds max \(63\) by 1 chars."
+            ):
+                _ = cfg.instantiate(bundler=bundler_cfg.instantiate())
+
+    def test_validate_worker_name(self):
+        with self._job_config(CloudBuildBundler) as (cfg, bundler_cfg):
+            cfg.inner.set(
+                project="test-project",
+                name="a" * 49,
+                command="test_command",
+                output_dir="FAKE",
+            )
+
+            # Both head and worker have the same name length, so head validation runs first
+            with self.assertRaisesRegex(
+                ValueError, r"pwhd-1-1-abcde exceeds max \(63\) by 1 chars."
+            ):
+                _ = cfg.instantiate(bundler=bundler_cfg.instantiate())
+
+    def test_build_pathways_head_pod_with_gcsfuse(self):
+        with (
+            self._job_config(
+                CloudBuildBundler,
+                gcsfuse_mount_spec=["mount_path=/tmp/gcsfuse", "gcs_path=gs://test-bucket/path"],
+            ) as (cfg, bundler_cfg),
+        ):
+            cfg.inner.set(
+                project="test-project",
+                name="test",
+                command="test_command",
+                output_dir="FAKE",
+            ).instantiate(bundler=bundler_cfg.instantiate())
+
+            builder = cfg.instantiate(bundler=bundler_cfg.instantiate())
+            # pylint: disable-next=protected-access
+            pod = builder._build_pathways_head_pod()
+            pod_spec = pod["spec"]
+            annotations = pod["metadata"]["annotations"]
+
+            # Verify gcsfuse annotations are set correctly
+            self.assertEqual(annotations.get("gke-gcsfuse/volumes"), "true")
+            self.assertIn("gke-gcsfuse/cpu-request", annotations)
+            self.assertIn("gke-gcsfuse/memory-request", annotations)
+            self.assertIn("gke-gcsfuse/ephemeral-storage-request", annotations)
+            # Verify limit annotations are set to "0"
+            self.assertEqual(annotations.get("gke-gcsfuse/cpu-limit"), "0")
+            self.assertEqual(annotations.get("gke-gcsfuse/memory-limit"), "0")
+            self.assertEqual(annotations.get("gke-gcsfuse/ephemeral-storage-limit"), "0")
+
+            # Verify shared memory volume is present
+            volume_names = [v["name"] for v in pod_spec["volumes"]]
+            self.assertIn("shared-memory", volume_names)
 
 
 class PathwaysMultiheadReplicatedJobTest(TestCase):
@@ -292,7 +444,139 @@ class PathwaysMultiheadReplicatedJobTest(TestCase):
                     annotations.get("axlearn/replicatedjob-load-balancer-port", {}),
                 )
 
-                if replicated_job_name.startswith("pathways-head"):
+                if replicated_job_name.startswith("pwhd"):
                     self.assertEqual(replicated_job["replicas"], num_replicas)
-                elif replicated_job_name.startswith("pathways-worker"):
+                elif replicated_job_name.startswith("pwwk"):
                     self.assertEqual(replicated_job["replicas"], 1)
+
+    def test_validate_head_name(self):
+        with self._job_config(CloudBuildBundler, 2) as (cfg, bundler_cfg):
+            cfg.inner.set(
+                project="test-project",
+                name="a" * 49,
+                command="test_command",
+                output_dir="FAKE",
+            )
+
+        with self.assertRaisesRegex(ValueError, r"pwhd-1-1-abcde exceeds max \(63\) by 1 chars."):
+            _ = cfg.instantiate(bundler=bundler_cfg.instantiate())
+
+    def test_validate_worker_name(self):
+        with self._job_config(CloudBuildBundler, 2) as (cfg, bundler_cfg):
+            cfg.inner.set(
+                project="test-project",
+                name="a" * 47,
+                command="test_command",
+                output_dir="FAKE",
+            )
+
+        with self.assertRaisesRegex(ValueError, r"pwwk-2-0-2-abcde exceeds max \(63\) by 1 chars."):
+            _ = cfg.instantiate(bundler=bundler_cfg.instantiate())
+
+
+class PathwaysLeaderWorkerTemplateTest(TestCase):
+    """Test PathwaysLeaderWorkerTemplate."""
+
+    @contextlib.contextmanager
+    def _job_config(self, bundler_cls: type[Bundler], **kwargs):
+        with mock_gcp_settings([lws_utils.__name__, bundler.__name__]):
+            fv = flags.FlagValues()
+            cfg = pathways_utils.PathwaysLeaderWorkerTemplate.default_config()
+            define_flags(cfg, fv)
+            fv.set_default("name", "fake-name")
+            fv.set_default("instance_type", "tpu-v6e-16")
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(fv, key, value)
+            fv.mark_as_parsed()
+            cfg = from_flags(cfg, fv)
+            bundler_cfg = bundler_cls.from_spec([], fv=fv).set(image="test-image")
+            print("debug: cfg: ", type(cfg))
+            yield cfg, bundler_cfg
+
+    @parameterized.product(
+        sidecars=[[], [_COLOCATED_PYTHON_SIDECAR_NAME]],
+    )
+    def test_build_leader_pod(self, sidecars):
+        with (
+            self._job_config(
+                CloudBuildBundler,
+            ) as (cfg, bundler_cfg),
+        ):
+            cfg.inner.set(
+                project="test-project",
+                name="a" * 36,
+                command="test_command",
+                output_dir="FAKE",
+            ).instantiate(bundler=bundler_cfg.set(sidecars=sidecars).instantiate())
+
+            builder = cfg.instantiate(bundler=bundler_cfg.instantiate())
+            pod = builder.build_leader_pod()
+            pod_spec = pod["spec"]
+
+            self.assertEqual(len(pod_spec["containers"]), 3)
+
+            proxy_container = None
+            rm_container = None
+            for container in pod_spec["containers"]:
+                if container["name"] == _PATHWAYS_PROXY_CONTAINER_NAME:
+                    proxy_container = container
+                    if _COLOCATED_PYTHON_SIDECAR_NAME in sidecars:
+                        self.assertIn("--sidecar_name=external", container["args"])
+                if container["name"] == _PATHWAYS_RESOURCE_MANAGER_CONTAINER_NAME:
+                    rm_container = container
+            self.assertIsNotNone(proxy_container, "Pathways proxy container not found.")
+            self.assertIsNotNone(rm_container, "Pathways rm container not found.")
+
+    @parameterized.product(
+        sidecars=[[], [_COLOCATED_PYTHON_SIDECAR_NAME]],
+    )
+    def test_build_worker_pod(self, sidecars):
+        with (
+            self._job_config(
+                CloudBuildBundler,
+            ) as (cfg, bundler_cfg),
+        ):
+            cfg.inner.set(
+                project="test-project",
+                name="a" * 36,
+                command="test_command",
+                output_dir="FAKE",
+            ).instantiate(bundler=bundler_cfg.set(sidecars=sidecars).instantiate())
+
+            builder = cfg.instantiate(bundler=bundler_cfg.instantiate())
+            pod = builder.build_worker_pod()
+            pod_spec = pod["spec"]
+            container = pod_spec.get("containers")[0]
+            server_image = (
+                _PATHWAYS_COLOCATED_SERVER_IMAGE
+                if _COLOCATED_PYTHON_SIDECAR_NAME in sidecars
+                else _PATHWAYS_SERVER_IMAGE
+            )
+            self.assertEqual(container["image"], server_image)
+            self.assertEqual(len(container["args"]), 3)
+
+            expected_num_init_containers = 2 if _COLOCATED_PYTHON_SIDECAR_NAME in sidecars else 1
+            self.assertEqual(expected_num_init_containers, len(pod_spec.get("initContainers", [])))
+
+    def test_leader_worker_template(self):
+        with (
+            self._job_config(
+                CloudBuildBundler,
+            ) as (cfg, bundler_cfg),
+        ):
+            cfg.inner.set(
+                project="test-project",
+                name="a" * 36,
+                command="test_command",
+                output_dir="FAKE",
+            ).instantiate(bundler=bundler_cfg.instantiate())
+
+            builder = cfg.instantiate(bundler=bundler_cfg.instantiate())
+            lws = builder()
+            leader_template = lws["leaderTemplate"]
+            worker_template = lws["workerTemplate"]
+
+            self.assertEqual(lws["size"], 5)
+            self.assertEqual(len(leader_template["spec"]["containers"]), 3)
+            self.assertEqual(len(worker_template["spec"]["containers"]), 1)

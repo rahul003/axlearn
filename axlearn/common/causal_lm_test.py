@@ -8,13 +8,12 @@ from typing import cast
 import jax
 import jax.random
 import numpy as np
-import pytest
 from absl.testing import absltest, parameterized
 from jax import numpy as jnp
 from jax.experimental.pjit import pjit
 from transformers.models.gpt2 import modeling_gpt2 as hf_gpt2
 
-from axlearn.common import causal_lm, utils
+from axlearn.common import causal_lm
 from axlearn.common.attention import (
     BaseStackedTransformerLayer,
     CausalAttentionLogitBiasLayer,
@@ -26,7 +25,7 @@ from axlearn.common.config import config_for_function
 from axlearn.common.learner import Learner
 from axlearn.common.loss import cross_entropy
 from axlearn.common.loss_metrics import BaseLossMetrics
-from axlearn.common.metrics import MetricAccumulator, WeightedScalar
+from axlearn.common.metrics import MetricAccumulator, MetricSummary, WeightedSummary
 from axlearn.common.module import (
     InvocationContext,
     OutputCollection,
@@ -41,7 +40,10 @@ from axlearn.common.param_converter import as_torch_tensor
 from axlearn.common.param_init import PARAM_REGEXP_WEIGHT, DefaultInitializer, WeightInitializer
 from axlearn.common.test_utils import TestCase, assert_allclose
 from axlearn.common.torch_utils import parameters_from_torch_layer
-from axlearn.common.update_transformation import ForwardBackwardOutputs, ForwardOutputs
+from axlearn.common.update_transformation import (  # pytype: disable=pyi-error
+    ForwardBackwardOutputs,
+    ForwardOutputs,
+)
 from axlearn.common.utils import Tensor
 
 
@@ -211,6 +213,47 @@ class ModelTest(TestCase):
         bits_per_byte = per_token_loss.sum() / jnp.maximum(1, total_bytes) / jnp.log(2)
         self.assertAlmostEqual(bits_per_byte, summaries["bits_per_byte"].mean)
 
+    def test_metric_summary_to_scalar(self):
+        """Test that _metrics converts all MetricSummary types to scalars."""
+        batch_size, seq_len, vocab_size = 2, 3, 10
+
+        model = (
+            self._model_config(vocab_size=vocab_size, seq_len=seq_len)
+            .set(name="metrics_test")
+            .instantiate(parent=None)
+        )
+
+        prng_key, init_key = jax.random.split(jax.random.PRNGKey(123))
+        model_params = model.initialize_parameters_recursively(init_key)
+
+        input_ids = jax.random.randint(
+            jax.random.PRNGKey(123), shape=[batch_size, seq_len], minval=0, maxval=vocab_size
+        )
+        target_labels = jax.random.randint(
+            jax.random.PRNGKey(123), shape=[batch_size, seq_len], minval=-1, maxval=vocab_size
+        )
+        input_batch = dict(input_ids=input_ids, target_labels=target_labels)
+
+        # Call forward with return_aux=True to get metrics
+        (loss, aux), _ = functional(
+            model,
+            inputs=dict(input_batch=input_batch, return_aux=True),
+            is_training=True,
+            prng_key=prng_key,
+            state=model_params,
+        )
+
+        # Verify loss is scalar
+        self.assertIsInstance(loss, (float, int, jnp.ndarray))
+        # Verify all metrics are scalars (not MetricSummary objects)
+        metrics = aux["metrics"]
+        for key, value in metrics.items():
+            self.assertIsInstance(
+                value,
+                (float, int, jnp.ndarray),
+                f"Metric '{key}' should be scalar, but got {type(value).__name__}",
+            )
+
     def test_segment_ids(self):
         batch_size, seq_len, vocab_size = 3, 10, 10
 
@@ -343,10 +386,10 @@ class ModelTest(TestCase):
 
         class DummyMetrics(BaseLossMetrics):
             def forward(self, *args, **kwargs):
-                self.add_summary(f"{self.name}_summary", 0)
+                self.add_summary(f"{self.name}_summary", loss := WeightedSummary(0, 1))
                 self.add_module_output(f"{self.name}_output", 0)
                 self.add_state_update(f"{self.name}_state", 0)
-                return 0, {f"{self.name}_output": 0}
+                return loss, {f"{self.name}_output": loss}
 
         class DummyConflictModel(causal_lm.Model):
             def _metrics(self, *args, **kwargs):
@@ -379,7 +422,7 @@ class ModelTest(TestCase):
 
         class DummyModel(causal_lm.Model):
             def _metrics(self, *args, **kwargs):
-                self.add_summary("parent_summary", 1)
+                self.add_summary("parent_summary", WeightedSummary(1, 1))
                 self.add_module_output("parent_output", 1)
                 self.add_state_update("parent_state", 1)
                 return super()._metrics(*args, **kwargs)
@@ -398,11 +441,14 @@ class ModelTest(TestCase):
         test_no_conflict(
             DummyMetrics.default_config(),
             OutputCollection(
-                summaries={"parent_summary": 1, "metrics_summary": 0},
+                summaries={
+                    "parent_summary": WeightedSummary(1, 1),
+                    "metrics_summary": WeightedSummary(0, 1),
+                },
                 module_outputs={"parent_output": 1, "metrics": {"metrics_output": 0}},
                 state_updates={"parent_state": 1, "metrics": {"metrics_state": 0}},
             ),
-            {"metrics_output": 0},
+            {"metrics_output": 0.0},
         )
         for flatten_metrics in (None, True):
             test_no_conflict(
@@ -414,7 +460,11 @@ class ModelTest(TestCase):
                     flatten_metrics=flatten_metrics,
                 ),
                 OutputCollection(
-                    summaries={"parent_summary": 1, "child1_summary": 0, "child2_summary": 0},
+                    summaries={
+                        "parent_summary": WeightedSummary(1, 1),
+                        "child1_summary": WeightedSummary(0, 1),
+                        "child2_summary": WeightedSummary(0, 1),
+                    },
                     module_outputs={
                         "parent_output": 1,
                         "metrics": {"child1": {"child1_output": 0}, "child2": {"child2_output": 0}},
@@ -424,7 +474,12 @@ class ModelTest(TestCase):
                         "metrics": {"child1": {"child1_state": 0}, "child2": {"child2_state": 0}},
                     },
                 ),
-                {"child1_output": 0, "child2_output": 0},
+                {
+                    "child1_output": 0.0,
+                    "child2_output": 0.0,
+                    "loss_child1": 0.0,
+                    "loss_child2": 0.0,
+                },
             )
 
         # Test without flattening.
@@ -438,9 +493,9 @@ class ModelTest(TestCase):
             ),
             OutputCollection(
                 summaries={
-                    "parent_summary": 1,
-                    "child1": {"child1_summary": 0},
-                    "child2": {"child2_summary": 0},
+                    "parent_summary": WeightedSummary(1, 1),
+                    "child1": {"child1_summary": WeightedSummary(0, 1)},
+                    "child2": {"child2_summary": WeightedSummary(0, 1)},
                 },
                 module_outputs={
                     "parent_output": 1,
@@ -451,18 +506,25 @@ class ModelTest(TestCase):
                     "metrics": {"child1": {"child1_state": 0}, "child2": {"child2_state": 0}},
                 },
             ),
-            {"child1": {"child1_output": 0}, "child2": {"child2_output": 0}},
+            {
+                "child1": {
+                    "child1_output": 0.0,
+                    "loss_child1": 0.0,
+                },
+                "child2": {
+                    "child2_output": 0.0,
+                    "loss_child2": 0.0,
+                },
+            },
         )
 
     # TODO(markblee): Add a pytest marker for multi-device tests.
-    @pytest.mark.skipif(
-        jax.device_count() != 4 or jax.process_count() != 1,
-        reason=(
-            "Incorrect device & process count for mesh.\n"
-            "Use XLA_FLAGS=--xla_force_host_platform_device_count=4 to run locally."
-        ),
-    )
     def test_constrain_input_batch(self):
+        if jax.device_count() != 4 or jax.process_count() != 1:
+            self.skipTest(
+                "Incorrect device & process count for mesh.\n"
+                "Use XLA_FLAGS=--xla_force_host_platform_device_count=4 to run locally."
+            )
         model = (
             self._model_config(vocab_size=10, seq_len=10)
             .set(
@@ -550,7 +612,7 @@ class CrossEntropyLossMetricsTest(TestCase):
         # Test without live_targets. Should be equivalent to target_labels >= 0.
         test_loss, metrics = forward(live_targets=None)
         ref_loss, _ = cross_entropy(logits, target_labels, live_targets=target_labels >= 0)
-        self.assertAlmostEqual(test_loss, ref_loss)
+        self.assertAlmostEqual(test_loss.value(), ref_loss)
         self.assertEqual(metrics["num_targets"], (target_labels >= 0).sum())
 
         # Test with live_targets.
@@ -559,23 +621,26 @@ class CrossEntropyLossMetricsTest(TestCase):
         )
         test_loss, metrics = forward(live_targets=live_targets)
         ref_loss, _ = cross_entropy(logits, target_labels, live_targets=live_targets)
-        self.assertAlmostEqual(test_loss, ref_loss)
+        self.assertAlmostEqual(test_loss.value(), ref_loss)
         self.assertEqual(metrics["num_targets"], live_targets.sum())
 
 
 class CompositeLossMetricsTest(TestCase):
     """Tests CompositeLossMetrics."""
 
-    def test_loss_weights(self):
+    @parameterized.product(test0=(0.5,), test1=(1.0, 0.0))
+    def test_loss_weights(self, test0, test1):
+        loss_weights = dict(test0=test0, test1=test1)
+
         class DummyMetrics(BaseLossMetrics):
             def forward(self, input_batch, **kwargs):
                 del kwargs
-                return input_batch[self.name], {}
+                return WeightedSummary(input_batch[self.name], 1.0), {}
 
         class FixedLossWeights(causal_lm.CompositeLossWeights):
             def forward(self, child_metrics):
                 del child_metrics
-                return {"test0": 0.5, "test1": 1.0}
+                return loss_weights
 
         cfg = causal_lm.CompositeLossMetrics.default_config().set(
             name="test",
@@ -588,7 +653,7 @@ class CompositeLossMetricsTest(TestCase):
 
         metrics = cfg.instantiate(parent=None)
 
-        (loss, _), _ = functional(
+        (loss, aux), _ = functional(
             metrics,
             prng_key=jax.random.PRNGKey(123),
             state={},
@@ -597,7 +662,17 @@ class CompositeLossMetricsTest(TestCase):
             ),
             is_training=True,
         )
-        self.assertAlmostEqual(loss, 1.23 * 0.5 + 3.45)
+        self.assertAlmostEqual(
+            loss.value(), 1.23 * loss_weights["test0"] + 3.45 * loss_weights["test1"]
+        )
+
+        def _aggregate(aux):
+            loss = 0.0
+            for name, loss_weight in loss_weights.items():
+                loss += loss_weight * aux[f"loss_{name}"].mean
+            return loss
+
+        self.assertAlmostEqual(loss.value(), _aggregate(aux))
 
 
 class DummyFeedForwardWithAuxLoss(TransformerFeedForwardLayer):
@@ -771,15 +846,14 @@ class ModelAuxLossTest(TestCase):
         )
         outputs = cast(ForwardBackwardOutputs, outputs)
         output_collection: OutputCollection = outputs.forward_outputs.output_collection
-        summaries: dict[str, WeightedScalar] = output_collection.summaries
+        summaries: dict[str, MetricSummary] = output_collection.summaries
         self.assertIn("aux_loss", summaries)
-        self.assertEqual(summaries["aux_loss"].mean, 1.0)
-        self.assertEqual(
-            summaries["cross_entropy_loss"].mean + summaries["aux_loss"].mean,
+        self.assertEqual(summaries["aux_loss"].value(), 1.0)
+        self.assertNestedAllClose(
+            summaries["cross_entropy_loss"].value() + summaries["aux_loss"].value(),
             outputs.forward_outputs.loss,
         )
 
 
 if __name__ == "__main__":
-    with utils.numeric_checks(True):
-        absltest.main()
+    absltest.main()

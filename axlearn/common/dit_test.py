@@ -21,7 +21,7 @@ from absl.testing import absltest, parameterized
 from timm.models.vision_transformer import Attention, Mlp, PatchEmbed
 from torch import nn
 
-from axlearn.common.attention import CausalAttentionBias, enable_sliding_window_attention
+from axlearn.common.attention import CausalAttentionBias
 from axlearn.common.attention_bias import NEG_INF
 from axlearn.common.dit import (
     AdaptiveLayerNormModulation,
@@ -32,6 +32,7 @@ from axlearn.common.dit import (
     LabelEmbedding,
     TimeStepEmbedding,
 )
+from axlearn.common.kv_cache.sliding_window_kv_cache import enable_sliding_window_attention
 from axlearn.common.layers import LayerNormStateless
 from axlearn.common.module import functional as F
 from axlearn.common.test_utils import assert_allclose
@@ -229,10 +230,9 @@ class TestTimeStepEmbedding(parameterized.TestCase):
         norm_cls=[None, LayerNormStateless],
     )
     def test_time_step_embed(self, pos_embed_dim, norm_cls):
-        batch_size = 5
         output_dim = 512
 
-        timestep = np.random.randint(0, 10, size=batch_size)
+        timestep = jnp.linspace(0, 1, 5)
 
         output_norm_cfg = norm_cls.default_config() if norm_cls else None
         axlearn_model_cfg = TimeStepEmbedding.default_config().set(
@@ -250,15 +250,75 @@ class TestTimeStepEmbedding(parameterized.TestCase):
 
         layer_output, _ = F(
             axlearn_model,
-            inputs=dict(positions=jnp.asarray(timestep)),
+            inputs=dict(positions=timestep),
             state=layer_params,
             is_training=False,
             prng_key=jax.random.PRNGKey(0),
         )
 
         if norm_cls is None:
-            ref_output = ref_model.forward(torch.as_tensor(timestep))
+            ref_output = ref_model.forward(torch.as_tensor(np.asarray(timestep)))
             assert_allclose(layer_output, as_tensor(ref_output))
+
+    @parameterized.product(
+        dtype=[jnp.float32, jnp.bfloat16],
+    )
+    def test_positional_embedding_always_float32(self, dtype):
+        """Test that positional embeddings are always computed in float32."""
+        pos_embed_dim = 256
+        output_dim = 512
+        timestep = jnp.linspace(0, 1, 5, dtype=dtype)
+
+        model_cfg = TimeStepEmbedding.default_config().set(
+            name=f"test_{dtype}",
+            pos_embed_dim=pos_embed_dim,
+            output_dim=output_dim,
+            dtype=dtype,
+        )
+        model = model_cfg.instantiate(parent=None)
+
+        # Verify positional embeddings are always computed in float32,
+        # regardless of model dtype or input dtype
+        pos_emb = model.dit_sinusoidal_positional_embeddings(timestep)
+        self.assertEqual(
+            pos_emb.dtype,
+            jnp.float32,
+            f"Expected pos_emb to be float32 when dtype={dtype}, got {pos_emb.dtype}",
+        )
+
+    @parameterized.parameters(jnp.float32, jnp.bfloat16)
+    def test_embed_proj_input_dtype_matches_param_dtype(self, dtype):
+        """Test that pos_emb is cast to match parameter dtype before projection.
+
+        When param dtype is float32: pos_emb.astype(float32) is a no-op.
+        When param dtype is bfloat16: pos_emb is downcast from float32 to bfloat16.
+        """
+        pos_embed_dim = 256
+        output_dim = 512
+        timestep = jnp.linspace(0, 1, 5, dtype=dtype)
+
+        model_cfg = TimeStepEmbedding.default_config().set(
+            name=f"test_{dtype}",
+            pos_embed_dim=pos_embed_dim,
+            output_dim=output_dim,
+            dtype=dtype,
+        )
+        model = model_cfg.instantiate(parent=None)
+        params = model.initialize_parameters_recursively(jax.random.PRNGKey(123))
+
+        # Run forward pass
+        output, _ = F(
+            model,
+            inputs=dict(positions=timestep),
+            state=params,
+            is_training=False,
+            prng_key=jax.random.PRNGKey(0),
+        )
+
+        # Output dtype should match param dtype
+        # Note: When params are bfloat16, the float32 precision from
+        # dit_sinusoidal_positional_embeddings is lost after casting.
+        self.assertEqual(output.dtype, dtype)
 
 
 class TestLabelEmbedding(parameterized.TestCase):

@@ -395,6 +395,12 @@ USER_FACING_NAME_TO_SYSTEM_CHARACTERISTICS = {
     "v6e-8": _SystemCharacteristics(
         "2x4", 2, "tpu-v6e-slice", "ct6e-standard-4t", 4, AcceleratorType["TPU"], "v6e-8"
     ),
+    # Naming convention for TPU: {version}-{cores}[-{variant}]
+    # "-{variant}" is optional. It is used to define a spec that is different from standard.
+    # The value can be anything as long as it is unique.
+    "v6e-8-1": _SystemCharacteristics(
+        "2x4", 1, "tpu-v6e-slice", "ct6e-standard-8t", 8, AcceleratorType["TPU"], "v6e-8"
+    ),
     "v6e-16": _SystemCharacteristics(
         "4x4", 4, "tpu-v6e-slice", "ct6e-standard-4t", 4, AcceleratorType["TPU"], "v6e-16"
     ),
@@ -409,6 +415,40 @@ USER_FACING_NAME_TO_SYSTEM_CHARACTERISTICS = {
     ),
     "v6e-256": _SystemCharacteristics(
         "16x16", 64, "tpu-v6e-slice", "ct6e-standard-4t", 4, AcceleratorType["TPU"], "v6e-256"
+    ),
+    # 7x
+    "7x-8": _SystemCharacteristics(
+        "2x2x1", 1, "tpu7x", "tpu7x-standard-4t", 4, AcceleratorType["TPU"], "v7x-8"
+    ),
+    "7x-16": _SystemCharacteristics(
+        "2x2x2", 2, "tpu7x", "tpu7x-standard-4t", 4, AcceleratorType["TPU"], "v7x-16"
+    ),
+    "7x-32": _SystemCharacteristics(
+        "2x2x4", 4, "tpu7x", "tpu7x-standard-4t", 4, AcceleratorType["TPU"], "v7x-32"
+    ),
+    "7x-64": _SystemCharacteristics(
+        "2x4x4", 8, "tpu7x", "tpu7x-standard-4t", 4, AcceleratorType["TPU"], "v7x-64"
+    ),
+    "7x-128": _SystemCharacteristics(
+        "4x4x4", 16, "tpu7x", "tpu7x-standard-4t", 4, AcceleratorType["TPU"], "v7x-128"
+    ),
+    "7x-256": _SystemCharacteristics(
+        "4x4x8", 32, "tpu7x", "tpu7x-standard-4t", 4, AcceleratorType["TPU"], "v7x-256"
+    ),
+    "7x-512": _SystemCharacteristics(
+        "4x8x8", 64, "tpu7x", "tpu7x-standard-4t", 4, AcceleratorType["TPU"], "v7x-512"
+    ),
+    "7x-1024": _SystemCharacteristics(
+        "8x8x8", 128, "tpu7x", "tpu7x-standard-4t", 4, AcceleratorType["TPU"], "v7x-1024"
+    ),
+    "7x-2048": _SystemCharacteristics(
+        "8x8x16", 256, "tpu7x", "tpu7x-standard-4t", 4, AcceleratorType["TPU"], "v7x-2048"
+    ),
+    "7x-4096": _SystemCharacteristics(
+        "8x16x16", 512, "tpu7x", "tpu7x-standard-4t", 4, AcceleratorType["TPU"], "v7x-4096"
+    ),
+    "7x-8192": _SystemCharacteristics(
+        "16x16x16", 1024, "tpu7x", "tpu7x-standard-4t", 4, AcceleratorType["TPU"], "v7x-8192"
     ),
     # v4
     "v4-8": _SystemCharacteristics(
@@ -490,6 +530,7 @@ GCE_MACHINE_TYPE_TO_MEMORY_CHARACTERISTICS = {
     "ct4p-hightpu-4t": 407,
     "ct5lp-hightpu-4t": 192,
     "ct6e-standard-4t": 720,
+    "tpu7x-standard-4t": 960,
 }
 
 # Reference doc https://cloud.google.com/kubernetes-engine/docs/concepts/plan-tpus
@@ -497,4 +538,11 @@ GCE_MACHINE_TYPE_TO_CPU_CHARACTERISTICS = {
     "ct5p-hightpu-4t": 208,
     "ct4p-hightpu-4t": 240,
     "ct6e-standard-4t": 180,
+    "tpu7x-standard-4t": 224,
 }
+
+
+# Reference doc https://cloud.google.com/tpu/docs/v5p#tpu-v5p-config
+# And there is no twisted topology for v6e
+def support_twisted_topology(tpu_type: str):
+    return tpu_type in {"v5p-256", "v5p-512", "v5p-2048", "v5p-4096"}

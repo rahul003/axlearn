@@ -15,7 +15,8 @@ Reference: https://arxiv.org/abs/2405.15052.
 """
 
 import re
-from typing import NamedTuple, Optional, Union
+from functools import reduce
+from typing import NamedTuple, Optional, Sequence, Union
 
 import jax
 import jax.numpy as jnp
@@ -40,11 +41,13 @@ from axlearn.common.layers import (
     StochasticDepth,
     get_activation_fn,
 )
-from axlearn.common.metrics import WeightedScalar
+from axlearn.common.metrics import WeightedSummary
 from axlearn.common.module import Module, child_context
 from axlearn.common.param_init import FanAxes, constant_initializer
 from axlearn.common.quantized_dot_general.layers import DenseGeneralBaseLayer
 from axlearn.common.utils import (
+    HybridMeshShape,
+    MeshShape,
     Nested,
     NestedTensor,
     PartitionSpec,
@@ -52,6 +55,7 @@ from axlearn.common.utils import (
     VDict,
     flatten_items,
     get_recursively,
+    infer_mesh_shape,
     set_recursively,
     tree_paths,
     with_sharding_constraint,
@@ -165,6 +169,52 @@ def _cap_logits(logits: Tensor, gating_logit_cap: float) -> Tensor:
         cap = jnp.array(gating_logit_cap, dtype=logits.dtype)
         logits = cap * jnp.tanh(logits / cap)
     return logits
+
+
+def get_outer_batch_from_mesh(
+    *,
+    mesh_axis_names: Sequence[str],
+    outer_batch_axis_names: Sequence[str],
+    mesh_shape: Optional[Union[MeshShape, HybridMeshShape]],
+) -> Optional[int]:
+    """Infer MoE outer batch size from mesh shape.
+
+    Args:
+        mesh_axis_names: The name of each mesh axis.
+        outer_batch_axis_names: The names of the mesh axes corresponding to the outer batch size.
+        mesh_shape: The size of each mesh axis corresponding to `mesh_axis_names`.
+            If None, the returned outer batch size will also be None.
+
+    Returns:
+        The MoE outer batch size. Will be None if `mesh_shape` is None.
+    """
+    if mesh_shape is None:
+        return None
+
+    ici_mesh_shape = (
+        mesh_shape.ici_mesh_shape if isinstance(mesh_shape, HybridMeshShape) else mesh_shape
+    )
+    try:
+        ici_mesh_shape = infer_mesh_shape(ici_mesh_shape)
+    except ValueError as e:
+        # It could happen when running in local, the number of devices can be smaller than the
+        # required number of devices from the mesh shape.
+        logging.info(e)
+
+    if isinstance(mesh_shape, HybridMeshShape):
+        if -1 in mesh_shape.dcn_mesh_shape:
+            # TODO(markblee): Improve support for this. At the moment it is not a use-case.
+            raise NotImplementedError(
+                "Unable to infer number of granules. Please specify dcn_mesh_shape without -1."
+            )
+        mesh_shape = tuple(x * y for x, y in zip(ici_mesh_shape, mesh_shape.dcn_mesh_shape))
+    else:
+        mesh_shape = ici_mesh_shape
+
+    return reduce(
+        lambda x, y: x * y,
+        [mesh_shape[mesh_axis_names.index(el)] for el in outer_batch_axis_names],
+    )
 
 
 class AdaptiveLoadBalanceLoss(BaseLayer):
@@ -432,13 +482,13 @@ class Top2Gating(BaseGating):
         router_z_loss = _router_z_loss(logits)
 
         # Adding auxiliary losses and gating statistics to job summary.
-        self.add_summary("load_balance_loss", WeightedScalar(aux_loss, 1))
-        self.add_summary("router_z_loss", WeightedScalar(router_z_loss, 1))
-        self.add_summary("dispatch_0", WeightedScalar(dispatch_0, 1))
-        self.add_summary("dispatch_1", WeightedScalar(dispatch_1, 1))
-        self.add_summary("dispatch_2", WeightedScalar(dispatch_2, 1))
-        self.add_summary("over_capacity_1", WeightedScalar(over_capacity_1, 1))
-        self.add_summary("over_capacity_2", WeightedScalar(over_capacity_2, 1))
+        self.add_summary("load_balance_loss", WeightedSummary(aux_loss, 1))
+        self.add_summary("router_z_loss", WeightedSummary(router_z_loss, 1))
+        self.add_summary("dispatch_0", WeightedSummary(dispatch_0, 1))
+        self.add_summary("dispatch_1", WeightedSummary(dispatch_1, 1))
+        self.add_summary("dispatch_2", WeightedSummary(dispatch_2, 1))
+        self.add_summary("over_capacity_1", WeightedSummary(over_capacity_1, 1))
+        self.add_summary("over_capacity_2", WeightedSummary(over_capacity_2, 1))
 
         if cfg.adaptive_load_balance_loss is None:
             self.add_summary("load_balance_loss", aux_loss)
@@ -624,15 +674,15 @@ class TopKGating(BaseGating):
         router_z_loss = _router_z_loss(logits)
 
         # Add auxiliary losses and gating statistics to job summary.
-        self.add_summary("load_balance_loss", WeightedScalar(aux_loss, 1))
-        self.add_summary("router_z_loss", WeightedScalar(router_z_loss, 1))
+        self.add_summary("load_balance_loss", WeightedSummary(aux_loss, 1))
+        self.add_summary("router_z_loss", WeightedSummary(router_z_loss, 1))
         # Summary for number of tokens dispatched to 0, 1, ..., k experts.
         for i in range(cfg.top_k + 1):
             dispatch_i = jnp.sum(dispatch_count_tensor == i)
-            self.add_summary(f"dispatch_{i}", WeightedScalar(dispatch_i, 1))
+            self.add_summary(f"dispatch_{i}", WeightedSummary(dispatch_i, 1))
         # Over capacity ratios for top-k experts.
         for i, over_capacity_i in enumerate(over_capacity_list):
-            self.add_summary(f"over_capacity_{i + 1}", WeightedScalar(over_capacity_i, 1))
+            self.add_summary(f"over_capacity_{i + 1}", WeightedSummary(over_capacity_i, 1))
 
         if cfg.adaptive_load_balance_loss is None:
             self.add_summary("load_balance_loss", aux_loss)

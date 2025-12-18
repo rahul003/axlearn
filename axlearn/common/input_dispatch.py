@@ -59,6 +59,22 @@ class BaseInputDispatcher(Module):
     def physical_to_logical_batch(self, global_physical_batch: Nested[Tensor]) -> Nested[Tensor]:
         raise NotImplementedError(type(self))
 
+    def logical_to_physical_shapes(
+        self, logical_feed_shapes: Nested[jax.ShapeDtypeStruct]
+    ) -> Nested[jax.ShapeDtypeStruct]:
+        """Maps per-feed logical shapes to per-feed physical shapes for AOT compilation."""
+        raise NotImplementedError(type(self))
+
+
+def _validate_logical_feed_shapes(logical_feed_shapes: Nested[jax.ShapeDtypeStruct]):
+    """Validates that leaves have `dtype`, `shape` with ndim >= 1, and consistent batch dims."""
+    leaves = jax.tree.leaves(logical_feed_shapes)
+    for leaf in leaves:
+        if not (hasattr(leaf, "shape") and hasattr(leaf, "dtype")):
+            raise ValueError(f"Expected shape-dtype leaves, got: {leaf}.")
+        if len(leaf.shape) == 0:
+            raise ValueError(f"Expected leaves to have ndim >= 1, got: {leaf}.")
+
 
 class InputDispatcher(BaseInputDispatcher):
     """A Module to dispatch per-feed logical input batches to global logical batches on device.
@@ -101,7 +117,9 @@ class InputDispatcher(BaseInputDispatcher):
     def __init__(self, cfg: Config, *, parent: Optional[Module]):
         cfg = cfg.clone()
         cfg.num_physical_feeds = cfg.num_physical_feeds or jax.process_count()
-        cfg.physical_feed_index = cfg.physical_feed_index or jax.process_index()
+        cfg.physical_feed_index = (
+            cfg.physical_feed_index if cfg.physical_feed_index is not None else jax.process_index()
+        )
         if cfg.logical_feed_indices is None:
             num_logical_feeds = min(cfg.global_logical_batch_size, cfg.num_physical_feeds)
             cfg.logical_feed_indices = list(range(num_logical_feeds))
@@ -295,6 +313,17 @@ class InputDispatcher(BaseInputDispatcher):
 
         return traverse_and_dispatch(global_physical_batch)
 
+    def logical_to_physical_shapes(
+        self, logical_feed_shapes: Nested[jax.ShapeDtypeStruct]
+    ) -> Nested[jax.ShapeDtypeStruct]:
+        _validate_logical_feed_shapes(logical_feed_shapes)
+        # Map the feed logical batch to physical batch.
+        feed_batch_size = self.feed_physical_batch_size
+        return jax.tree.map(
+            lambda spec: jax.ShapeDtypeStruct((feed_batch_size, *spec.shape[1:]), spec.dtype),
+            logical_feed_shapes,
+        )
+
 
 class SpmdInputDispatcher(BaseInputDispatcher):
     """A variant of InputDispatcher which is mesh/topology aware.
@@ -383,3 +412,10 @@ class SpmdInputDispatcher(BaseInputDispatcher):
 
     def physical_to_logical_batch(self, global_physical_batch: Nested[Tensor]) -> Nested[Tensor]:
         return jax.tree.map(lambda x: x, global_physical_batch)
+
+    def logical_to_physical_shapes(
+        self, logical_feed_shapes: Nested[jax.ShapeDtypeStruct]
+    ) -> Nested[jax.ShapeDtypeStruct]:
+        _validate_logical_feed_shapes(logical_feed_shapes)
+        # Ensure that we always return ShapeDtypeStructs.
+        return jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype), logical_feed_shapes)

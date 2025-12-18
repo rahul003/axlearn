@@ -3,7 +3,7 @@
 """Convolution layers."""
 
 from collections.abc import Sequence
-from typing import Literal, Optional, Union
+from typing import Literal, Optional, Union, cast
 
 import chex
 import jax
@@ -14,7 +14,7 @@ from axlearn.common.base_layer import BaseLayer, FactorizationSpec, ParameterSpe
 from axlearn.common.config import REQUIRED, Required, config_class
 from axlearn.common.module import nowrap
 from axlearn.common.param_init import FanAxes
-from axlearn.common.utils import Tensor, safe_not
+from axlearn.common.utils import Tensor, maybe_shard, safe_not
 
 # The padding type for jax.lax.conv_general_dilated API. Either the strings ‘SAME’, or ‘VALID’, or
 # 'CAUSAL' or a sequence of n (low, high) integer pairs that give the padding to apply before and
@@ -355,6 +355,10 @@ class Conv1D(BaseConv):
         # The convolution dilation, indicating dilation factor applied to the weight. It is also
         # known as atrous convolution or dilated convolution. If None, assume 1.
         dilation: Optional[int] = None
+        # input activation partition spec
+        input_partition_spec: Optional[Sequence[str | Sequence[str] | None]] = None
+        # output activation partition spec
+        output_partition_spec: Optional[Sequence[str | Sequence[str] | None]] = None
 
     @classmethod
     def default_config(cls):
@@ -392,6 +396,7 @@ class Conv1D(BaseConv):
 
     def forward(self, x: Tensor) -> Tensor:
         cfg = self.config
+        x = maybe_shard(x, cfg.input_partition_spec)
         dilation = cfg.dilation or 1
         conv_padding = conv_explicit_padding(
             window=(cfg.window,),
@@ -399,7 +404,9 @@ class Conv1D(BaseConv):
             padding=cfg.padding,
             dilation=(dilation,),
         )
-        return self._conv(x=x, strides=(cfg.strides,), padding=conv_padding, dilation=(dilation,))
+        y = self._conv(x=x, strides=(cfg.strides,), padding=conv_padding, dilation=(dilation,))
+        y = maybe_shard(y, cfg.output_partition_spec)
+        return cast(Tensor, y)
 
     def _conv(
         self,
@@ -462,7 +469,9 @@ class Conv1DWithPadding(Conv1D):
 
     # We add a kwargs "paddings" to the forward method.
     # pylint: disable-next=arguments-differ
-    def forward(self, x: Tensor, *, paddings: Tensor) -> tuple[Tensor, Tensor]:
+    def forward(
+        self, x: Tensor, *, paddings: Tensor
+    ) -> tuple[Tensor, Tensor]:  # pytype: disable=signature-mismatch
         """Computes convolution outputs and paddings.
 
         Args:
@@ -491,6 +500,7 @@ class Conv1DWithPadding(Conv1D):
             anchor=cfg.anchor,
         )
         # Apply padding to the outputs.
+        output_paddings = maybe_shard(output_paddings, cfg.output_partition_spec)
         output = output * (1 - output_paddings[..., None])
         return output, output_paddings
 
@@ -685,7 +695,9 @@ class Conv2DWith1DPadding(Conv2D):
 
     # We add a kwargs "paddings" to the forward method.
     # pylint: disable-next=arguments-differ
-    def forward(self, x: Tensor, *, paddings: Tensor) -> tuple[Tensor, Tensor]:
+    def forward(
+        self, x: Tensor, *, paddings: Tensor
+    ) -> tuple[Tensor, Tensor]:  # pytype: disable=signature-mismatch
         """Computes convolution outputs and paddings.
 
         Args:
@@ -1620,7 +1632,9 @@ class Conv2DTransposeWith1DPadding(Conv2DTranspose):
 
     # We add a kwargs "paddings" to the forward method.
     # pylint: disable-next=arguments-differ
-    def forward(self, x: Tensor, *, paddings: Tensor) -> tuple[Tensor, Tensor]:
+    def forward(
+        self, x: Tensor, *, paddings: Tensor
+    ) -> tuple[Tensor, Tensor]:  # pytype: disable=signature-mismatch
         """Computes convolution outputs and paddings.
 
         Args:

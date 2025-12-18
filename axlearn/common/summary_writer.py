@@ -402,6 +402,10 @@ class WandBWriter(BaseWriter):
         # If True, convert any 2D Tensors to wandb.Image before passing to wandb.log.
         convert_2d_to_image: bool = False
 
+        # Dictionary kwargs to pass to wandb.Settings().
+        # If None, no additional custom settings will be configured.
+        wandb_settings_kwargs: Optional[dict[str, Any]] = None
+
     @classmethod
     def default_config(cls: Config) -> Config:
         cfg = super().default_config()
@@ -413,6 +417,7 @@ class WandBWriter(BaseWriter):
         tags = os.environ.get("WANDB_TAGS")
         cfg.tags = tags.split(",") if tags else None
         cfg.dir = os.environ.get("WANDB_DIR")
+        cfg.mode = os.environ.get("WANDB_MODE", "online")
         return cfg
 
     def __init__(self, cfg: SummaryWriter.Config, *, parent: Optional[Module]):
@@ -436,11 +441,18 @@ class WandBWriter(BaseWriter):
         elif fs.exists(wandb_file):  # pytype: disable=module-attr
             with fs.open(wandb_file, "r") as f:  # pytype: disable=module-attr
                 exp_id = f.read().strip()
+        elif os.getenv("WANDB_RUN_ID", None):
+            exp_id = os.environ["WANDB_RUN_ID"]
         else:
             exp_id = wandb.util.generate_id()
             fs.makedirs(cfg.dir)  # pytype: disable=module-attr
             with fs.open(wandb_file, "w") as f:  # pytype: disable=module-attr
                 f.write(exp_id)
+
+        # Build custom settings from configured kwargs
+        wandb_settings = (
+            wandb.Settings(**cfg.wandb_settings_kwargs) if cfg.wandb_settings_kwargs else None
+        )
 
         wandb.init(
             id=exp_id,
@@ -454,6 +466,7 @@ class WandBWriter(BaseWriter):
             resume=cfg.resume,
             dir=cfg.dir,
             group=cfg.group,
+            settings=wandb_settings,
         )
 
     @staticmethod
@@ -464,10 +477,10 @@ class WandBWriter(BaseWriter):
         elif isinstance(val, enum.Enum):
             return str(val)
         elif isinstance(val, dict):
-            return type(val)({k: WandBWriter.format_config(v) for k, v in val.items()})
+            return type(val)({str(k): WandBWriter.format_config(v) for k, v in val.items()})
         elif isinstance(val, (tuple, list)):
             # wandb config stores tuple as list so no type(val)(...)
-            return [WandBWriter.format_config(v) for v in val]
+            return [WandBWriter.format_config(v) for v in val]  # pytype: disable=bad-return-type
         elif isinstance(val, (type, FunctionType)):
             # wandb config stores type as fully qualified str (same as Configurable.debug_string())
             return f"{val.__module__}.{val.__name__}"
@@ -556,6 +569,13 @@ class WandBWriter(BaseWriter):
 
         paths = tree_paths(values, separator="/", is_leaf=is_leaf)
         values = jax.tree.map(convert, paths, values, is_leaf=is_leaf)
+
+        # Flatten nested dicts and join the keys with "/"
+        flat_paths_and_values, _ = jax.tree_util.tree_flatten_with_path(values)
+        values = {
+            jax.tree_util.keystr(key_path, separator="/", simple=True): value
+            for key_path, value in flat_paths_and_values
+        }
 
         if cfg.prefix:
             values = {f"{cfg.prefix}/{k}": v for k, v in values.items()}

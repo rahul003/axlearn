@@ -30,11 +30,11 @@ from jax.sharding import PartitionSpec
 
 from axlearn.common import (
     debug_utils,
+    flax_struct_test,
     layers,
     learner,
     optimizers,
     param_init,
-    struct_test,
     test_utils,
     utils_spmd,
 )
@@ -533,6 +533,13 @@ class TrainerTest(test_utils.TestCase):
             # pylint: enable=protected-access
             if platform == "tpu":
                 if not enable_python_cache:
+                    # As of Jax >= 0.6.0, enable_python_cache=False no longer affects the
+                    # AOT compilation path. We now expect the cache hits to be 0
+                    if jax.__version__ >= "0.6.0":
+                        pytest.skip(
+                            # pylint: disable-next=line-too-long
+                            "AOT compilation path is not affected by 'enable_python_cache' with Jax >= 0.6.0"
+                        )
                     # We expect to have hit the lowering cache on all but one step.
                     self.assertEqual(end_cache_hits - start_cache_hits, cfg.max_step - 1)
                     self.assertEqual(mocked_compile_fn.call_count, cfg.max_step)
@@ -544,6 +551,11 @@ class TrainerTest(test_utils.TestCase):
                 self.assertEqual(compiled_with_options_call_count[0], 2)
             else:
                 if not enable_python_cache:
+                    if jax.__version__ >= "0.6.0":
+                        pytest.skip(
+                            # pylint: disable-next=line-too-long
+                            "AOT compilation path is not affected by 'enable_python_cache' with Jax >= 0.6.0"
+                        )
                     self.assertEqual(end_cache_hits - start_cache_hits, cfg.max_step - 1)
                     self.assertEqual(mocked_compile_fn.call_count, cfg.max_step)
                 else:
@@ -569,7 +581,7 @@ class TrainerTest(test_utils.TestCase):
     # pylint: enable=duplicate-code
     def test_compile_train_step(self, *, platform, mesh_shape):
         if not test_utils.is_supported_platform(platform):
-            pytest.skip(reason=f"Unsupported config: {platform=}, {mesh_shape=}.")
+            self.skipTest(f"Unsupported config: {platform=}, {mesh_shape=}.")
         cfg = SpmdTrainer.default_config().set(name="test_trainer", train_dtype=jnp.bfloat16)
         cfg.dir = tempfile.mkdtemp()
         cfg.mesh_axis_names = ("data", "model")
@@ -1083,15 +1095,15 @@ class TrainerTest(test_utils.TestCase):
             self.assertEqual(x.shape[0], global_logical_batch_size)
 
         def check_sharding(path: str, x: Tensor):
-            # It's useful to compare normalized PartitionSpecs with `_normalized_spec`, e.g.
-            # ("data",) vs "data"; so we disable the lint.
+            # It's useful to compare normalized PartitionSpecs with `_normalized_spec_for_aval`,
+            # e.g. ("data",) vs "data"; so we disable the lint.
             # pylint: disable=protected-access
             if x.shape[0] > 1:
                 jax.debug.inspect_array_sharding(
                     x,
                     callback=lambda sharding: self.assertEqual(
-                        partition_spec._normalized_spec(x.ndim),
-                        sharding.spec._normalized_spec(x.ndim),
+                        partition_spec._normalized_spec_for_aval(x.ndim),
+                        sharding.spec._normalized_spec_for_aval(x.ndim),
                         msg=f"{path=}, {sharding=}",
                     ),
                 )
@@ -1160,7 +1172,7 @@ class TrainerTest(test_utils.TestCase):
 
         batch_axis_size = int(process_count * multiple)
         if batch_axis_size < 1:
-            pytest.skip(reason=f"Incompatible {process_count=} and {multiple=}")
+            self.skipTest(f"Incompatible {process_count=} and {multiple=}")
 
         mesh_shape = (batch_axis_size, device_count // batch_axis_size)
         global_logical_batch_size = mesh_shape[0]
@@ -1215,6 +1227,26 @@ class TrainerTest(test_utils.TestCase):
     def test_input_dispatch_every_other_process(self, multiple: float):
         """Tests input dispatch with some padding feeds. Requires process_count > 1."""
         self._test_input_dispatch(multiple, backend="tpu")
+
+    def test_optional_batch_axes(self):
+        """Tests that we can omit batch_axis_names."""
+        mesh_shape = (jax.device_count(), 1)
+        global_logical_batch_size = mesh_shape[0]
+        partition_spec = PartitionSpec("model")  # Something other than "data".
+
+        # Explicitly set a partition spec on input.
+        input_cfg = self._dummy_input_checking_input(global_logical_batch_size)
+        input_cfg.partition_spec = partition_spec
+
+        cfg = self._trainer_config(input_cfg)
+        cfg.batch_axis_names = None
+        cfg.max_step = 3
+        cfg.mesh_shape = mesh_shape
+        cfg.model = self._dummy_input_checking_model(
+            global_logical_batch_size, partition_spec=partition_spec
+        )
+        trainer: SpmdTrainer = cfg.instantiate(parent=None)
+        self.assertEqual(partition_spec, trainer.input.partition_spec)
 
 
 class SelectMeshConfigTest(test_utils.TestCase):
@@ -1317,14 +1349,14 @@ class CompatibilityTest(test_utils.TestCase):
                 del prebuilt
                 cfg = self.config
                 if cfg.kind == "chex":
-                    param = struct_test.Chex(
+                    param = flax_struct_test.Chex(
                         field_d=jnp.array(4),
                         field_b=jnp.array(1),
                         field_a=jnp.array(2),
                         field_c=jnp.array(3),
                     )
                 elif cfg.kind == "struct":
-                    param = struct_test.Struct(
+                    param = flax_struct_test.Struct(
                         field_d=jnp.array(5),
                         field_b=jnp.array(6),
                         field_a=jnp.array(7),
@@ -1378,8 +1410,8 @@ class CompatibilityTest(test_utils.TestCase):
                 struct_trainer.restore_checkpoint()
             struct_data = struct_trainer.trainer_state.model["param"]
 
-            self.assertIsInstance(chex_data, struct_test.Chex)
-            self.assertIsInstance(struct_data, struct_test.Struct)
+            self.assertIsInstance(chex_data, flax_struct_test.Chex)
+            self.assertIsInstance(struct_data, flax_struct_test.Struct)
             chex.assert_trees_all_equal(
                 dataclasses.asdict(chex_data), dataclasses.asdict(struct_data)
             )

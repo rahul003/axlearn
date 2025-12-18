@@ -22,7 +22,7 @@ from axlearn.cloud.common.bastion import (
 )
 from axlearn.cloud.common.bundler import Bundler
 from axlearn.cloud.common.types import JobMetadata
-from axlearn.cloud.common.utils import define_flags, from_flags
+from axlearn.cloud.common.utils import AcceleratorConfig, define_flags, from_flags
 from axlearn.cloud.gcp import bundler, jobset_utils
 from axlearn.cloud.gcp.bundler import ArtifactRegistryBundler, CloudBuildBundler
 from axlearn.cloud.gcp.jobset_utils import (
@@ -35,6 +35,7 @@ from axlearn.cloud.gcp.jobset_utils import (
     CompositeReplicatedJob,
     GCSFuseMount,
     HostMount,
+    TPUReplicatedJob,
     _LoadBalancer,
 )
 from axlearn.cloud.gcp.node_pool import PRE_PROVISIONER_LABEL
@@ -77,6 +78,7 @@ class TPUReplicatedJobTest(TestCase):
             jobset_utils.TPUReplicatedJob.define_flags(fv)
             fv.set_default("name", "test-name")
             fv.set_default("instance_type", "tpu-v4-8")
+            fv.set_default("topology", None)
             for key, value in kwargs.items():
                 if value is not None:
                     setattr(fv, key, value)
@@ -112,7 +114,7 @@ class TPUReplicatedJobTest(TestCase):
             self._job_config(bundler_cls=ArtifactRegistryBundler) as (cfg, _),
         ):
             cfg.set(name="invalid_underscore_name", command="", output_dir="")
-            cfg.instantiate(bundler=mock.Mock())
+            cfg.instantiate(bundler=mock.create_autospec(Bundler))
 
     @parameterized.product(
         [
@@ -186,7 +188,10 @@ class TPUReplicatedJobTest(TestCase):
         ],
         priority_class=[None, "such-high-priority"],
         additional_node_networks=[None, "network-1:subnet-1,network-2:subnet-2"],
+        image_id=[None, "my-image-id"],
     )
+    # TODO: Try to reduce positional arguments
+    # pylint: disable-next=too-many-positional-arguments
     def test_build_pod(
         self,
         bundler_cls: type[Bundler],
@@ -203,6 +208,7 @@ class TPUReplicatedJobTest(TestCase):
         gcsfuse_mount_spec: Optional[list[str]] = None,
         priority_class: Optional[str] = None,
         additional_node_networks: Optional[str] = None,
+        image_id: Optional[str] = None,
     ):
         with (
             mock.patch("os.environ", env),
@@ -211,6 +217,7 @@ class TPUReplicatedJobTest(TestCase):
                 host_mount_spec=host_mount_spec,
                 gcsfuse_mount_spec=gcsfuse_mount_spec,
                 priority_class=priority_class,
+                image_id=image_id,
             ) as (cfg, bundler_cfg),
         ):
             gke_job: jobset_utils.TPUReplicatedJob = cfg.set(
@@ -279,6 +286,10 @@ class TPUReplicatedJobTest(TestCase):
             container = pod_spec["containers"][0]
             # Check command.
             self.assertIn("test_command", container["command"])
+            if image_id:
+                self.assertEqual(image_id, container["image"])
+            else:
+                self.assertIn("test-image", container["image"])
 
             if host_mount_spec:
                 for v in pod_spec["volumes"]:
@@ -350,6 +361,18 @@ class TPUReplicatedJobTest(TestCase):
                 container_env["NODE_IP"]["valueFrom"]["fieldRef"]["fieldPath"],
             )
 
+            # Verify NUM_REPLICAS in container env.
+            self.assertEqual(
+                "metadata.annotations['jobset.sigs.k8s.io/replicatedjob-replicas']",
+                container_env["NUM_REPLICAS"]["valueFrom"]["fieldRef"]["fieldPath"],
+            )
+
+            # Verify REPLICA_ID in container env.
+            self.assertEqual(
+                "metadata.annotations['jobset.sigs.k8s.io/job-index']",
+                container_env["REPLICA_ID"]["valueFrom"]["fieldRef"]["fieldPath"],
+            )
+
             # Verify uploader container specs
             self.assertEqual(len(pod_spec["initContainers"]), 1)
 
@@ -402,10 +425,16 @@ class TPUReplicatedJobTest(TestCase):
                     str(spec.metadata.priority), node_selector.get("job-priority", None)
                 )
                 self.assertEqual(spec.metadata.user_id, labels.get("user-id", None))
+                self.assertEqual(spec.metadata.project_id, labels.get("project-id", None))
+                self.assertEqual(
+                    str(gke_job.config.accelerator.num_replicas),
+                    labels.get("num-replicas", None),
+                )
             else:
                 self.assertNotIn("job-priority", labels)
                 self.assertNotIn("job-priority", node_selector)
                 self.assertNotIn("user-id", labels)
+                self.assertNotIn("project-id", labels)
 
             if BASTION_JOB_VERSION_ENV_VAR in env:
                 job_version = env.get(BASTION_JOB_VERSION_ENV_VAR)
@@ -504,6 +533,39 @@ class TPUReplicatedJobTest(TestCase):
         self.assertEqual(lb2.target_port, 8080)
         self.assertEqual(lb2.port, 443)
 
+    @parameterized.parameters(
+        dict(
+            instance_type="v5p-16",
+            topology="2x2x2",
+            expected=ValueError("custom topology is only available for v5p-128 and above."),
+        ),
+        dict(
+            instance_type="v5p-128",
+            topology="2x64",
+            expected=ValueError("custom topology only supports 3d topology for v5p."),
+        ),
+        dict(
+            instance_type="v5p-128",
+            topology="2x1x64",
+            expected=ValueError("There should be no 1 in each topology dimension."),
+        ),
+        dict(
+            instance_type="v5p-128",
+            topology="2x2x2",
+            expected=ValueError(
+                "custom topology 2x2x2 doesn't match the number of cores in instance_type v5p-128."
+            ),
+        ),
+        dict(instance_type="v5p-128", topology="2x4x8", expected=None),
+    )
+    def test_verify_custom_topology_availability(self, instance_type, topology, expected):
+        accelerator = AcceleratorConfig().set(instance_type=instance_type, topology=topology)
+        if isinstance(expected, Exception):
+            with self.assertRaisesRegex(type(expected), str(expected)):
+                TPUReplicatedJob.verify_custom_topology_availability(accelerator)
+        else:
+            TPUReplicatedJob.verify_custom_topology_availability(accelerator)
+
 
 class CompositeReplicatedJobTest(TestCase):
     def test_composite_replicated_job(self):
@@ -541,7 +603,7 @@ class CompositeReplicatedJobTest(TestCase):
             self.assertEqual(cfg.inner[child].name, child)
             self.assertEqual(cfg.inner[child].command, f"{child}_command")
 
-        composite = cfg.instantiate(bundler=mock.Mock())
+        composite = cfg.instantiate(bundler=mock.create_autospec(Bundler))
         self.assertNestedEqual(
             [{"name": "a", "command": "a_command"}, {"name": "b", "command": "b_command"}],
             composite(),

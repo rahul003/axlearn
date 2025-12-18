@@ -159,6 +159,9 @@ cython_debug/
 # Vscode
 .vscode/
 
+# Zed
+.zed/
+
 # Weights & Biases
 wandb/
 
@@ -167,3 +170,9 @@ wandb/
 
 # Custom
 .axlearn.config
+
+# Bazel
+bazel-*
+
+# Emacs
+*~

@@ -35,12 +35,15 @@ from absl.testing import absltest, parameterized
 from jax import nn
 from jax import numpy as jnp
 from jax.ad_checkpoint import checkpoint_policies as jax_remat_policies
+from transformers.configuration_utils import PretrainedConfig as HFPretrainedConfig
+from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS as HF_ROPE_INIT_FUNCTIONS
 from transformers.models.roberta import modeling_roberta as hf_roberta
 from transformers.models.roformer import modeling_roformer as hf_roformer
 from transformers.models.xlnet import modeling_xlnet as hf_xlnet
 
 from axlearn.common import attention, attention_bias, test_utils, utils
 from axlearn.common.attention import (
+    BaseQKVLinear,
     BaseStackedTransformerLayer,
     BaseTransformerLayer,
     BottleNeckAdapterTransformerLayer,
@@ -63,7 +66,6 @@ from axlearn.common.attention import (
     RematRegexSavePatterns,
     RepeatedTransformerLayer,
     RoFormerQKVLinear,
-    SlidingWindowKVCache,
     StackedTransformerLayer,
     TransformerAttentionLayer,
     TransformerFeedForwardLayer,
@@ -73,7 +75,6 @@ from axlearn.common.attention import (
     apply_rotary_position_embeddings,
     build_remat_spec,
     compute_padding_biases,
-    enable_sliding_window_attention,
     rel_pos_to_abs_pos,
     scaled_hidden_dim,
     set_double_shard_weights_config,
@@ -84,6 +85,7 @@ from axlearn.common.attention import (
 from axlearn.common.attention_bias import (
     NEG_INF,
     CausalAttentionBias,
+    SlidingWindowAttentionBias,
     bool_to_bias,
     causal_mask,
     make_causal_biases,
@@ -104,6 +106,8 @@ from axlearn.common.config import (
     maybe_set_config,
 )
 from axlearn.common.decoder import Decoder, TransformerTextEmbeddings
+from axlearn.common.kv_cache.paged_kv_cache import PagedKVCache
+from axlearn.common.kv_cache.sliding_window_kv_cache import enable_sliding_window_attention
 from axlearn.common.layers import RMSNorm, set_bias_recursively
 from axlearn.common.module import InvocationContext, Module
 from axlearn.common.module import functional as F
@@ -127,6 +131,7 @@ from axlearn.common.test_utils import (
     TestCase,
     assert_allclose,
     dummy_segments_positions,
+    is_supported_mesh_shape,
     set_threefry_partitionable,
 )
 from axlearn.common.torch_utils import parameters_from_torch_layer
@@ -997,6 +1002,91 @@ class RoFormerSinusoidalPositionalEmbeddingTest(TestCase):
         )
 
 
+class YarnScaleRopeParametersTest(TestCase):
+    """Tests YarnScaledRoFormerSinusoidalPositionalEmbedding."""
+
+    @parameterized.parameters(
+        (2, 10, 32),
+        (2, 8, 32),
+        (2, 6, 32),
+        (2, 8, 16),
+        (2, 8, 48),
+        (2, 8, 64),
+    )
+    def test_yarn_emb_basic(self, batch_size, max_len, dim):
+        # Here we test yarn embedding within the original max length, which translates to
+        # the original RoFormer embedding.
+        # Token id is in the np format for easier transition.
+        token_ids = np.random.randint(low=1, high=20, size=[batch_size, max_len])
+        positions = jnp.expand_dims(jnp.arange(token_ids.shape[-1], dtype=jnp.int32), 0)
+        ref_layer = hf_roformer.RoFormerSinusoidalPositionalEmbedding(max_len, dim)
+        # In recent transformers API, PE's `_init_weight` is called recursively by parent module.
+        # Since we only initialize the PE layer here, we need to manually call it.
+        ref_layer._init_weight()  # pylint: disable=protected-access, no-value-for-parameter
+        ref_output = ref_layer(as_torch_tensor(token_ids).shape)
+        # Set up the RoPE AXLearn configs.
+        test_layer = (
+            attention.YaRNSinusoidalPositionalEmbedding.default_config()
+            .set(name="test_rope_emb", dim=dim, original_max_seq_length=max_len)
+            .instantiate(parent=None)
+        )
+        test_output = test_layer.forward(positions=positions)
+        np.testing.assert_allclose(np.expand_dims(ref_output, 0), test_output, atol=5e-7)
+
+    @parameterized.parameters(
+        (2, 8, 32, 32, 1.0, 32.0, 10000.0),
+        (2, 16, 32, 32, 1.0, 32.0, 10000.0),
+        (2, 8, 48, 32, 1.0, 32.0, 10000.0),
+        (2, 8, 64, 32, 2.0, 32.0, 10000.0),
+        (2, 8, 64, 32, 2.0, 16.0, 10000.0),
+        (2, 8, 48, 32, 1.0, 16.0, 10000.0),
+    )
+    def test_yarn_emb_extend(
+        self, batch_size, original_max_len, dim, new_max_len, beta_slow, beta_fast, theta
+    ):
+        # Here we test yarn embedding within the original max length, which translates to
+        # the original RoFormer embedding.
+        # Token id is in the np format for easier transition.
+        token_ids = np.random.randint(low=1, high=20, size=[batch_size, new_max_len])
+        scaling_factor = new_max_len / original_max_len
+        ref_config = HFPretrainedConfig(
+            rope_theta=theta,
+            head_dim=dim,
+            hidden_size=dim,
+            num_attention_heads=1,
+            max_position_embeddings=new_max_len,
+            rope_scaling={
+                "rope_type": "yarn",
+                "factor": scaling_factor,
+                "original_max_position_embeddings": original_max_len,
+                "beta_slow": beta_slow,
+                "beta_fast": beta_fast,
+            },
+        )
+        ref_rope_fn = HF_ROPE_INIT_FUNCTIONS[ref_config.rope_scaling["rope_type"]]
+        ref_tokens = as_torch_tensor(token_ids)
+        inv_freq, attention_factor = ref_rope_fn(ref_config, device=ref_tokens.device)
+        # In recent transformers API, PE's `_init_weight` is called recursively by parent module.
+        # Since we only initialize the PE layer here, we need to manually call it.
+        # Set up the RoPE AXLearn configs.
+        test_layer = (
+            attention.YaRNSinusoidalPositionalEmbedding.default_config()
+            .set(
+                name="test_rope_emb",
+                scaling_factor=scaling_factor,
+                dim=dim,
+                theta=theta,
+                original_max_seq_length=original_max_len,
+                beta_slow=beta_slow,
+                beta_fast=beta_fast,
+            )
+            .instantiate(parent=None)
+        )
+        test_output, test_output2 = test_layer.compute_rope_params()
+        np.testing.assert_allclose(as_tensor(inv_freq), test_output, atol=5e-7)
+        np.testing.assert_allclose(attention_factor, test_output2, atol=5e-7)
+
+
 def llama_reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     """LLaMA reshape for broadcast function.
 
@@ -1158,12 +1248,18 @@ class RoFormerSinusoidalPositionalEmbeddingAgainstLLaMATest(TestCase):
             attention.GroupedQKVLinear.default_config(),
         ),
         has_query_positions=(True, False),
+        use_query_scale=(True, False),
+        use_key_scale=(True, False),
+        partial_rope_factor=(1.0, 0.5, None),
     )
     def test_roformer_qkv_linear(
         self,
         dtype: jnp.dtype,
         input_linear: attention.BaseQKVLinear.Config,
         has_query_positions: bool,
+        use_query_scale: bool,
+        use_key_scale: bool,
+        partial_rope_factor: Optional[float],
     ):
         seq_len = 6
         batch_size = 2
@@ -1185,6 +1281,12 @@ class RoFormerSinusoidalPositionalEmbeddingAgainstLLaMATest(TestCase):
                 num_kv_heads = num_heads // 2
                 input_linear = input_linear.set(num_kv_heads=num_kv_heads)
             roformer_qkv_linear_kwargs["input_linear"] = input_linear
+
+        if use_key_scale:
+            roformer_qkv_linear_kwargs["key_scale"] = attention.ScaleKey.default_config()
+        if use_query_scale:
+            roformer_qkv_linear_kwargs["query_scale"] = attention.ScaleQuery.default_config()
+        roformer_qkv_linear_kwargs["partial_rope_factor"] = partial_rope_factor
 
         roformer_qkv_linear = (
             RoFormerQKVLinear.default_config()
@@ -1417,13 +1519,13 @@ class QKVLinearTest(TestCase):
             attention.FusedQKVLinear,
             attention.FusedGroupedQKVLinear,
         ):
-            pytest.skip(reason="Fused QKV doesn't support different value dim.")
+            self.skipTest("Fused QKV doesn't support different value dim.")
         if fp8_amax_history_length is not None and jax.default_backend() != "gpu":
-            pytest.skip(reason="FP8 is only supported on H100!")
+            self.skipTest("FP8 is only supported on H100!")
         if cross_attention and test_cls is attention.FusedGroupedQKVLinear:
-            pytest.skip(reason="FusedGroupedQKVLinear doesn't support cross attention.")
+            self.skipTest("FusedGroupedQKVLinear doesn't support cross attention.")
         if value_dim_ratio != 1 and not cross_attention:
-            pytest.skip(reason="Value dim ratio only makes sense for cross attention.")
+            self.skipTest("Value dim ratio only makes sense for cross attention.")
         with utils.numeric_checks(True):
             model_dim = 12
             num_heads = 4
@@ -1710,7 +1812,7 @@ class ScaleQueryTest(TestCase):
             q_proj_scaled = q_proj_scaled * jax.nn.softplus(1.0) * 1.442695041
 
         if scale_factor is None:
-            scale_factor = kwargs["module"].config.per_head_dim ** -0.5
+            scale_factor = kwargs["module"].config.per_head_dim**-0.5
         scale_factor = float(scale_factor)
         q_proj_scaled = q_proj_scaled * scale_factor
 
@@ -1867,6 +1969,26 @@ def _convert_to_qkv_linear(
         test_state["i_proj"] = VDict({"qkv_proj": qkv_proj})
 
     return test_state
+
+
+class _QLinearWithKvUpdate(QLinear):
+    """QLinear that adjusts the external KV for testing purposes."""
+
+    def forward(
+        self,
+        query: Tensor,
+        *,
+        kv_state: KVState,
+        key: Optional[Tensor] = None,
+        value: Optional[Tensor] = None,
+        query_positions: Optional[Tensor] = None,
+    ) -> BaseQKVLinear.Output:
+        query, key, value = super().forward(
+            query, kv_state=kv_state, key=key, value=value, query_positions=query_positions
+        )
+        key = key + 1.0
+        value = value - 1.0
+        return BaseQKVLinear.Output(query, key, value)
 
 
 class MultiheadAttentionTest(TestCase):
@@ -2197,7 +2319,7 @@ class MultiheadAttentionTest(TestCase):
                 (FusedGroupedQKVLinear.Config, RoFormerQKVLinear.Config, FusedQKVLinear.Config),
             )
         ):
-            pytest.skip(reason="Incompatible test setting that does not need testing.")
+            self.skipTest("Incompatible test setting that does not need testing.")
 
         model_dim = 16
         num_heads = 4
@@ -2444,15 +2566,94 @@ class MultiheadAttentionTest(TestCase):
         )
         self.assertNestedAllClose(base_outputs, test_outputs)
 
+    @parameterized.product(kv_part=[None, ("fsdp", None, "model", None)])
+    @pytest.mark.for_8_devices
+    def test_qkvo_partition_spec(self, kv_part):
+        """Tests that QKVO partition spec are applied correctly when specified."""
+        mesh_shape = (2, 2, 2)
+        if not is_supported_mesh_shape(mesh_shape):
+            self.skipTest(f"Unsupported mesh shape {mesh_shape}")
+        model_dim = 16
+        num_heads = 4
+        mesh = jax.make_mesh(mesh_shape, axis_names=("fsdp", "seq", "model"))
+        q_part = ("fsdp", "seq", "model", None)
+        o_part = ("fsdp", "seq", None)
+
+        layer_kwargs = dict(
+            query_dim=model_dim,
+            key_dim=model_dim,
+            value_dim=model_dim,
+            num_heads=num_heads,
+            dtype=jnp.float32,
+            q_partition_spec=q_part,
+            o_partition_spec=o_part,
+            k_partition_spec=kv_part,
+            v_partition_spec=kv_part,
+        )
+        init_key = jax.random.PRNGKey(123)
+        base_cfg = attention.MultiheadAttention.default_config().set(**layer_kwargs)
+        base_layer = base_cfg.set(name="base").instantiate(parent=None)
+        base_state = base_layer.initialize_parameters_recursively(prng_key=init_key)
+
+        # Dummy inputs.
+        batch_size, tgt_len = 2, 6
+        base_inputs = dict(
+            query=jax.random.normal(
+                jax.random.PRNGKey(124),
+                [batch_size, tgt_len, model_dim],
+                dtype=jnp.float32,
+            ),
+            key=None,
+            value=None,
+        )
+        forward_key = jax.random.PRNGKey(456)
+
+        def patched_remat_name(_, tensor, name):
+            def callback(sharding):
+                # pylint: disable-next=protected-access
+                normalize_spec = sharding.spec._normalized_spec_for_aval(len(tensor.shape))
+                if name == "q_proj":
+                    self.assertEqual(normalize_spec, PartitionSpec(*q_part))
+                elif name == "o_proj":
+                    self.assertEqual(normalize_spec, PartitionSpec(*o_part))
+                elif name in ["k_proj", "v_proj"]:
+                    if kv_part is None:
+                        self.assertEqual(normalize_spec, PartitionSpec(*q_part))
+                    else:
+                        self.assertEqual(normalize_spec, PartitionSpec(*kv_part))
+
+            jax.debug.inspect_array_sharding(tensor, callback=callback)
+            return tensor
+
+        with (
+            mesh,
+            mock.patch.object(attention.MultiheadAttention, "_remat_name", patched_remat_name),
+        ):
+
+            @jax.jit
+            def jit_fn():
+                base_outputs, _ = F(
+                    base_layer,
+                    state=base_state,
+                    is_training=False,
+                    prng_key=forward_key,
+                    inputs=base_inputs,
+                )
+                return base_outputs
+
+            jit_fn()
+
     def _test_extend_step(
         self,
         attention_cfg: attention.MultiheadAttention.Config,
         *,
         model_dim: int,
         num_heads: int,
+        num_kv_heads: int,
         dtype: jnp.dtype,
         bias: bool,
         extend_step_len: int,
+        page_size: Optional[int],  # None means not using PagedKVCache
     ):
         cfg = attention_cfg.set(
             query_dim=model_dim,
@@ -2466,7 +2667,8 @@ class MultiheadAttentionTest(TestCase):
 
         layer_params = layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
 
-        batch_size, tgt_len = 2, 6
+        batch_size = 2
+        tgt_len = 6 if page_size is None else max(6, page_size * 3)
         head_dim = model_dim // num_heads
         query = jax.random.normal(
             jax.random.PRNGKey(123), [batch_size, tgt_len, model_dim], dtype=dtype
@@ -2474,7 +2676,7 @@ class MultiheadAttentionTest(TestCase):
         key = value = kv_state = None
         if attention_cfg.klass == attention.GroupedQueryAttention:
             pass
-        elif attention_cfg.input_linear.klass == QLinear:
+        elif attention_cfg.input_linear.klass in (QLinear, _QLinearWithKvUpdate):
             kv_state = KVState(
                 k_proj=jax.random.normal(
                     jax.random.PRNGKey(124), [batch_size, tgt_len, num_heads, head_dim], dtype=dtype
@@ -2488,7 +2690,7 @@ class MultiheadAttentionTest(TestCase):
             # Make key and value distinct from query. Otherwise, it is equivalent
             # to the query only case.
             key = value = query + 0.1
-        return_aux = {"probs"}
+        return_aux = {"probs", "kv_state"}
         inputs = dict(
             query=query,
             key=key,
@@ -2509,6 +2711,18 @@ class MultiheadAttentionTest(TestCase):
             query=TensorSpec([batch_size, tgt_len], dtype=dtype),
             kv_state=kv_state,
         )
+        if page_size is not None:
+            # populate the kv_pages and page_indices
+            max_pages_each_request = (tgt_len + page_size - 1) // page_size
+            num_global_pages = batch_size * max_pages_each_request
+            for k in ["key", "value"]:
+                initial_state["kv_cache"][k] = jnp.zeros(
+                    shape=[num_kv_heads, num_global_pages, page_size, head_dim]
+                ).astype(dtype)
+            initial_state["kv_cache"]["page_indices"] = jnp.arange(num_global_pages).reshape(
+                (batch_size, max_pages_each_request)
+            )
+
         self.assertIsNone(initial_output)
         if kv_state is None:
             for k in ["key", "value"]:
@@ -2537,22 +2751,35 @@ class MultiheadAttentionTest(TestCase):
             decoder_output.append(extend_step_outputs.data)
             decoder_probs.append(extend_step_outputs.probs)
         decoder_output = jnp.concatenate(decoder_output, axis=1)
-        assert_allclose(decoder_output, forward_outputs.data, atol=1e-6)
+        assert_allclose(
+            decoder_output, forward_outputs.data, atol=1e-6 if dtype == jnp.float32 else 1e-3
+        )
         # When not using KVCache, the source positions are not always full positions.
         # e.g., SlidingWindowKVCache returns probs for only sliding window size.
-        if cfg.kv_cache is None or cfg.kv_cache.klass == KVCache:
+        if cfg.kv_cache is None or cfg.kv_cache.klass in [KVCache, PagedKVCache]:
             decoder_probs = jnp.concatenate(decoder_probs, axis=2)
+            assert decoder_output.shape == forward_outputs.data.shape
+            assert decoder_probs.shape == forward_outputs.probs.shape
             assert_allclose(decoder_probs, forward_outputs.probs, atol=1e-6)
+            test_k_proj, test_v_proj = layer.kv_cache.maybe_normalize_kv(
+                extend_step_outputs.kv_state
+            )
+            self.assertNestedAllClose(test_k_proj, forward_outputs.kv_state.k_proj, atol=1e-6)
+            self.assertNestedAllClose(test_v_proj, forward_outputs.kv_state.v_proj, atol=1e-6)
 
     @parameterized.product(
         dtype=(jnp.float32, jnp.float16, jnp.bfloat16),
         per_dim_scale=(None, PerDimScale.default_config()),
         atten_logit_cap=(0.0, 20.0),
-        input_linear=(QKVLinear, RoFormerQKVLinear, QLinear),
+        input_linear=(QKVLinear, RoFormerQKVLinear, QLinear, _QLinearWithKvUpdate),
         bias=(True, False),
         causal_type=("causal", "sliding_window"),
         extend_step_len=(1, 4),
+        scale_kv_before_cache_update=(False, True),
+        page_size=(None, 16),  # None means not using PagedKVCache
     )
+    # TODO: Try to reduce positional arguments
+    # pylint: disable-next=too-many-positional-arguments
     def test_extend_step(
         self,
         dtype: jnp.dtype,
@@ -2562,34 +2789,117 @@ class MultiheadAttentionTest(TestCase):
         bias: bool,
         causal_type: str,
         extend_step_len: int,
+        scale_kv_before_cache_update: bool,
+        page_size: Optional[int],
     ):
-        if input_linear == QLinear and causal_type == "sliding_window":
-            pytest.skip("QLinear doesn't support sliding window mask.")
+        if input_linear in (QLinear, _QLinearWithKvUpdate):
+            if causal_type == "sliding_window":
+                self.skipTest("QLinear variants don't support sliding window mask.")
+            if scale_kv_before_cache_update:
+                self.skipTest("QLinear variants don't support scale_kv_before_cache_update=True")
+        if page_size is not None:
+            if extend_step_len > 1:
+                self.skipTest("PagedKVCache doesn't support extending multiple steps yet.")
+            if input_linear in (QLinear, _QLinearWithKvUpdate):
+                self.skipTest("PagedKVCache doesn't support QLinear yet.")
         model_dim = 16
         num_heads = 4
         if input_linear == attention.RoFormerQKVLinear:
             input_linear = input_linear.default_config().set(rotary_value=False)
         else:
             input_linear = input_linear.default_config()
+
+        kv_cache_class = PagedKVCache if page_size is not None else KVCache
         cfg = attention.MultiheadAttention.default_config().set(
             query_scale=attention.ScaleQuery.default_config().set(per_dim_scale=per_dim_scale),
             atten_logit_cap=atten_logit_cap,
             input_linear=input_linear,
+            kv_cache=kv_cache_class.default_config().set(cache_dtype=dtype),
+            scale_kv_before_cache_update=scale_kv_before_cache_update,
         )
         if causal_type == "causal":
             cfg.mask = CausalAttentionBias.default_config()
         elif causal_type == "sliding_window":
-            cfg = enable_sliding_window_attention(cfg, sliding_window_size=4)
+            if page_size is not None:
+                cfg.mask = SlidingWindowAttentionBias.default_config(sliding_window_size=4)
+            else:
+                cfg = enable_sliding_window_attention(cfg, sliding_window_size=4)
         else:
             raise ValueError(f"{causal_type} is not supportd.")
         self._test_extend_step(
             cfg,
             model_dim=model_dim,
             num_heads=num_heads,
+            num_kv_heads=num_heads,
             dtype=dtype,
             bias=bias,
             extend_step_len=extend_step_len,
+            page_size=page_size,
         )
+
+    @parameterized.parameters(False, True)
+    def test_prescaled_kv_share(self, scale_kv_before_cache_update: bool):
+        """Tests that we always output the pre-scaled kv_state when input kv_state is set.
+
+        That is, the output kv_state should be equal to the input kv_state if it's set.
+        """
+        model_dim = 16
+        num_heads = 4
+        dtype = jnp.float32
+        batch_size = 2
+        tgt_len = 6
+        head_dim = model_dim // num_heads
+
+        cfg = attention.MultiheadAttention.default_config().set(
+            input_linear=QLinear.default_config(),
+            query_dim=model_dim,
+            key_dim=model_dim,
+            value_dim=model_dim,
+            num_heads=num_heads,
+            dtype=dtype,
+            scale_kv_before_cache_update=scale_kv_before_cache_update,
+        )
+        cfg.key_scale.norm = RMSNorm.default_config().set(input_dim=head_dim)
+
+        layer = cfg.set(name="test").instantiate(parent=None)
+        layer_params = layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
+
+        query = jax.random.normal(
+            jax.random.PRNGKey(123), [batch_size, tgt_len, model_dim], dtype=dtype
+        )
+        kv_state = KVState(
+            k_proj=jax.random.normal(
+                jax.random.PRNGKey(124), [batch_size, tgt_len, num_heads, head_dim], dtype=dtype
+            ),
+            v_proj=jax.random.normal(
+                jax.random.PRNGKey(125), [batch_size, tgt_len, num_heads, head_dim], dtype=dtype
+            ),
+            key_positions=jnp.arange(tgt_len)[None],
+        )
+        return_aux = {"probs", "kv_state"}
+        inputs = dict(
+            query=query,
+            key=None,
+            value=None,
+            kv_state=kv_state,
+            return_aux=return_aux,
+        )
+        with (
+            self.assertRaises(ValueError)
+            if scale_kv_before_cache_update
+            else contextlib.nullcontext()
+        ):
+            forward_outputs, _ = F(
+                layer,
+                state=layer_params,
+                is_training=False,
+                prng_key=jax.random.PRNGKey(456),
+                inputs=inputs,
+            )
+        if scale_kv_before_cache_update:
+            return
+        self.assertNestedEqual(forward_outputs.kv_state.k_proj, kv_state.k_proj)
+        self.assertNestedEqual(forward_outputs.kv_state.v_proj, kv_state.v_proj)
 
     @parameterized.product(
         dtype=(jnp.float32, jnp.float16, jnp.bfloat16),
@@ -2600,7 +2910,10 @@ class MultiheadAttentionTest(TestCase):
         bias=(True, False),
         causal_type=("causal", "sliding_window"),
         extend_step_len=(1, 4),
+        page_size=(None, 1, 16),  # None means not using PagedKVCache.
     )
+    # TODO: Try to reduce positional arguments
+    # pylint: disable-next=too-many-positional-arguments
     def test_gqa_extend_step(
         self,
         dtype: jnp.dtype,
@@ -2611,27 +2924,38 @@ class MultiheadAttentionTest(TestCase):
         bias: bool,
         causal_type: str,
         extend_step_len: int,
+        page_size: Optional[int],
     ):
+        if page_size is not None:
+            if extend_step_len > 1:
+                self.skipTest("PagedKVCache doesn't support extending multiple steps.")
         model_dim = 16
         num_heads = 4
+        kv_cache_class = PagedKVCache if page_size is not None else KVCache
         cfg = attention.GroupedQueryAttention.default_config().set(
             query_scale=attention.ScaleQuery.default_config().set(per_dim_scale=per_dim_scale),
             atten_logit_cap=atten_logit_cap,
             input_linear=input_linear.default_config().set(num_kv_heads=num_kv_heads),
+            kv_cache=kv_cache_class.default_config().set(cache_dtype=dtype),
         )
         if causal_type == "causal":
             cfg.mask = CausalAttentionBias.default_config()
         elif causal_type == "sliding_window":
-            cfg = enable_sliding_window_attention(cfg, sliding_window_size=4)
+            if page_size is not None:
+                cfg.mask = SlidingWindowAttentionBias.default_config(sliding_window_size=4)
+            else:
+                cfg = enable_sliding_window_attention(cfg, sliding_window_size=4)
         else:
             raise ValueError(f"{causal_type} is not supportd.")
         self._test_extend_step(
             cfg,
             model_dim=model_dim,
             num_heads=num_heads,
+            num_kv_heads=num_kv_heads,
             dtype=dtype,
             bias=bias,
             extend_step_len=extend_step_len,
+            page_size=page_size,
         )
 
     def _test_prefill_states(
@@ -2712,7 +3036,7 @@ class MultiheadAttentionTest(TestCase):
 
         # When not using KVCache, the source positions are not always full positions.
         # e.g., SlidingWindowKVCache returns probs for only sliding window size.
-        vanilla_kvcache = cfg.kv_cache is None or cfg.kv_cache.klass == KVCache
+        vanilla_kvcache = cfg.kv_cache is None or cfg.kv_cache.klass in [KVCache, PagedKVCache]
         if vanilla_kvcache:
             for proj in ["key", "value"]:
                 self.assertEqual(
@@ -2896,6 +3220,12 @@ class MultiheadAttentionTest(TestCase):
         v = jax.random.uniform(data_key, (batch, seq_len, num_kv_heads, per_head_dim))
         q, k, v = q.astype(jnp.float32), k.astype(kv_dtype), v.astype(kv_dtype)
         attention_logit_biases = attention_logit_biases = attention_bias.ZeroAttentionBias()
+        pos = jnp.arange(seq_len)[None, :]
+        kv_state = KVState(
+            k_proj=k,
+            v_proj=v,
+            key_positions=pos,
+        )
 
         (test_context, ref_probs), _ = F(
             test_layer,
@@ -2906,14 +3236,19 @@ class MultiheadAttentionTest(TestCase):
             inputs=dict(
                 mode=mode,
                 q_proj=q,
-                k_proj=k,
-                v_proj=v,
                 attention_logit_biases=attention_logit_biases,
+                kv_state=kv_state,
             ),
         )
 
         k = jnp.repeat(k, num_heads // num_kv_heads, axis=2)
         v = jnp.repeat(v, num_heads // num_kv_heads, axis=2)
+
+        kv_state = KVState(
+            k_proj=k,
+            v_proj=v,
+            key_positions=pos,
+        )
 
         (ref_context, ref_probs), _ = F(
             ref_layer,
@@ -2924,9 +3259,8 @@ class MultiheadAttentionTest(TestCase):
             inputs=dict(
                 mode=mode,
                 q_proj=q,
-                k_proj=k,
-                v_proj=v,
                 attention_logit_biases=attention_logit_biases,
+                kv_state=kv_state,
             ),
         )
 
@@ -3127,15 +3461,20 @@ class ScaleFunctionsTest(TestCase):
             inputs=dict(q_proj=q_proj, k_proj=k_proj, query_positions=pos, key_positions=pos),
         )
 
+        kv_state = KVState(
+            k_proj=k_proj,
+            v_proj=v_proj,
+            key_positions=pos,
+        )
+
         inputs = dict(
             mode=mode,
             q_proj=q_proj,
-            k_proj=k_proj,
-            v_proj=v_proj,
             attention_logit_biases=attention_bias.CausalAttentionBias(
                 target_positions=jnp.arange(seq_len)[None],
                 source_positions=jnp.arange(seq_len)[None],
             ),
+            kv_state=kv_state,
         )
 
         (context, probs), _ = F(
@@ -4252,7 +4591,7 @@ class ParallelTransformerTest(TestCase):
         )
 
 
-class TestStackModel(BaseLayer):
+class _StackModel(BaseLayer):
     """A dummy transformer stack."""
 
     @config_class
@@ -4338,7 +4677,7 @@ class NonUniformStack(StackedTransformerLayer):
         )
 
 
-class TestStackedTransformerLayerWithKVState(NonUniformStack):
+class _StackedTransformerLayerWithKVState(NonUniformStack):
     """A class with a simple override of _update_layer_kwargs for unit testing."""
 
     def _update_layer_kwargs(
@@ -4357,7 +4696,7 @@ class TestStackedTransformerLayerWithKVState(NonUniformStack):
             layer_kwargs["self_attention_kv_state"] = None
 
 
-class TestStackedTransformerLayerWithSkipConnection(StackedTransformerLayer):
+class _StackedTransformerLayerWithSkipConnection(StackedTransformerLayer):
     """A class that outputs all layers' output for unit testing."""
 
     def _aggregate_layer_outputs(
@@ -4380,12 +4719,12 @@ class StackedTransformerTest(BaseTransformerTest):
         dtype,
         remat_spec,
         output_self_attention_kv_state=False,
-    ) -> TestStackModel.Config:
+    ) -> _StackModel.Config:
         if isinstance(stack_cfg, type):
             stack_cfg = stack_cfg.default_config()
         if callable(remat_spec):
             remat_spec = remat_spec(stack_cfg)
-        cfg = TestStackModel.default_config().set(
+        cfg = _StackModel.default_config().set(
             name="test",
             stack=stack_cfg.set(
                 input_dim=model_dim,
@@ -4704,7 +5043,7 @@ class StackedTransformerTest(BaseTransformerTest):
         num_layers = 5
         layer_with_skip_input = 3
 
-        cfg = TestStackedTransformerLayerWithSkipConnection.default_config().set(
+        cfg = _StackedTransformerLayerWithSkipConnection.default_config().set(
             name="test", input_dim=input_dim, num_layers=num_layers
         )
 
@@ -4811,7 +5150,7 @@ class StackedTransformerTest(BaseTransformerTest):
         num_layers = 3
 
         # Create a StackedTransformerLayer by specifying a sequence of non-uniform layer configs.
-        cfg = TestStackedTransformerLayerWithKVState.default_config().set(name="test")
+        cfg = _StackedTransformerLayerWithKVState.default_config().set(name="test")
         cfg.input_dim = input_dim
         cfg.num_layers = num_layers
         cfg.layer = []
@@ -4940,7 +5279,7 @@ class StackedTransformerTest(BaseTransformerTest):
                     remat_spec=remat_spec,
                 )
                 cls = cfg.stack.klass
-                layer: TestStackModel = cfg.instantiate(parent=None)
+                layer: _StackModel = cfg.instantiate(parent=None)
 
                 param_specs = layer.create_parameter_specs_recursively()
                 logging.info(
@@ -5620,154 +5959,6 @@ class ConfigHelperTest(TestCase):
                 )
 
 
-class KVCacheTest(TestCase):
-    """Tests KVCache."""
-
-    @parameterized.product(
-        cached_kv_length=[8],
-        time_step_value=[2, 4],
-        cache_dtype=[None, jnp.bfloat16],
-        live_step_len=[-1, 2, 4],
-    )
-    def test_kv_cache(self, cached_kv_length, time_step_value, cache_dtype, live_step_len):
-        test_layer = (
-            KVCache.default_config()
-            .set(name="ref", cache_dtype=cache_dtype)
-            .instantiate(parent=None)
-        )
-
-        prng_key = jax.random.PRNGKey(2)
-        batch, step_len = 2, 4
-        heads, dim = 2, 2
-        step_shape = (batch, step_len, heads, dim)
-        k_proj = jax.random.normal(prng_key, shape=step_shape)
-        v_proj = jax.random.normal(prng_key, shape=step_shape)
-        key_positions = jnp.arange(step_len)[None] + time_step_value
-        if live_step_len < 0:
-            valid_step_len = step_len
-            live_step_len = None
-        else:
-            valid_step_len = live_step_len
-            live_step_len = jnp.full([batch], fill_value=live_step_len, dtype=jnp.int32)
-
-        kv_shape = KVCache.Shape(batch, cached_kv_length, heads, dim)
-        test_states = test_layer.init_states(kv_shape, dtype=k_proj.dtype)
-        expect_dtype = cache_dtype or k_proj.dtype
-
-        _, test_output = test_layer.extend_step(
-            test_states,
-            k_proj=k_proj,
-            v_proj=v_proj,
-            key_positions=key_positions,
-            live_step_len=live_step_len,
-        )
-
-        def check(input_kv, output_kv):
-            self.assertEqual(output_kv.shape, kv_shape)
-            self.assertEqual(output_kv.dtype, expect_dtype)
-            assert_allclose(output_kv[:, :time_step_value], 0)
-            assert_allclose(
-                output_kv[:, time_step_value : time_step_value + valid_step_len],
-                input_kv.astype(expect_dtype)[:, :valid_step_len],
-            )
-
-        check(k_proj, test_output.k_proj)
-        check(v_proj, test_output.v_proj)
-        key_positions = jnp.arange(cached_kv_length)[None]
-        assert_allclose(test_output.key_positions, key_positions)
-        # Currently, the part larger than live_step_len is also being overwritten in the KV cache.
-        # TODO(dhwang2): remove this check when KVCache updates only valid part.
-        assert_allclose(
-            test_output.k_proj[:, time_step_value : time_step_value + step_len],
-            k_proj.astype(expect_dtype)[:, :step_len],
-        )
-
-    @parameterized.product(cache_dtype=[None, jnp.bfloat16])
-    def test_kv_cache_onehot_vs_dynamic(self, cache_dtype):
-        test_layer = (
-            KVCache.default_config()
-            .set(name="test", cache_dtype=cache_dtype)
-            .instantiate(parent=None)
-        )
-
-        kv_len = 64
-        kv_shape = KVCache.Shape(2, kv_len, 2, 2)
-        onehot_states = test_layer.init_states(kv_shape, dtype=jnp.float32)
-        dynamic_states = test_layer.init_states(kv_shape, dtype=jnp.float32)
-
-        prng_key = jax.random.PRNGKey(2)
-        k_proj = jax.random.normal(prng_key, shape=kv_shape)
-        v_proj = jax.random.normal(prng_key, shape=kv_shape)
-
-        def extend_step(step_size, cached_states):
-            for i in range(0, kv_len, step_size):
-                k_step = k_proj[:, i : i + step_size]
-                v_step = v_proj[:, i : i + step_size]
-                key_positions = jnp.arange(step_size)[None] + i
-                cached_states, test_output = test_layer.extend_step(
-                    cached_states, k_proj=k_step, v_proj=v_step, key_positions=key_positions
-                )
-            return cached_states, test_output
-
-        onehot_states, onehot_output = extend_step(step_size=1, cached_states=onehot_states)
-        dynamic_states, dynamic_output = extend_step(step_size=32, cached_states=dynamic_states)
-
-        expect_dtype = cache_dtype or k_proj.dtype
-        assert_allclose(onehot_states["key"], dynamic_states["key"])
-        assert_allclose(onehot_states["value"], dynamic_states["value"])
-        self.assertEqual(onehot_states["key"].dtype, dynamic_states["key"].dtype)
-        self.assertEqual(onehot_states["value"].dtype, dynamic_states["value"].dtype)
-        self.assertEqual(onehot_states["key"].dtype, expect_dtype)
-        self.assertEqual(onehot_states["value"].dtype, expect_dtype)
-
-        assert_allclose(onehot_output.k_proj, dynamic_output.k_proj)
-        assert_allclose(onehot_output.v_proj, dynamic_output.v_proj)
-        self.assertEqual(onehot_output.k_proj.dtype, dynamic_output.k_proj.dtype)
-        self.assertEqual(onehot_output.v_proj.dtype, dynamic_output.v_proj.dtype)
-
-        assert_allclose(onehot_output.key_positions, dynamic_output.key_positions)
-
-    @parameterized.product(cached_kv_length=[8], time_step_value=[2, 4, 6], live_step_len=[None, 2])
-    def test_sliding_window_kv_cache(self, cached_kv_length, time_step_value, live_step_len):
-        test_layer = (
-            SlidingWindowKVCache.default_config()
-            .set(name="ref", cached_kv_length=cached_kv_length)
-            .instantiate(parent=None)
-        )
-        batch, step_len = 2, 4
-        step_shape = (batch, step_len, 2, 2)
-        test_states = test_layer.init_states(shape=KVCache.Shape(*step_shape), dtype=jnp.float32)
-        prng_key = jax.random.PRNGKey(2)
-        k_proj = jax.random.normal(prng_key, shape=step_shape)
-        v_proj = jax.random.normal(prng_key, shape=step_shape)
-        key_positions = jnp.arange(step_len)[None] + time_step_value
-        valid_out_len = live_step_len or step_len
-        live_step_len = (
-            jnp.full([batch], fill_value=live_step_len) if live_step_len is not None else None
-        )
-        _, test_output = test_layer.extend_step(
-            test_states,
-            k_proj=k_proj,
-            v_proj=v_proj,
-            key_positions=key_positions,
-            live_step_len=live_step_len,
-        )
-        kv_shape = (2, cached_kv_length + step_len, 2, 2)
-        self.assertEqual(test_output.key_positions.shape, kv_shape[:2])
-        test_key_positions = test_output.key_positions[:, -valid_out_len:]
-        assert_allclose(
-            test_key_positions,
-            jnp.broadcast_to(key_positions[:, :valid_out_len], test_key_positions.shape),
-        )
-        test_mask = (test_output.key_positions[:, :-valid_out_len] >= 0)[:, :, None, None]
-        self.assertEqual(test_output.k_proj.shape, kv_shape)
-        assert_allclose(test_output.k_proj[:, :-valid_out_len] * test_mask, 0)
-        assert_allclose(test_output.k_proj[:, -valid_out_len:], k_proj[:, :valid_out_len])
-        self.assertEqual(test_output.v_proj.shape, kv_shape)
-        assert_allclose(test_output.v_proj[:, :-valid_out_len] * test_mask, 0)
-        assert_allclose(test_output.v_proj[:, -valid_out_len:], v_proj[:, :valid_out_len])
-
-
 class PositionalEmbeddingTest(TestCase):
     """Tests PositionalEmbedding."""
 
@@ -5856,6 +6047,308 @@ class BottleNeckAdapterTransformerLayerTest(TestCase):
 
         # Output shape is left unchanged.
         assert outputs.data.shape == (2, 3, 32)
+
+
+class LogitSinkTest(TestCase):
+    """Tests logit_sink functionality in MultiheadAttention."""
+
+    def test_logit_sink_basic_functionality(self):
+        """Test that logit_sink is properly applied in softmax computation."""
+        model_dim = 16
+        num_heads = 4
+        batch_size = 2
+        seq_len = 6
+
+        # Create attention layer with logit_sink enabled
+        cfg = attention.MultiheadAttention.default_config().set(
+            name="test_attention",
+            query_dim=model_dim,
+            key_dim=model_dim,
+            value_dim=model_dim,
+            num_heads=num_heads,
+            logit_sink=True,
+        )
+        layer = cfg.instantiate(parent=None)
+        layer_params = layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
+
+        # Check that sink parameter exists and has correct shape
+        self.assertIn("sink", layer_params)
+        self.assertEqual(layer_params["sink"].shape, (num_heads,))
+
+        # Test forward pass
+        query = jax.random.normal(
+            jax.random.PRNGKey(0), [batch_size, seq_len, model_dim], dtype=jnp.float32
+        )
+
+        outputs, _ = F(
+            layer,
+            inputs=dict(query=query, return_aux={"probs"}),
+            state=layer_params,
+            is_training=False,
+            prng_key=jax.random.PRNGKey(456),
+        )
+
+        # Check output shapes
+        self.assertEqual(outputs.data.shape, (batch_size, seq_len, model_dim))
+        self.assertEqual(outputs.probs.shape, (batch_size, num_heads, seq_len, seq_len))
+
+        # Check that probabilities sum to less than 1.0.
+        prob_sums = jnp.sum(outputs.probs, axis=-1)
+        np.testing.assert_array_less(prob_sums, 1.0)
+
+    def test_logit_sink_vs_no_logit_sink(self):
+        """Test that logit_sink affects attention probabilities."""
+        model_dim = 8
+        num_heads = 2
+        batch_size = 1
+        seq_len = 4
+
+        # Create two identical layers, one with logit_sink, one without
+        base_cfg = attention.MultiheadAttention.default_config().set(
+            name="test_attention",
+            query_dim=model_dim,
+            key_dim=model_dim,
+            value_dim=model_dim,
+            num_heads=num_heads,
+        )
+
+        layer_no_sink = base_cfg.set(logit_sink=False).instantiate(parent=None)
+        layer_with_sink = base_cfg.set(logit_sink=True).instantiate(parent=None)
+
+        # Initialize with same parameters (except sink)
+        init_key = jax.random.PRNGKey(123)
+        params_no_sink = layer_no_sink.initialize_parameters_recursively(prng_key=init_key)
+        params_with_sink = layer_with_sink.initialize_parameters_recursively(prng_key=init_key)
+
+        # Copy non-sink parameters to ensure they're identical
+        for key in params_no_sink:
+            if key in params_with_sink:
+                params_with_sink[key] = params_no_sink[key]
+
+        # Set sink to non-zero values to see effect
+        params_with_sink["sink"] = jnp.array([1.0, -0.5], dtype=jnp.float32)
+
+        query = jax.random.normal(
+            jax.random.PRNGKey(0), [batch_size, seq_len, model_dim], dtype=jnp.float32
+        )
+
+        # Get outputs from both layers
+        outputs_no_sink, _ = F(
+            layer_no_sink,
+            inputs=dict(query=query, return_aux={"probs"}),
+            state=params_no_sink,
+            is_training=False,
+            prng_key=jax.random.PRNGKey(456),
+        )
+
+        outputs_with_sink, _ = F(
+            layer_with_sink,
+            inputs=dict(query=query, return_aux={"probs"}),
+            state=params_with_sink,
+            is_training=False,
+            prng_key=jax.random.PRNGKey(456),
+        )
+
+        # Probabilities should be different due to logit sink
+        self.assertFalse(jnp.allclose(outputs_no_sink.probs, outputs_with_sink.probs, atol=1e-6))
+
+        prob_sums = jnp.sum(outputs_with_sink.probs, axis=-1)
+        np.testing.assert_array_less(prob_sums, 1.0)
+
+        prob_sums = jnp.sum(outputs_no_sink.probs, axis=-1)
+        np.testing.assert_allclose(prob_sums, 1.0, rtol=1e-5)
+
+    @parameterized.parameters(
+        dict(
+            model_dim=8,
+            num_heads=2,
+            batch_size=1,
+            seq_len=4,
+            sink_values=[0.5, -1.0],
+        ),
+        dict(
+            model_dim=16,
+            num_heads=4,
+            batch_size=2,
+            seq_len=6,
+            sink_values=[1.0, -0.5, 0.0, 0.2],
+        ),
+    )
+    def test_logit_sink_with_attention_biases(
+        self, model_dim, num_heads, batch_size, seq_len, sink_values
+    ):
+        """Test logit_sink works correctly with attention biases."""
+        cfg = attention.MultiheadAttention.default_config().set(
+            name="test_attention",
+            query_dim=model_dim,
+            key_dim=model_dim,
+            value_dim=model_dim,
+            num_heads=num_heads,
+            logit_sink=True,
+        )
+        layer = cfg.instantiate(parent=None)
+        layer_params = layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
+
+        # Set sink values
+        layer_params["sink"] = jnp.array(sink_values, dtype=jnp.float32)
+
+        query = jax.random.normal(
+            jax.random.PRNGKey(0), [batch_size, seq_len, model_dim], dtype=jnp.float32
+        )
+
+        # Create causal attention biases
+        attention_logit_biases = attention_bias.make_causal_biases(seq_len)
+
+        outputs, _ = F(
+            layer,
+            inputs=dict(
+                query=query, attention_logit_biases=attention_logit_biases, return_aux={"probs"}
+            ),
+            state=layer_params,
+            is_training=False,
+            prng_key=jax.random.PRNGKey(456),
+        )
+
+        # Check that causal masking is still applied (upper triangle should be ~0)
+        probs = outputs.probs[0, 0]  # First batch, first head
+        upper_triangle = jnp.triu(probs, k=1)
+        self.assertTrue(jnp.all(upper_triangle < 1e-6))
+
+        # Check that probabilities still sum to less than 1
+        prob_sums = jnp.sum(outputs.probs, axis=-1)
+        np.testing.assert_array_less(prob_sums, 1.0)
+
+    def test_logit_sink_parameter_initialization(self):
+        """Test that logit_sink parameters are initialized correctly."""
+        model_dim = 12
+        num_heads = 3
+
+        cfg = attention.MultiheadAttention.default_config().set(
+            name="test_attention",
+            query_dim=model_dim,
+            key_dim=model_dim,
+            value_dim=model_dim,
+            num_heads=num_heads,
+            logit_sink=True,
+        )
+        layer = cfg.instantiate(parent=None)
+
+        # Check parameter specs
+        param_specs = layer.create_parameter_specs_recursively()
+        self.assertIn("sink", param_specs)
+        sink_spec = param_specs["sink"]
+        self.assertEqual(sink_spec.shape, (num_heads,))
+        self.assertEqual(sink_spec.mesh_axes, ("model",))
+        self.assertEqual(sink_spec.weight_decay_scale, 0.0)
+
+    def test_logit_sink_disabled_by_default(self):
+        """Test that logit_sink is disabled by default."""
+        cfg = attention.MultiheadAttention.default_config().set(
+            name="test_attention",
+            query_dim=8,
+            key_dim=8,
+            value_dim=8,
+            num_heads=2,
+        )
+        layer = cfg.instantiate(parent=None)
+        layer_params = layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
+
+        # Should not have sink parameter when logit_sink is None/False
+        self.assertNotIn("sink", layer_params)
+
+    @parameterized.parameters(
+        dict(dtype=jnp.float32),
+        dict(dtype=jnp.bfloat16),
+        dict(dtype=jnp.float16),
+    )
+    def test_logit_sink_with_different_dtypes(self, dtype):
+        """Test logit_sink works with different data types."""
+        model_dim = 8
+        num_heads = 2
+        batch_size = 1
+        seq_len = 3
+
+        cfg = attention.MultiheadAttention.default_config().set(
+            name="test_attention",
+            query_dim=model_dim,
+            key_dim=model_dim,
+            value_dim=model_dim,
+            num_heads=num_heads,
+            logit_sink=True,
+            dtype=dtype,
+        )
+        layer = cfg.instantiate(parent=None)
+        layer_params = layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(123))
+
+        query = jax.random.normal(
+            jax.random.PRNGKey(0), [batch_size, seq_len, model_dim], dtype=dtype
+        )
+
+        outputs, _ = F(
+            layer,
+            inputs=dict(query=query, return_aux={"probs"}),
+            state=layer_params,
+            is_training=False,
+            prng_key=jax.random.PRNGKey(456),
+        )
+
+        # Check output dtype matches input
+        self.assertEqual(outputs.data.dtype, dtype)
+        prob_sums = jnp.sum(outputs.probs, axis=-1)
+        np.testing.assert_array_less(prob_sums, 1.0)
+
+    @parameterized.parameters(
+        dict(use_attention_biases=False),
+        dict(use_attention_biases=True),
+    )
+    def test_softmax_with_biases_logit_sink(self, use_attention_biases):
+        """Test the softmax_with_biases function with logit_sink in various scenarios."""
+        batch_size = 2
+        num_heads = 3
+        seq_len = 4
+        logit_sink_values = [1.0, -0.5, 0.0]
+
+        # Create test logits
+        logits = jax.random.normal(
+            jax.random.PRNGKey(0), [batch_size, num_heads, seq_len, seq_len], dtype=jnp.float32
+        )
+
+        # Create logit sink
+        logit_sink = jnp.array(logit_sink_values, dtype=jnp.float32)
+
+        # Create attention biases if needed
+        attention_logit_biases = None
+        if use_attention_biases:
+            attention_logit_biases = attention_bias.make_causal_biases(seq_len)
+        else:
+            attention_logit_biases = None
+
+        # Test without logit sink
+        probs_no_sink = attention.softmax_with_biases(
+            logits, attention_logit_biases=attention_logit_biases
+        )
+
+        # Test with logit sink
+        probs_with_sink = attention.softmax_with_biases(
+            logits, attention_logit_biases=attention_logit_biases, logit_sink=logit_sink
+        )
+
+        # Both should have same shape
+        self.assertEqual(probs_no_sink.shape, probs_with_sink.shape)
+
+        # Check causal masking is applied (upper triangle should be ~0)
+        if use_attention_biases:
+            upper_triangle = jnp.triu(probs_with_sink[0, 0], k=1)
+            self.assertTrue(jnp.all(upper_triangle < 1e-6))
+
+        prob_sums = jnp.sum(probs_with_sink, axis=-1)
+        np.testing.assert_array_less(prob_sums, 1.0)
+
+        prob_sums = jnp.sum(probs_no_sink, axis=-1)
+        np.testing.assert_allclose(prob_sums, 1.0, rtol=1e-5)
+
+        # Results should be different
+        self.assertFalse(jnp.allclose(probs_no_sink, probs_with_sink, atol=1e-6))
 
 
 if __name__ == "__main__":
