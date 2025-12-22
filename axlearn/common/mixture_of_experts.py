@@ -132,8 +132,8 @@ def blockwise_mlp(
     activation_fns):
     
     #changes made for coutering oob so that it runs with zeros # divyam
-    O, G, S, M = hidden_states.shape
-    return jnp.zeros((O, G, 1, S, M), dtype=hidden_states.dtype)
+    # O, G, S, M = hidden_states.shape
+    # return jnp.zeros((O, G, 1, S, M), dtype=hidden_states.dtype)
 
     O = hidden_states.shape[0]
     G = hidden_states.shape[1]
@@ -1417,6 +1417,12 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
         
         block_position_indices = block_position_indices.at[:,:,:,1:].set(block_position_indices[:,:,:,1:] + expert_block_offsets[:,:,:,:-1])
         block_position_indices = jnp.where(expert_mask_after_dropping==0, 0, block_position_indices)
+        
+        max_valid = num_experts * block_size  # because tensor has +1 
+        in_range = (block_position_indices >= 0) & (block_position_indices <= max_valid) 
+        # # print("max_valid range is: ", max_valid)
+        block_position_indices = jnp.where(in_range, block_position_indices, 0)
+        block_position_indices = block_position_indices.astype(jnp.int32)
         return block_position_indices
 
     def forward(self, logits):
@@ -1459,6 +1465,8 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
         expert_mask = jnp.where(position_in_expert > expert_capacity, 0, expert_mask)
         expert_mask_k = expert_mask.reshape(O, G, k, S, E)
         expert_mask_k = jnp.sum(expert_mask_k, axis=2)
+        expert_mask_k = (expert_mask_k>0).astype(jnp.int32)
+        
         expert_affinities_masked = jnp.where(expert_mask_k == 0, 0, expert_affinities_masked)
         expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, cfg.dim_to_mesh_axis_map["oxxx"])
         # [O,G,S,e] 
@@ -1472,10 +1480,11 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
         block_position_indices = block_position_indices_sm(expert_mask_k, expert_capacity, local_num_experts)
         
         # [O,G,N]
-        block_to_expert = jnp.arange(cfg.num_experts, dtype=jnp.int32)
+        block_to_expert = jnp.arange(local_num_experts, dtype=jnp.int32)
+        block_to_expert = jnp.repeat(block_to_expert, ep_size, axis=0)
+        
         block_to_expert = jnp.expand_dims(block_to_expert, (0, 1))
         block_to_expert = jnp.broadcast_to(block_to_expert, (O, G, cfg.num_experts))
-        self.add_summary("block_to_expert", block_to_expert)
         
         token_position_to_id_sm = shard_map(
             self.get_token_position_to_id,
