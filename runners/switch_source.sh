@@ -29,11 +29,11 @@ fi
 
 export AXLEARN_REPEATED=1
 # it expects the env to be at ../$VENV_NAME
-export VENV_NAME=akshiaws/jaxmoe
+export VENV_NAME=akshiaws/jaxmoe2
 # to simulate slurm job run
 export SLURM_PROCID=0
 # to output artifacts at this path ./artifacts/JOB_ID/
-export JOB_ID=index
+export JOB_ID=dummy2
 
 rm -rf /fsx/akshiaws/artifacts/$JOB_ID/
 bash /fsx/akshiaws/axlearn/runner.sh

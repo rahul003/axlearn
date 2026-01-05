@@ -149,10 +149,12 @@ export TF_CPP_VMODULE="neuron_token_threading=2,neuron_repeated_dus_to_concat=3"
 deactivate || true
 
 if [ -z "$VENV_NAME" ]; then
-	VENV_NAME=jaxmoe
+	VENV_NAME=jaxmoe2
 fi
 
 source ../$VENV_NAME/bin/activate
+export LD_LIBRARY_PATH="/opt/aws/neuron/lib:$LD_LIBRARY_PATH"
+export PYTHONPATH="/fsx/akshiaws/jaxmoe2/lib/python3.10/site-packages:$PYTHONPATH"
 
 echo 'Artifacts path' $TEST_ARTIFACTS_PATH
 
@@ -267,7 +269,7 @@ else
 	fi
 
 	set -ex
-	python -m axlearn.common.launch_trainer_main \
+	/fsx/akshiaws/jaxmoe2/bin/python -m axlearn.common.launch_trainer_main \
 		--module=text.gpt.c4_trainer --config=$AXLEARN_MODEL_NAME \
 		--trainer_dir=$OUTPUT_DIR --data_dir=$DATA_DIR \
 		--jax_backend=$jax_backend --mesh_selector=neuron-trn2.48xlarge-64 \

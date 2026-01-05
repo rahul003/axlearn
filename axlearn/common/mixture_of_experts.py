@@ -72,6 +72,11 @@ from axlearn.common.utils import (
     with_sharding_constraint,
 )
 
+from neuronx_distributed.kernels.find_nonzero_indices import find_nonzero_indices
+from neuronx_distributed.kernels.indexed_flatten import indexed_flatten
+from neuronxcc.nki.compiler.backends.neuron.dimensions import VNC
+
+
 _USING_SHARDMAP_FFN=int(os.getenv('USE_SHARDMAP_FFN', 1))
 _USING_INDEX_SHARDING = int(os.getenv('USE_INDEX_SHARDING', 1))
 
@@ -1452,32 +1457,88 @@ class TopKGatingGatherBlockwiseV2(TopKGatingGatherBlockwise):
         expert_affinities_masked = jnp.where(expert_mask_k == 0, 0, expert_affinities_masked)
         expert_affinities_masked = with_sharding_constraint(expert_affinities_masked, cfg.dim_to_mesh_axis_map["oxxx"])
         # [O,G,S,e] 
-        block_position_indices_sm = shard_map(
-            self.calculate_block_position_ids, 
-            mesh=mesh, 
-            in_specs=(cfg.dim_to_mesh_axis_map["oxxe"], None, None), 
-            out_specs=cfg.dim_to_mesh_axis_map["oxxe"], 
-            check_rep=False
-        )
-        block_position_indices = block_position_indices_sm(expert_mask_k, expert_capacity, local_num_experts)
+        use_index_calc_kernel = True
+        if use_index_calc_kernel == True:
+            block_size = 128
+            expert_affinities_masked_squeezed = jnp.squeeze(expert_affinities_masked, axis=(0,1,))
+            T,E = expert_affinities_masked_squeezed.shape # T, local_experts
+            global_rank = jax.process_index()
+            E_local = E
+            max_chunk_size = 16384
+            num_blocks = E_local # one block per expert
+            # TODO : if E_local % tp_size != 0
+            indices, nonzero_counts = find_nonzero_indices[VNC(2)](
+                input_tensor=expert_affinities_masked_squeezed.astype(jnp.float32),
+                row_start_id=jnp.array([global_rank * 2], dtype=jnp.int32), # row_start_id to the start of the expert on this EP rank.
+                n_rows = E_local, # to the number of experts on this EP rank.
+                chunk_size=min(T, max_chunk_size), 
+                index_dtype = jnp.int32,
+            )
+            
+            # TODO : gather non_zero counts : [E_kernel,] --> [E/EP,]        
+            
+            # Get number of blocks and cumulative number of blocks per expert.
+            blocks_per_expert = jnp.ones(E_local, dtype = jnp.int32) # (E_EP,) 
+            blocks_per_expert_expanded = jnp.expand_dims(blocks_per_expert, axis=1)  # (E_EP, 1)
+            
+            # TODO : Calculate padding blocks needed and add to last expert
+            
+            cum_blocks_per_expert = jnp.cumsum(blocks_per_expert_expanded)
+            cum_blocks_per_expert = cum_blocks_per_expert.at[1:].set(cum_blocks_per_expert[:-1])
+            cum_blocks_per_expert = cum_blocks_per_expert.at[0].set(0)
         
-        # [O,G,N]
-        block_to_expert = jnp.arange(local_num_experts, dtype=jnp.int32)
-        block_to_expert = jnp.repeat(block_to_expert, ep_size, axis=0)  
-        block_to_expert = jnp.expand_dims(block_to_expert, (0, 1))
-        block_to_expert = jnp.broadcast_to(block_to_expert, (O, G, cfg.num_experts))
-        
-        token_position_to_id_sm = shard_map(
-            self.get_token_position_to_id,
-            mesh=thread_resources.env.physical_mesh,
-            in_specs=(None, cfg.dim_to_mesh_axis_map["oxxe"], None),
-            out_specs=cfg.dim_to_mesh_axis_map["oxe"],
-            check_rep=False
-        )
-        token_position_to_id = token_position_to_id_sm(expert_capacity, block_position_indices, local_num_experts)
+            f_len = min(128, T // 16)
+            row_offsets = cum_blocks_per_expert * (block_size // 128)
+            # TODO : if E_local % tp_size != 0
+            # [E_local, T] --> [num_blocks * block_size,]
+            token_position_to_id_padded = indexed_flatten[VNC(2)](
+                    input_tensor = indices,
+                    f_len = f_len,
+                    output_len=num_blocks*block_size + T,
+                    row_offsets= row_offsets.reshape(-1).astype(jnp.int32),
+                    row_offsets_start = jnp.array([0], dtype=jnp.int32),
+                )
+            # TODO : # Aggregate information across TP ranks when TP>1
+            
+            token_position_to_id = token_position_to_id_padded[:num_blocks * block_size]
+            print(f"shape of token_position_to_id : {token_position_to_id.shape}")
+            token_position_to_id = jnp.expand_dims(token_position_to_id, (0,1))
+            #token_position_to_id = jnp.broadcast_to
+            
+            # Get the block to expert mapping.
+            block_ids = jnp.arange(num_blocks, dtype = jnp.int32)
+            block_to_expert = jnp.sum(block_ids >= cum_blocks_per_expert[1:].reshape(-1, 1), axis=0).astype(jnp.int32)
+            block_to_expert = jnp.expand_dims(block_to_expert, (0, 1))
+            block_to_expert = jnp.broadcast_to(block_to_expert, (O, G, cfg.num_experts))
+            print(f"shape of token_position_to_id(index_calc): {token_position_to_id.shape}")
+            print(f"shape of block_to_expert(index_calc): {block_to_expert.shape}")   
+        else:
+            block_position_indices_sm = shard_map(
+                self.calculate_block_position_ids, 
+                mesh=mesh, 
+                in_specs=(cfg.dim_to_mesh_axis_map["oxxe"], None, None), 
+                out_specs=cfg.dim_to_mesh_axis_map["oxxe"], 
+                check_rep=False
+            )
+            block_position_indices = block_position_indices_sm(expert_mask_k, expert_capacity, local_num_experts)
+            
+            # [O,G,N]
+            block_to_expert = jnp.arange(local_num_experts, dtype=jnp.int32)
+            block_to_expert = jnp.repeat(block_to_expert, ep_size, axis=0)  
+            block_to_expert = jnp.expand_dims(block_to_expert, (0, 1))
+            block_to_expert = jnp.broadcast_to(block_to_expert, (O, G, cfg.num_experts))
+            token_position_to_id_sm = shard_map(
+                self.get_token_position_to_id,
+                mesh=thread_resources.env.physical_mesh,
+                in_specs=(None, cfg.dim_to_mesh_axis_map["oxxe"], None),
+                out_specs=cfg.dim_to_mesh_axis_map["oxe"],
+                check_rep=False
+            )
+            token_position_to_id = token_position_to_id_sm(expert_capacity, block_position_indices, local_num_experts)
+            print(f"shape of block_to_expert: {block_to_expert.shape}")
+            print(f"shape of token_position_to_id {token_position_to_id.shape}")
 
         router_z_loss = _router_z_loss(logits)
-        
         return self.Output(
             dispatch_tensor=block_to_expert,
             combine_tensor=(token_position_to_id, expert_affinities_masked, expert_index),
