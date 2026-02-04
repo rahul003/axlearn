@@ -13,7 +13,7 @@ export AXLEARN_TP_DEGREE=16
 export AXLEARN_TRAIN_BATCH_SIZE=$((8 * SLURM_NNODES))
 export AXLEARN_CAP_FACTOR=2
 export AXLEARN_USE_BLOCKWISE=1
-export AXLEARN_REPEATED=1
+export AXLEARN_REPEATED=0
 export AXLEARN_NUM_KV_HEADS=16
 export DATA_SEED=42
 
@@ -28,7 +28,7 @@ export RENAME_JOB=true
 export RENAME_JOB_PREFIX=rh
 
 if [ ${1:-1} = "1" ]; then
-    srun -l ./setup_node.sh ../may-artifacts/
+    srun -l ./setup_node.sh /shared/akshiaws/jul-end-artifacts
 else
     echo "Skip installing"
 fi

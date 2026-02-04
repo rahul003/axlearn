@@ -99,7 +99,7 @@ MAX_SEQUENCE_LENGTH = {
     "test": 8192,
     "Switch-Base": 8192,
     "Switch-Large": 8192,
-    "Switch-XXL": 8192,
+    "Switch-XXL": 2048,
     "Mistral-toy": 256,
     "Mistral-8x7B": 8192,
     "Mistral-8x20B": 8192,

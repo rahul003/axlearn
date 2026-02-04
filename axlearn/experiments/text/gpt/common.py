@@ -92,7 +92,7 @@ def scaled_hidden_dim(scale: float, *, round_up_to_multiples_of: int = 256) -> F
 # TODO: change annotations to use Seq parallel properly
 """
 Had run into below error with flash attention as is
-File "/fsx/huilgolr/axlearn/axlearn/common/flash_attention/layer.py", line 133, in _maybe_repeat_kv_heads
+File "/shared/huilgolr/axlearn/axlearn/common/flash_attention/layer.py", line 133, in _maybe_repeat_kv_heads
 ValueError: num_heads (12) must be greater than or equal to the number of devices 16 in the mesh axis ('seq', 'model').
 """
 def flash_attention_config() -> FlashAttention.Config:
@@ -703,10 +703,10 @@ def get_trainer_config_fn(
     mesh_shape: Union[MeshShape, HybridMeshShape],
     mesh_axis_names: Sequence[str] = MESH_AXIS_NAMES,
     mesh_rules: Optional[Sequence[tuple[str, Optional[Union[MeshShape, HybridMeshShape]]]]] = None,
-    eval_every_n_steps: int = 5000,
+    eval_every_n_steps: int = 401,
     eval_batch_size: Optional[int] = None,
     keep_every_n_steps: int = 50_000,
-    save_every_n_steps: Optional[int] = None,
+    save_every_n_steps: int = 500000,
     init_state_builder: Optional[state_builder.Builder.Config] = None,
 ) -> TrainerConfigFn:
     """Builds a TrainerConfigFn according to the model and input specs.
@@ -779,7 +779,7 @@ def get_trainer_config_fn(
             cfg.evalers[name] = evaler_cfg
         # Summaries and checkpoints.
         cfg.checkpointer.save_policy = config_for_function(every_n_steps_and_last_policy).set(
-            n=save_every_n_steps or min(eval_every_n_steps, 5_000),
+            n=500000,
             max_step=max_step,
         )
         cfg.checkpointer.keep_every_n_steps = min(max_step, keep_every_n_steps)

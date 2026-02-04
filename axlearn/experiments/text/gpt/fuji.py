@@ -645,7 +645,7 @@ def get_trainer_kwargs(
     elif model_size == "70B":
         trainer_kwargs = dict(
             model_kwargs=dict(
-                num_layers=80,
+                num_layers=int(os.getenv("AXLEARN_NUM_LAYERS",80)),
                 hidden_dim=128 * 64,
                 num_heads=64,
                 # No GQA support in V1 models, so num_kv_heads is the same as num_heads.
@@ -656,11 +656,15 @@ def get_trainer_kwargs(
                 shared_lm_head=False,
                 flash_attention=flash_attention,
             ),
-            learner_kwargs=dict(peak_lr=1.5e-4, weight_decay=0.1),
-            max_sequence_length=max_sequence_length,
-            train_batch_size=train_batch_size,
+            learner_kwargs=dict(peak_lr=1.5e-5, weight_decay=0.000006),
+            #learner_kwargs=dict(peak_lr=1.5e-4, weight_decay=0.1),
+            max_sequence_length=int(os.getenv("AXLEARN_MAX_SEQUENCE_LENGTH",MAX_SEQUENCE_LENGTH[version])),
+            train_batch_size=int(os.getenv("AXLEARN_TRAIN_BATCH_SIZE", train_batch_size)),
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(fsdp=-1),
+            mesh_shape=mesh_shape_from_axes(
+                fsdp=int(os.getenv("AXLEARN_FSDP_DEGREE", -1)), 
+                model=int(os.getenv("AXLEARN_TP_DEGREE", 4))
+            ),
             mesh_rules=(
                 # TPU V5e maximum per device batch is 1.
                 # with all activation offloading, HBM usage: 14.6GB/chip.
@@ -798,7 +802,10 @@ def get_trainer_kwargs(
                             MeshShapeModifier.default_config().set(
                                 # TP within the chip, FSDP across chips.
                                 # Each TRN2 chip has 4 XLA cores.
-                                mesh_shape=mesh_shape_from_axes(fsdp=-1, model=4)
+                                mesh_shape=mesh_shape_from_axes(
+                                    fsdp=int(os.getenv("AXLEARN_FSDP_DEGREE", -1)), 
+                                    model=int(os.getenv("AXLEARN_TP_DEGREE", 4))
+                                )
                             ),
                             RematSpecModifier.default_config().set(
                                 remat_policies={

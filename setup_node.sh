@@ -8,7 +8,7 @@ fi
 
 set -x
 SECONDS=0
-
+# sudo rmmod neuron; sudo modprobe neuron
 # sudo dpkg --configure -a
 # # Configure Ubuntu for Neuron repository updates
 # . /etc/os-release
@@ -19,6 +19,19 @@ SECONDS=0
 # 	    | sudo apt-key add -
 
 # Update OS packages and install OS headers
+
+# Add Neuron repository
+. /etc/os-release
+sudo tee /etc/apt/sources.list.d/neuron.list > /dev/null <<EOF
+deb https://apt.repos.neuron.amazonaws.com ${VERSION_CODENAME} main
+EOF
+
+# Add the GPG key
+wget -qO - https://apt.repos.neuron.amazonaws.com/GPG-PUB-KEY-AMAZON-AWS-NEURON.PUB | sudo apt-key add -
+
+# Update and install
+sudo apt-get update
+sudo apt-get install -y aws-neuronx-dkms
 
 sudo apt-get update - > /dev/null
 
@@ -36,7 +49,7 @@ sudo apt-get install -y google-perftools
 # Binaries to use:
 ###
 
-ENV_DROP_DIR=${1:-../mar-artifacts}
+ENV_DROP_DIR=${1:-/shared/akshiaws/jul-end-artifacts}
 
 RUNTIME=$ENV_DROP_DIR/aws-neuronx-runtime-lib-*.deb
 COLLECTIVES=$ENV_DROP_DIR/aws-neuronx-collectives-*.deb
@@ -44,6 +57,7 @@ TOOLS=$ENV_DROP_DIR/aws-neuronx-tools-*.deb
 DKMS=$ENV_DROP_DIR/aws-neuronx-dkms_*.deb
 
 sudo dpkg -i $RUNTIME $COLLECTIVES $TOOLS #$DKMS
+sudo apt-get install -y aws-neuronx-tools
 
 # sudo apt-get install -y linux-headers-$(uname -r) || true
 # sudo apt-get remove -y aws-neuronx-devtools || true

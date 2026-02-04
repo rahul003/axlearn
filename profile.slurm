@@ -12,5 +12,5 @@ export PROFILE_JOB_NAME=$2
 export PROFILE_JOB_ID=$1
 export AXLEARN_PROFILE_MODE=capture
 
-srun -l setup_node.sh ../may-artifacts/
+srun -l setup_node.sh /shared/akshiaws/jul-end-artifacts
 srun -l runner.sh

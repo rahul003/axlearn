@@ -6,12 +6,12 @@ sudo rmmod neuron; sudo modprobe neuron
 ./setup_node.sh
 ./efa_setup.sh
 
-export AXLEARN_NUM_LAYERS=80
+export AXLEARN_NUM_LAYERS=20
 export AXLEARN_REMAT_LAYER=selective
 export AXLEARN_MODEL_NAME="fuji-70B-v2-flash"
 export AXLEARN_TP_DEGREE=4
 # export AXLEARN_FSDP_DEGREE=128
-export AXLEARN_TRAIN_BATCH_SIZE=128
+export AXLEARN_TRAIN_BATCH_SIZE=2048
 AXLEARN_USE_BLOCKWISE=1
 export AXLEARN_MAX_SEQUENCE_LENGTH=4096
 

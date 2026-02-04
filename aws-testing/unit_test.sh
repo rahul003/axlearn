@@ -9,7 +9,7 @@ source $VENV_NAME/bin/activate
 
 export TEST_SUITE=${2:-"presubmit"}
 export TEST_LOG_DIR=${3:-"test_artifacts/shell"}
-export GOLDENS_DIR=${4:-"/fsx/huilgolr/axlearn/test_goldens"}
+export GOLDENS_DIR=${4:-"/shared/huilgolr/axlearn/test_goldens"}
 export JAX_COMPILATION_CACHE_DIR=${5:-"test_artifacts/shell_jax_cc"}
 rm -rf $JAX_COMPILATION_CACHE_DIR
 rm -rf $TEST_LOG_DIR
