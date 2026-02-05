@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 
 set +e
+# Reload Driver 
 sudo rmmod neuron; sudo modprobe neuron
 
-./setup_node.sh
-./efa_setup.sh
+/shared/akshiaws/axlearn/setup_node.sh
+/shared/akshiaws/axlearn/efa_setup.sh
 
-export AXLEARN_NUM_LAYERS=80
+export AXLEARN_NUM_LAYERS=10
 export AXLEARN_REMAT_LAYER=selective
 export AXLEARN_MODEL_NAME="fuji-70B-v2-flash"
 export AXLEARN_TP_DEGREE=4
 # export AXLEARN_FSDP_DEGREE=128
-export AXLEARN_TRAIN_BATCH_SIZE=128
+export AXLEARN_TRAIN_BATCH_SIZE=16
 AXLEARN_USE_BLOCKWISE=1
 export AXLEARN_MAX_SEQUENCE_LENGTH=4096
 
@@ -35,6 +36,7 @@ MASTER_PORT=41000
 JAX_COORDINATOR_PORT=41001
 export NEURON_RT_ROOT_COMM_ID="${MASTER_ADDR}:${MASTER_PORT}"
 export NEURON_PJRT_PROCESSES_NUM_DEVICES=$(printf '%s,' $(seq 1 $num_nodes | xargs -I {} echo $devices_per_node) | sed 's/,$//')
+export NEURON_PJRT_PROCESS_INDEX=$SLURM_NODEID
 
 # Print nodenames for debug
 hostname
@@ -55,6 +57,7 @@ RT_PROFILE_DUMP_PATH=${TEST_ARTIFACTS_PATH}/rt_profiles
 # PJRT Flags 
 if [ "$AXLEARN_REPEATED" = "1" ]; then
 	export NEURON_FSDP_REPEATED=1
+	export NEURON_FSDP_REPEATED_CC_PIPELINING=1
 	export NEURON_INTERNAL_CPU_NUM_THREADS=1
 	# ,neuron-token-threading-repeated
 	export XLA_FLAGS="--xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives,neuron_move_all_gather_while_loop,neuron-fixed-point-collectives-combiner"
@@ -167,8 +170,7 @@ export TF_CPP_VMODULE="neuron_token_threading=2"
 # 	VENV_NAME=jaxmoe
 # fi
 
-# source /shared/akshiaws/$VENV_NAME/bin/activate
-
+# source ../$VENV_NAME/bin/activate
 
 echo 'Artifacts path' $TEST_ARTIFACTS_PATH
 

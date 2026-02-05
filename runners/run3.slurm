@@ -68,4 +68,4 @@
 #     echo "Skip installing"
 # fi
 
-srun -l /shared/akshiaws/axlearn/runner2.sh
+srun -l /shared/akshiaws/axlearn/runner3.sh

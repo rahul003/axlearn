@@ -172,6 +172,7 @@ def _generate_trn2_custom_configs(
         ModuleConfigModifier.default_config().set(
             target_config="model.decoder.transformer",
             modification=StackedTransformerLayer.default_config(),
+            #modification=RepeatedTransformerLayer.default_config(),
         )
     ]
     # Grouped QKV is only used in fuji-v3 except in fuji-v2 if model is 70B.
@@ -912,7 +913,8 @@ def model_config(
         hidden_dim=hidden_dim,
         num_heads=num_heads,
         vocab_size=vocab_size,
-        stack_cfg=stack_cfg if stack_cfg is not None else RepeatedTransformerLayer.default_config(),
+        stack_cfg =StackedTransformerLayer.default_config(),
+        # stack_cfg=stack_cfg if stack_cfg is not None else RepeatedTransformerLayer.default_config(),
         activation_fn=activation_fn,
         ffn_dim=ffn_dim,
         normalization=RMSNorm.default_config().set(eps=1e-5, forward_dtype=None),

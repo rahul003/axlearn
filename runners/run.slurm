@@ -5,7 +5,7 @@
 
 # axlearn repeated = 0
 # tp_all+gather should be present when fsdp is set and fsdp+toekn_tp_ag
-# NEURON_FSDP_CC_MULTISTREAM = 1 - assigning streams - these streams have to set - 1
+# NEURON_FSDP_CC_MULTISTREAM = 1 - assigning srunner.streams - these streams have to set - 1
 # export NEURON_FSDP_CC_MULTISTREAM = 1
 # how are these flags making changes to the pjrt passes
 # fsdp_reduce_scatter also aatfrom what rahul sent
@@ -28,21 +28,20 @@
 # 1. why is neuron/-fsdp_repated is not working?
 # 2. 4 layers tp 1 fsdp - reduce hidden size make it work 
 
-# comment this out to run full model
-export AXLEARN_NUM_LAYERS=20
-export AXLEARN_REMAT_LAYER=selective
-export AXLEARN_MODEL_NAME="fuji-70B-v2-flash"
-export AXLEARN_TP_DEGREE=4
-export AXLEARN_FSDP_DEGREE=128
-export AXLEARN_TRAIN_BATCH_SIZE=1024
-
-export AXLEARN_USE_BLOCKWISE=1
-export AXLEARN_MAX_SEQUENCE_LENGTH=4096
-
-# set the env to use here
-# it expects the env to be at ../$VENV_NAME
-export VENV_NAME=jaxmoe
-export AXLEARN_REPEATED=0
+# /shared/akshiaws/axlearn/setup_node.sh
+# /shared/akshiaws/axlearn/efa_setup.sh
+# export AXLEARN_NUM_LAYERS=80
+# export AXLEARN_REMAT_LAYER=selective
+# export AXLEARN_MODEL_NAME="fuji-70B-v2-flash"
+# export AXLEARN_TP_DEGREE=4
+# # export AXLEARN_FSDP_DEGREE=128
+# export AXLEARN_TRAIN_BATCH_SIZE=128
+# AXLEARN_USE_BLOCKWISE=1
+# export AXLEARN_MAX_SEQUENCE_LENGTH=4096
+# # set the env to use here
+# # it expects the env to be at ../$VENV_NAME
+# VENV_NAME=jaxmoe
+# AXLEARN_REPEATED=0
 
 # Setting below two flags profiles on 3rd step and exits
 # export AXLEARN_PROFILE_MODE="tracerun"
@@ -62,11 +61,11 @@ export AXLEARN_REPEATED=0
 #     # Set to use repeated, make sure to use /shared/huilgolr/jul-end-artifacts/repeated/libneuronxla-2.2.20250521+7e624b6.dev-py3-none-linux_x86_64
 # fi
 
-if [ ${2:-1} = "1" ]; then
-    echo "Installing"
-    srun -l /shared/akshiaws/axlearn/setup_node.sh /shared/akshiaws/jul-end-artifacts
-else
-    echo "Skip installing"
-fi
+# if [ ${2:-1} = "1" ]; then
+#     echo "Installing"
+#     srun -l /shared/akshiaws/axlearn/setup_node.sh /shared/akshiaws/jul-end-artifacts
+# else
+#     echo "Skip installing"
+# fi
 
 srun -l /shared/akshiaws/axlearn/runner.sh

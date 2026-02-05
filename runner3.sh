@@ -7,12 +7,12 @@ sudo rmmod neuron; sudo modprobe neuron
 /shared/akshiaws/axlearn/setup_node.sh
 /shared/akshiaws/axlearn/efa_setup.sh
 
-export AXLEARN_NUM_LAYERS=80
+export AXLEARN_NUM_LAYERS=20
 export AXLEARN_REMAT_LAYER=selective
 export AXLEARN_MODEL_NAME="fuji-70B-v2-flash"
 export AXLEARN_TP_DEGREE=4
 # export AXLEARN_FSDP_DEGREE=128
-export AXLEARN_TRAIN_BATCH_SIZE=128
+export AXLEARN_TRAIN_BATCH_SIZE=1024
 AXLEARN_USE_BLOCKWISE=1
 export AXLEARN_MAX_SEQUENCE_LENGTH=4096
 
@@ -20,6 +20,7 @@ export AXLEARN_MAX_SEQUENCE_LENGTH=4096
 # it expects the env to be at ../$VENV_NAME
 VENV_NAME=jaxmoe
 AXLEARN_REPEATED=0
+
 
 # Neuron env vars for distributed training based on SLURM
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
@@ -57,8 +58,8 @@ RT_PROFILE_DUMP_PATH=${TEST_ARTIFACTS_PATH}/rt_profiles
 # PJRT Flags 
 if [ "$AXLEARN_REPEATED" = "1" ]; then
 	export NEURON_FSDP_REPEATED=1
-	export NEURON_FSDP_REPEATED_CC_PIPELINING=1
 	export NEURON_INTERNAL_CPU_NUM_THREADS=1
+    export NEURON_FSDP_REPEATED_CC_PIPELINING=1
 	# ,neuron-token-threading-repeated
 	export XLA_FLAGS="--xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives,neuron_move_all_gather_while_loop,neuron-fixed-point-collectives-combiner"
 else
