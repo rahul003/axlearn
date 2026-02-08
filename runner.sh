@@ -7,19 +7,19 @@ sudo rmmod neuron; sudo modprobe neuron
 /shared/akshiaws/axlearn/setup_node.sh
 /shared/akshiaws/axlearn/efa_setup.sh
 
-export AXLEARN_NUM_LAYERS=10
+export AXLEARN_NUM_LAYERS=80
 export AXLEARN_REMAT_LAYER=selective
 export AXLEARN_MODEL_NAME="fuji-70B-v2-flash"
 export AXLEARN_TP_DEGREE=4
 # export AXLEARN_FSDP_DEGREE=128
-export AXLEARN_TRAIN_BATCH_SIZE=16
-AXLEARN_USE_BLOCKWISE=1
+export AXLEARN_TRAIN_BATCH_SIZE=128
+export AXLEARN_USE_BLOCKWISE=1
 export AXLEARN_MAX_SEQUENCE_LENGTH=4096
 
 # set the env to use here
 # it expects the env to be at ../$VENV_NAME
 VENV_NAME=jaxmoe
-AXLEARN_REPEATED=0
+AXLEARN_REPEATED=1
 
 # Neuron env vars for distributed training based on SLURM
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
@@ -57,30 +57,39 @@ RT_PROFILE_DUMP_PATH=${TEST_ARTIFACTS_PATH}/rt_profiles
 # PJRT Flags 
 if [ "$AXLEARN_REPEATED" = "1" ]; then
 	export NEURON_FSDP_REPEATED=1
+	export NEURON_FSDP_CC_MULTISTREAM=1
 	export NEURON_FSDP_REPEATED_CC_PIPELINING=1
-	export NEURON_INTERNAL_CPU_NUM_THREADS=1
+	# export NEURON_INTERNAL_CPU_NUM_THREADS=1
 	# ,neuron-token-threading-repeated
-	export XLA_FLAGS="--xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives,neuron_move_all_gather_while_loop,neuron-fixed-point-collectives-combiner"
+	export XLA_FLAGS="--xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives"
+	# export XLA_FLAGS="--xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives,neuron_move_all_gather_while_loop,neuron-fixed-point-collectives-combiner"
+	export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1
+	export NEURON_FSDP_NUM_LAYER_COALESCE=-1
+	export NEURON_FSDP_NUM_LAYER_EARLY_AG_SHIFT=1
+	export NEURON_FSDP_NUM_LAYER_LATE_RS_SHIFT=2
+	export NEURON_ENABLE_INT_MATMUL_DOWNCAST=1
+
+	export NEURON_DISABLE_MOVEMENT_OF_SLICE_FROM_PARAM=1
 else
 	# cancel-all-gather-dynamic-slice-2d
 	export XLA_FLAGS="--xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives"
-	export NEURON_FSDP_NUM_LAYER_EARLY_AG_SHIFT=2
+	export NEURON_FSDP_NUM_LAYER_EARLY_AG_SHIFT=1
 	export NEURON_FSDP=1
 	if [ -n "$CUSTOM_TAG_rsshift" ]; then
 		export NEURON_FSDP_NUM_LAYER_LATE_RS_SHIFT=$CUSTOM_TAG_rsshift
 	else
 		# unset
-		export NEURON_FSDP_NUM_LAYER_LATE_RS_SHIFT=3
+		export NEURON_FSDP_NUM_LAYER_LATE_RS_SHIFT=2
 	fi
-	export NEURON_FSDP_NUM_LAYER_COALESCE=-1
+	export NEURON_FSDP_NUM_LAYER_COALESCE=1
 fi
 # 10 also was fast enough for a particular set of nodes
 # export NEURON_REMAT_LARGE_BROADCAST_MIN_SIZE_IN_MB=100
-export NEURON_COLLECTIVE_PERMUTE_TO_ALL_GATHER=1
-export NEURON_ENABLE_INT_MATMUL_DOWNCAST=1
-export NEURON_FSDP_CC_MULTISTREAM=1
+export NEURON_WHILE_LOOP_UNROLL=1
 export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1
-export NEURON_HLO_ANALYZER=1
+export NEURON_ENABLE_INT_MATMUL_DOWNCAST=1
+export NEURON_DISABLE_MOVEMENT_OF_SLICE_FROM_PARAM=1
+#export NEURON_HLO_ANALYZER=1
 export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_as_proto"
 export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_as_text --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
 
@@ -108,7 +117,7 @@ export OFI_NCCL_MR_CACHE_DISABLE=1
 
 # Neuron compiler flags
 export NEURON_CC_FLAGS="--framework=XLA"
-export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-max-instruction-limit=30000000"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-max-instruction-limit=20000000"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --target=trn2"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-num-neuroncores-per-sengine=${LNC}"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --model-type transformer"
@@ -117,21 +126,14 @@ export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --enable-mixed-precision-accumulation
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} -O1"
 
 
-export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --tensorizer-options='--enable-hoist-fsdp-collectives'"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --tensorizer-options='--enable-hoist-fsdp-collectives --enable-d2d-pf-transpose-kernel'"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --auto-cast=none"
 export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --hbm-scratchpad-page-size=1024"
 
-if [ "$AXLEARN_REPEATED" = "1" ]; then
-	export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--recursive-layer-det=false --dump-after-to-file=pre-par-pipe-end,post-par-pipe-begin --remat-rope=false --verify-hlo'"
-else
-	export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--remat-rope --verify-hlo'"
-fi
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--verify-hlo --remat-rope --recursive-layer-det=false'"
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-enable-dge-levels spill_reload --internal-backend-options=' --spill-reload-dmas-use-swdge '"
 
-if [ "$NEURON_FSDP_CC_MULTISTREAM" = "1" ]; then
-	export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-disable-dge-levels spill_reload"
-	export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-backend-options='--run-shared-allocation-before-post-sched=true' --ccop-pipeline-buffer-size=2000"
-	export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-hlo2tensorizer-options='--disable-early-opt-barrier-removal'"
-fi
+export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --dump=${NEURON_DUMP_PATH}"
 
 if [ "$AXLEARN_PROFILE_MODE" = "tracerun" ] || [ "$FOR_PROFILE" = "1" ]; then
 	export NEURON_CC_FLAGS="${NEURON_CC_FLAGS} --internal-compiler-debug-mode=penguin"
@@ -202,6 +204,10 @@ fi
 # 	echo "Error: libtcmalloc.so not found"
 # 	exit 1
 # fi
+
+export NEURON_RT_LOCAL_CORE_DUMP_DIRECTORY="" # critical to get the profiles dumped
+export AXLEARN_PROFILE_MODE="tracerun"
+export PROFILE_JOB_NAME=fuji_ntff
 
 OUTPUT_DIR="${TEST_ARTIFACTS_PATH}/axlearn_out"
 mkdir -p ${OUTPUT_DIR}

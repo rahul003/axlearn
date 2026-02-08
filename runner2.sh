@@ -19,7 +19,7 @@ export AXLEARN_MAX_SEQUENCE_LENGTH=4096
 # set the env to use here
 # it expects the env to be at ../$VENV_NAME
 VENV_NAME=jaxmoe
-AXLEARN_REPEATED=0
+AXLEARN_REPEATED=1
 
 # Neuron env vars for distributed training based on SLURM
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
@@ -58,7 +58,7 @@ RT_PROFILE_DUMP_PATH=${TEST_ARTIFACTS_PATH}/rt_profiles
 if [ "$AXLEARN_REPEATED" = "1" ]; then
 	export NEURON_FSDP_REPEATED=1
 	export NEURON_FSDP_REPEATED_CC_PIPELINING=1
-	export NEURON_INTERNAL_CPU_NUM_THREADS=1
+	# export NEURON_INTERNAL_CPU_NUM_THREADS=1
 	# ,neuron-token-threading-repeated
 	export XLA_FLAGS="--xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives,neuron_move_all_gather_while_loop,neuron-fixed-point-collectives-combiner"
 else

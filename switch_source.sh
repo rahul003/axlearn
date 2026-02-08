@@ -24,7 +24,7 @@ else
     export AXLEARN_FLASH_ATTENTION=1
 fi
 
-export AXLEARN_REPEATED=0
+export AXLEARN_REPEATED=1
 # it expects the env to be at ../$VENV_NAME
 export VENV_NAME=akshiaws/jaxmoe
 

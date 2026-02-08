@@ -22,12 +22,12 @@ export VENV_NAME=jaxmoe
 
 mode=${1:-"repeated"}
 if [ $mode = "stacked" ]; then
-    export AXLEARN_REPEATED=0
+    export AXLEARN_REPEATED=1
     export VENV_NAME=jaxmoestacked
     # When not using repeated, latest pjrt is /shared/csavsrin/artifacts_kernel_csavsrin/test_remat/libneuronxla-2.2.20250530+c4f06ac.dev-py3-none-linux_x86_64.whl
 elif [ $mode = "repeated" ]; then
     echo "Using repeated"
-    export AXLEARN_REPEATED=0
+    export AXLEARN_REPEATED=1
     export VENV_NAME=jaxmoe
     # Set to use repeated, make sure to use /shared/huilgolr/jul-end-artifacts/repeated/libneuronxla-2.2.20250521+7e624b6.dev-py3-none-linux_x86_64
 fi

@@ -19,7 +19,7 @@ export AXLEARN_MAX_SEQUENCE_LENGTH=4096
 # set the env to use here
 # it expects the env to be at ../$VENV_NAME
 VENV_NAME=jaxmoe
-AXLEARN_REPEATED=0
+AXLEARN_REPEATED=1
 
 
 # Neuron env vars for distributed training based on SLURM
