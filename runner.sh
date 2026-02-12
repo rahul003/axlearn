@@ -4,21 +4,21 @@ set +e
 # Reload Driver 
 sudo rmmod neuron; sudo modprobe neuron
 
-/shared/akshiaws/axlearn/setup_node.sh
-/shared/akshiaws/axlearn/efa_setup.sh
+/fsx/akshiaws/axlearn/setup_node.sh
+/fsx/akshiaws/axlearn/efa_setup.sh
 
-export AXLEARN_NUM_LAYERS=80
+export AXLEARN_NUM_LAYERS=4
 export AXLEARN_REMAT_LAYER=selective
 export AXLEARN_MODEL_NAME="fuji-70B-v2-flash"
 export AXLEARN_TP_DEGREE=4
 # export AXLEARN_FSDP_DEGREE=128
-export AXLEARN_TRAIN_BATCH_SIZE=128
+export AXLEARN_TRAIN_BATCH_SIZE=16
 export AXLEARN_USE_BLOCKWISE=1
 export AXLEARN_MAX_SEQUENCE_LENGTH=4096
 
 # set the env to use here
 # it expects the env to be at ../$VENV_NAME
-VENV_NAME=jaxmoe
+VENV_NAME=jaxmoe2
 AXLEARN_REPEATED=1
 
 # Neuron env vars for distributed training based on SLURM
@@ -61,7 +61,7 @@ if [ "$AXLEARN_REPEATED" = "1" ]; then
 	export NEURON_FSDP_REPEATED_CC_PIPELINING=1
 	# export NEURON_INTERNAL_CPU_NUM_THREADS=1
 	# ,neuron-token-threading-repeated
-	export XLA_FLAGS="--xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives"
+	export XLA_FLAGS="${XLA_FLAGS} --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives"
 	# export XLA_FLAGS="--xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives,neuron_move_all_gather_while_loop,neuron-fixed-point-collectives-combiner"
 	export NEURON_RUN_TRIVIAL_COMPUTATION_ON_CPU=1
 	export NEURON_FSDP_NUM_LAYER_COALESCE=-1
@@ -72,7 +72,7 @@ if [ "$AXLEARN_REPEATED" = "1" ]; then
 	export NEURON_DISABLE_MOVEMENT_OF_SLICE_FROM_PARAM=1
 else
 	# cancel-all-gather-dynamic-slice-2d
-	export XLA_FLAGS="--xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives"
+	export XLA_FLAGS="${XLA_FLAGS} --xla_disable_hlo_passes=aws_neuron_flip_all_gather_dot,neuron-hierarchical-collectives"
 	export NEURON_FSDP_NUM_LAYER_EARLY_AG_SHIFT=1
 	export NEURON_FSDP=1
 	if [ -n "$CUSTOM_TAG_rsshift" ]; then
@@ -91,7 +91,7 @@ export NEURON_ENABLE_INT_MATMUL_DOWNCAST=1
 export NEURON_DISABLE_MOVEMENT_OF_SLICE_FROM_PARAM=1
 #export NEURON_HLO_ANALYZER=1
 export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_as_proto"
-export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_as_text --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*'"
+export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_as_text --xla_dump_to=${HLO_DUMP_PATH} --xla_dump_hlo_pass_re='.*' --xla_dump_hlo_snapshots"
 
 
 # Neuron runtime flags
@@ -169,7 +169,7 @@ export TF_CPP_VMODULE="neuron_token_threading=2"
 # deactivate || true
 
 # if [ -z "$VENV_NAME" ]; then
-# 	VENV_NAME=jaxmoe
+# 	VENV_NAME=jaxmoe2
 # fi
 
 # source ../$VENV_NAME/bin/activate
@@ -273,7 +273,7 @@ profile() {
 }
 
 if [ "$S3_PROFILE_BASE_PATH" = "" ]; then
-	export S3_PROFILE_BASE_PATH="s3://kaena-tempdata/huilgolr/fs-moe/profiles"
+	export S3_PROFILE_BASE_PATH="s3://kaena-tempdata/akshiaws/fs-moe/profiles"
 fi
 
 if [ "$AXLEARN_PROFILE_MODE" = "capture" ]; then
